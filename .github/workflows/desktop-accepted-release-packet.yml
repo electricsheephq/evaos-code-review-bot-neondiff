@@ -1,0 +1,193 @@
+name: Desktop accepted release packet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: desktop-accepted-release-packet-v1.1.0
+  cancel-in-progress: false
+
+jobs:
+  promote-stable-artifact:
+    name: Verify source binding and build accepted packet
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
+      RELEASE_TAG: v1.1.0
+      SOURCE_REF: refs/heads/main
+      SIGNER_WORKFLOW: electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/desktop-accepted-release-packet.yml
+      PREDICATE_TYPE: https://neondiff.com/attestations/desktop-artifact-source-promotion/v1
+      CLAIM_CLASS: neondiff.desktop.artifact-source-promotion.v1
+      DEVELOPER_ID_TEAM_ID: TC6MS3T6NN
+      STABLE_FEED_URL: https://www.neondiff.com/updates/stable/appcast.xml
+      EXPECTED_SPARKLE_PUBLIC_KEY_SHA256: 550933d363765a39fb62610776e4b73fbedfe678cd43b667a4e606eae9028e31
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Resolve and verify exact stable artifact
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_ACTIONS" = "true"
+          test "$RUNNER_ENVIRONMENT" = "github-hosted"
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = "$SOURCE_REF"
+          test "$GITHUB_WORKFLOW_REF" = "$SIGNER_WORKFLOW@$SOURCE_REF"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+          CURRENT_MAIN_SHA="$(gh api "repos/$REPOSITORY/commits/main" --jq '.sha | select(test("^[a-f0-9]{40}$"))')"
+          test "$GITHUB_SHA" = "$CURRENT_MAIN_SHA"
+
+          PACKET_ROOT="$RUNNER_TEMP/desktop-accepted-release-packet"
+          DECLARATION_DIRECTORY="$PACKET_ROOT/declarations"
+          EXTRACT_DIRECTORY="$PACKET_ROOT/extracted"
+          mkdir -p "$DECLARATION_DIRECTORY" "$EXTRACT_DIRECTORY"
+
+          gh api "repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$PACKET_ROOT/tag-ref.json"
+          TAG_OBJECT_SHA="$(jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))' "$PACKET_ROOT/tag-ref.json")"
+          test "$(jq -er '.object.type' "$PACKET_ROOT/tag-ref.json")" = "tag"
+          gh api "repos/$REPOSITORY/git/tags/$TAG_OBJECT_SHA" > "$PACKET_ROOT/tag-object.json"
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$PACKET_ROOT/release.json"
+          SOURCE_SHA="$(jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))' "$PACKET_ROOT/tag-object.json")"
+          test "$TAG_OBJECT_SHA" = "$(git rev-parse "${RELEASE_TAG}^{tag}")"
+          test "$SOURCE_SHA" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
+          test "$(jq -er '.tag_name' "$PACKET_ROOT/release.json")" = "$RELEASE_TAG"
+          test "$(jq -er '.draft' "$PACKET_ROOT/release.json")" = "false"
+          test "$(jq -er '.prerelease' "$PACKET_ROOT/release.json")" = "false"
+          test "$(jq -er '.immutable' "$PACKET_ROOT/release.json")" = "true"
+
+          ASSET_FILTER='[.assets[] | select(.name | test("^NeonDiff-1\\.1\\.0-build[0-9]+-macOS\\.zip$"))]'
+          test "$(jq "$ASSET_FILTER | length" "$PACKET_ROOT/release.json")" = "1"
+          ARTIFACT_NAME="$(jq -er "$ASSET_FILTER | .[0].name" "$PACKET_ROOT/release.json")"
+          ASSET_API_URL="$(jq -er "$ASSET_FILTER | .[0].url" "$PACKET_ROOT/release.json")"
+          ARTIFACT_PATH="$PACKET_ROOT/$ARTIFACT_NAME"
+          gh api -H "Accept: application/octet-stream" "$ASSET_API_URL" > "$ARTIFACT_PATH"
+
+          TREE_RESULT="$(node --input-type=module - "$ARTIFACT_PATH" "$SOURCE_SHA" <<'NODE'
+          import { buildExtractedAppTreeProof } from "./scripts/lib/desktop-extracted-app-tree-proof.mjs";
+          const proof = await buildExtractedAppTreeProof(process.argv[2], process.argv[3]);
+          if (proof.appleDouble.entryCount !== 0) process.exit(1);
+          process.stdout.write(JSON.stringify({ artifactSHA256: proof.artifactSHA256, artifactByteLength: proof.artifactByteLength, sourceSHA: proof.bundleMarkers.sourceSHA, bundleID: proof.bundleMarkers.bundleID, version: proof.bundleMarkers.version, build: proof.bundleMarkers.build, feedURL: proof.bundleMarkers.feedURL }));
+          NODE
+          )"
+          ARTIFACT_SHA256="$(jq -er '.artifactSHA256 | select(test("^[a-f0-9]{64}$"))' <<< "$TREE_RESULT")"
+          ARTIFACT_BYTE_LENGTH="$(jq -er '.artifactByteLength | select(type == "number")' <<< "$TREE_RESULT")"
+          test "$(jq -er '.sourceSHA' <<< "$TREE_RESULT")" = "$SOURCE_SHA"
+          test "$(jq -er '.bundleID' <<< "$TREE_RESULT")" = "com.electricsheephq.NeonDiffDesktop"
+          test "$(jq -er '.version' <<< "$TREE_RESULT")" = "1.1.0"
+          test "$(jq -er '.feedURL' <<< "$TREE_RESULT")" = "$STABLE_FEED_URL"
+          test "$(jq -er "$ASSET_FILTER | .[0].digest" "$PACKET_ROOT/release.json")" = "sha256:$ARTIFACT_SHA256"
+          test "$(jq -er "$ASSET_FILTER | .[0].size" "$PACKET_ROOT/release.json")" = "$ARTIFACT_BYTE_LENGTH"
+
+          ditto -x -k "$ARTIFACT_PATH" "$EXTRACT_DIRECTORY"
+          APP_PATH="$EXTRACT_DIRECTORY/NeonDiff.app"
+          INFO_PLIST="$APP_PATH/Contents/Info.plist"
+          test -d "$APP_PATH"
+          test -f "$INFO_PLIST"
+          codesign --verify --deep --strict "$APP_PATH"
+          codesign -d --verbose=4 "$APP_PATH" 2> "$PACKET_ROOT/codesign-metadata.txt"
+          grep -q '^Authority=Developer ID Application:' "$PACKET_ROOT/codesign-metadata.txt"
+          grep -q "^TeamIdentifier=$DEVELOPER_ID_TEAM_ID$" "$PACKET_ROOT/codesign-metadata.txt"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")"
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
+          FEED_URL="$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$INFO_PLIST")"
+          ARTIFACT_SOURCE_SHA="$(/usr/libexec/PlistBuddy -c 'Print :NeonDiffSourceSHA' "$INFO_PLIST")"
+          SPARKLE_PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$INFO_PLIST")"
+          test "$BUNDLE_ID" = "com.electricsheephq.NeonDiffDesktop"
+          test "$VERSION" = "1.1.0"
+          test "$BUILD" = "$(jq -er '.build' <<< "$TREE_RESULT")"
+          test "$FEED_URL" = "$STABLE_FEED_URL"
+          test "$ARTIFACT_SOURCE_SHA" = "$SOURCE_SHA"
+          test "$ARTIFACT_NAME" = "NeonDiff-1.1.0-build${BUILD}-macOS.zip"
+
+          ACCEPTED_PUBLIC_KEY="$PACKET_ROOT/accepted-sparkle-public-key.txt"
+          printf '%s' "$SPARKLE_PUBLIC_KEY" > "$ACCEPTED_PUBLIC_KEY"
+          node - "$ACCEPTED_PUBLIC_KEY" <<'NODE'
+          const { readFileSync } = require("node:fs"); const value = readFileSync(process.argv[2], "utf8"), decoded = Buffer.from(value, "base64"); if (decoded.length !== 32 || decoded.toString("base64") !== value) process.exit(1);
+          NODE
+          SPARKLE_PUBLIC_KEY_SHA256="$(shasum -a 256 "$ACCEPTED_PUBLIC_KEY" | awk '{print $1}')"
+          test "$SPARKLE_PUBLIC_KEY_SHA256" = "$EXPECTED_SPARKLE_PUBLIC_KEY_SHA256"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-time 60 "$STABLE_FEED_URL" > "$PACKET_ROOT/appcast.xml"
+
+          jq -n --arg build "$BUILD" --arg artifact "$ARTIFACT_NAME" --arg feed "$STABLE_FEED_URL" '{schemaVersion:1,product:"neondiff-desktop",version:"1.1.0",tag:"v1.1.0",channel:"stable",sequence:null,build:$build,predecessor:null,contract:"paid-mac-ga-byo-v1",distribution:{bundleId:"com.electricsheephq.NeonDiffDesktop",appPath:"NeonDiff.app",artifactName:$artifact,releaseClass:"desktop-only",origins:{github:"https://github.com/electricsheephq/evaos-code-review-bot-neondiff",site:"https://www.neondiff.com",feed:$feed}}}' > "$DECLARATION_DIRECTORY/v1.1.0.json"
+          jq -n '{schemaVersion:1,status:"retained",declarationDirectory:"declarations",declarationPaths:["v1.1.0.json"],currentPath:"v1.1.0.json"}' > "$PACKET_ROOT/index.json"
+          PREDICATE_PATH="$PACKET_ROOT/artifact-source-promotion-predicate.json"
+          jq -n --arg claimClass "$CLAIM_CLASS" --arg repository "$REPOSITORY" --arg signerWorkflow "$SIGNER_WORKFLOW" --arg workflowSourceRef "$SOURCE_REF" --arg workflowSourceSHA "$GITHUB_SHA" --arg releaseTag "$RELEASE_TAG" --arg artifactSourceSHA "$SOURCE_SHA" --arg developerIDTeamID "$DEVELOPER_ID_TEAM_ID" '{schemaVersion:1,claimClass:$claimClass,repository:$repository,signerWorkflow:$signerWorkflow,workflowSourceRef:$workflowSourceRef,workflowSourceSHA:$workflowSourceSHA,releaseTag:$releaseTag,artifactSourceSHA:$artifactSourceSHA,developerIDTeamID:$developerIDTeamID}' > "$PREDICATE_PATH"
+          {
+            printf 'packet_root=%s\n' "$PACKET_ROOT"
+            printf 'artifact_path=%s\n' "$ARTIFACT_PATH"
+            printf 'predicate_path=%s\n' "$PREDICATE_PATH"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest exact signed artifact source binding
+        id: promotion
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.release.outputs.artifact_path }}
+          predicate-type: ${{ env.PREDICATE_TYPE }}
+          predicate-path: ${{ steps.release.outputs.predicate_path }}
+
+      - name: Verify artifact attestation and build accepted packet
+        id: packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_SOURCE: ${{ steps.promotion.outputs.bundle-path }}
+          PACKET_ROOT: ${{ steps.release.outputs.packet_root }}
+          ARTIFACT_PATH: ${{ steps.release.outputs.artifact_path }}
+        run: |
+          set -euo pipefail
+          BUILD_RESULT="$(node scripts/build-desktop-accepted-release-packet.mjs --index "$PACKET_ROOT/index.json" --artifact "$ARTIFACT_PATH" --feed "$PACKET_ROOT/appcast.xml" --tag-ref "$PACKET_ROOT/tag-ref.json" --tag-object "$PACKET_ROOT/tag-object.json" --release "$PACKET_ROOT/release.json" --accepted-public-key "$PACKET_ROOT/accepted-sparkle-public-key.txt" --artifact-attestation "$BUNDLE_SOURCE" --attestation-output-directory "$PACKET_ROOT" --output "$PACKET_ROOT/packet.pending.json")"
+          PACKET_SHA256="$(jq -er '.packetSHA256 | select(test("^[a-f0-9]{64}$"))' <<< "$BUILD_RESULT")"
+          PACKET_NAME="$(jq -er '.packetFileName' <<< "$BUILD_RESULT")"
+          BUNDLE_SHA256="$(jq -er '.artifactAttestationBundleSHA256 | select(test("^[a-f0-9]{64}$"))' <<< "$BUILD_RESULT")"
+          BUNDLE_NAME="$(jq -er '.artifactAttestationBundleFileName' <<< "$BUILD_RESULT")"
+          test "$PACKET_NAME" = "$PACKET_SHA256.packet.json"
+          test "$BUNDLE_NAME" = "$BUNDLE_SHA256.artifact-source-attestation.json"
+          PACKET_PATH="$PACKET_ROOT/$PACKET_NAME"
+          BUNDLE_PATH="$PACKET_ROOT/$BUNDLE_NAME"
+          test ! -e "$PACKET_PATH"
+          mv "$PACKET_ROOT/packet.pending.json" "$PACKET_PATH"
+          test "$PACKET_SHA256" = "$(shasum -a 256 "$PACKET_PATH" | awk '{print $1}')"
+          test "$BUNDLE_SHA256" = "$(shasum -a 256 "$BUNDLE_PATH" | awk '{print $1}')"
+          {
+            printf 'packet_path=%s\n' "$PACKET_PATH"
+            printf 'bundle_path=%s\n' "$BUNDLE_PATH"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload source-bound packet evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-source-bound-packet-v1.1.0-${{ github.sha }}
+          path: |
+            ${{ steps.packet.outputs.packet_path }}
+            ${{ steps.packet.outputs.bundle_path }}
+          if-no-files-found: error
+          retention-days: 30
