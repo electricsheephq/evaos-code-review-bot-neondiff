@@ -134,10 +134,13 @@ publication it requires those current producer names, artifact-source SHA, and
 signer-workflow SHA, creates the fixed release once, then reloads and verifies
 the published assets. On a later dispatch it ignores the new producer names and
 workflow SHA, discovers the prior exact pair from the immutable release's only
-two assets, and validates the stored fixed signer workflow/source facts, tag,
-target commit, names, bytes, digests, sizes, URLs, and GitHub release/asset
-attestations. Thus a later `main` SHA cannot replace or invalidate the accepted
-historical pair.
+two assets, reloads the exact packet-named stable artifact, and cryptographically
+verifies the retained bundle against that artifact and the stored fixed signer
+workflow/ref/SHA. It also validates the tag, target commit, names, bytes,
+digests, sizes, URLs, and GitHub release/asset attestations. Thus a principal
+with contents-write authority cannot substitute self-declared signer claims,
+and a later `main` SHA cannot replace or invalidate the accepted historical
+pair.
 
 A missing release and tag permits first publication; both present permits only
 verification. Partial or mismatched state fails closed. No workflow may

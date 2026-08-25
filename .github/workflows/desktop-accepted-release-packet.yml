@@ -211,6 +211,7 @@ jobs:
       REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
       REPOSITORY_OWNER: electricsheephq
       REPOSITORY_NAME: evaos-code-review-bot-neondiff
+      RELEASE_TAG: v1.1.0
       SOURCE_REF: refs/heads/main
       SIGNER_WORKFLOW: electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/desktop-accepted-release-packet.yml
       EVIDENCE_TAG: neondiff-accepted-packet-v1.1.0
@@ -305,7 +306,13 @@ jobs:
             --dir "$RETRIEVED_ROOT" \
             --pattern "$PACKET_NAME" \
             --pattern "$BUNDLE_NAME"
+          ARTIFACT_NAME="$(jq -er '.artifactName | select(test("^NeonDiff-1\\.1\\.0-build[0-9]+-macOS\\.zip$"))' "$RETRIEVED_ROOT/$PACKET_NAME")"
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$RETRIEVED_ROOT" \
+            --pattern "$ARTIFACT_NAME"
           RETENTION_RESULT="$(node scripts/verify-desktop-accepted-evidence-release.mjs \
+            --artifact "$RETRIEVED_ROOT/$ARTIFACT_NAME" \
             --packet "$RETRIEVED_ROOT/$PACKET_NAME" \
             --bundle "$RETRIEVED_ROOT/$BUNDLE_NAME" \
             --release "$METADATA_ROOT/release.json" \

@@ -25,7 +25,6 @@ const sourceSHA = "1".repeat(40);
 const storedWorkflowSHA = "2".repeat(40);
 const currentWorkflowSHA = "8".repeat(40);
 const tagObjectSHA = "3".repeat(40);
-const artifactSHA256 = "4".repeat(64);
 
 function sha256(bytes: Buffer) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -39,6 +38,8 @@ function fixture() {
   mkdirSync(releaseDownload);
 
   const artifactName = "NeonDiff-1.1.0-build11091-macOS.zip";
+  const artifactBytes = Buffer.alloc(4096, 4), artifactSHA256 = sha256(artifactBytes), artifactPath = join(releaseDownload, artifactName);
+  writeFileSync(artifactPath, artifactBytes);
   const packet = {
     schemaVersion: 3,
     kind: "neondiff.desktop.accepted-release-packet-v3",
@@ -52,7 +53,7 @@ function fixture() {
     tagObjectSHA,
     artifactURL: `https://github.com/${repository}/releases/download/v1.1.0/${artifactName}`,
     artifactName,
-    artifactByteLength: 4096,
+    artifactByteLength: artifactBytes.length,
     artifactSHA256,
     treeSHA256: "5".repeat(64),
     feedSHA256: "6".repeat(64),
@@ -101,14 +102,16 @@ function fixture() {
   const capturePath = join(root, "gh-calls.jsonl"), fakeGh = join(root, "gh");
   writeFileSync(fakeGh, `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
-appendFileSync(process.env.CAPTURE_PATH, JSON.stringify(process.argv.slice(2)) + "\\n");
-if (process.env.FAKE_GH_FAIL === process.argv.slice(2, 5).join(" ")) process.exit(1);
-process.stdout.write("{}\\n");
+const args = process.argv.slice(2);
+appendFileSync(process.env.CAPTURE_PATH, JSON.stringify(args) + "\\n");
+if (process.env.FAKE_GH_FAIL === args.slice(0, 3).join(" ") || process.env.FAKE_GH_FAIL === args.slice(0, 2).join(" ")) process.exit(1);
+process.stdout.write(args[0] === "attestation" ? process.env.FAKE_ATTESTATION_RESULT + "\\n" : "{}\\n");
 `);
   chmodSync(fakeGh, 0o755);
 
   const run = (paths: Record<string, string> = {}, env: Record<string, string> = {}) => spawnSync(process.execPath, [
     "scripts/verify-desktop-accepted-evidence-release.mjs",
+    "--artifact", paths.artifact ?? artifactPath,
     "--packet", paths.packet ?? packetPath,
     "--bundle", paths.bundle ?? bundlePath,
     "--release", paths.release ?? releasePath,
@@ -121,6 +124,7 @@ process.stdout.write("{}\\n");
       ...process.env,
       PATH: `${root}:${process.env.PATH}`,
       CAPTURE_PATH: capturePath,
+      FAKE_ATTESTATION_RESULT: JSON.stringify([{ verificationResult: { statement } }]),
       GITHUB_ACTIONS: "true",
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: sourceRef,
@@ -130,7 +134,7 @@ process.stdout.write("{}\\n");
       ...env
     }
   });
-  return { actionsArtifact, bundleName, bundlePath, bundleSHA256, capturePath, packetName, packetPath, packetSHA256, releasePath, root, run };
+  return { actionsArtifact, artifactName, artifactPath, bundleName, bundlePath, bundleSHA256, capturePath, packetName, packetPath, packetSHA256, releasePath, root, run };
 }
 
 afterEach(() => {
@@ -158,7 +162,8 @@ describe("retained accepted Desktop evidence", () => {
     expect(calls).toEqual([
       ["release", "verify", evidenceTag, "--repo", repository, "--format", "json"],
       ["release", "verify-asset", evidenceTag, expect.stringMatching(new RegExp(`${value.packetName}$`)), "--repo", repository, "--format", "json"],
-      ["release", "verify-asset", evidenceTag, expect.stringMatching(new RegExp(`${value.bundleName}$`)), "--repo", repository, "--format", "json"]
+      ["release", "verify-asset", evidenceTag, expect.stringMatching(new RegExp(`${value.bundleName}$`)), "--repo", repository, "--format", "json"],
+      ["attestation", "verify", expect.stringMatching(new RegExp(`${value.artifactName}$`)), "--bundle", expect.stringMatching(new RegExp(`${value.bundleName}$`)), "--repo", repository, "--signer-workflow", workflow, "--predicate-type", "https://neondiff.com/attestations/desktop-artifact-source-promotion/v1", "--source-ref", sourceRef, "--source-digest", storedWorkflowSHA, "--deny-self-hosted-runners", "--format", "json"]
     ]);
   });
 
@@ -178,6 +183,9 @@ describe("retained accepted Desktop evidence", () => {
     wrongRelease.target_commitish = "9".repeat(40); writeFileSync(wrongTarget.releasePath, JSON.stringify(wrongRelease)); expect(wrongTarget.run().status).not.toBe(0);
     expect(fixture().run({}, { GITHUB_REPOSITORY: "attacker/example" }).status).not.toBe(0);
     expect(fixture().run({}, { FAKE_GH_FAIL: `release verify ${evidenceTag}` }).status).not.toBe(0);
+    expect(fixture().run({}, { FAKE_GH_FAIL: "attestation verify" }).status).not.toBe(0);
+    expect(fixture().run({}, { FAKE_ATTESTATION_RESULT: "[]" }).status).not.toBe(0);
+    const changedArtifact = fixture(); writeFileSync(changedArtifact.artifactPath, Buffer.alloc(4096, 9)); expect(changedArtifact.run().status).not.toBe(0);
   });
 
   it("uses current outputs only for first publication and authenticates the bundle upstream", () => {
@@ -189,6 +197,8 @@ describe("retained accepted Desktop evidence", () => {
     expect(workflowSource).toContain("[.assets[].name | select(test(\"^[a-f0-9]{64}");
     expect(workflowSource).toContain("test \"$PACKET_NAME\" = \"$CURRENT_PACKET_NAME\"");
     expect(workflowSource).toContain("test \"$(jq -er '.workflowSourceSHA' <<< \"$RETENTION_RESULT\")\" = \"$GITHUB_SHA\"");
+    expect(workflowSource).toContain("gh release download \"$RELEASE_TAG\"");
+    expect(workflowSource).toContain("--artifact \"$RETRIEVED_ROOT/$ARTIFACT_NAME\"");
     expect(workflowSource.indexOf("Verify artifact attestation and build accepted packet")).toBeLessThan(workflowSource.indexOf("Upload source-bound packet evidence"));
     expect(builderSource.indexOf("verifyAndRetainDesktopArtifactSourceAttestation")).toBeLessThan(builderSource.indexOf("buildAcceptedDesktopReleasePacket(values.index"));
     expect(workflowSource).not.toMatch(/gh release delete|gh api[^\n]*-X DELETE/);
