@@ -938,6 +938,7 @@ export async function runIssueEnrichmentCycle(input: {
     const promotionEvidenceByIssue = new Map<string, IssuePromotionEvidence>();
     const terminalEventHistoryIssues = new Set<string>();
     const issueEventHistoryByIssue = new Map<string, IssueEventResult>();
+    const issueEventReadFailures = new Map<string, string>();
     const plannedEnrichmentByIssue = new Map<string, EnrichmentComment>();
     const plannedAnalysisInputHashByIssue = new Map<string, string | undefined>();
     const analysisIdentityHash = (repo: string, issue: GitHubRelatedIssueOrPull): string => {
@@ -1004,9 +1005,12 @@ export async function runIssueEnrichmentCycle(input: {
                   terminalEventHistoryIssues.add(key);
                   continue;
                 }
-                const events = input.github.listIssueLabelEvents
-                  ? await input.github.listIssueLabelEvents(repo, issue.number)
-                  : undefined;
+                let events: IssueEventResult | undefined;
+                try {
+                  events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : undefined;
+                } catch (error) {
+                  issueEventReadFailures.set(key, redactSecrets(error instanceof Error ? error.message : String(error)));
+                }
                 if (events) issueEventHistoryByIssue.set(key, events);
                 if (issueEventPaginationTerminal(events) === "event_history_unbounded") {
                   prepared.push(issue);
@@ -1053,6 +1057,8 @@ export async function runIssueEnrichmentCycle(input: {
     scanned.items = scanned.items.map((item) => terminalEventHistoryIssues.has(issueKey(item.repo, item.issueNumber))
       ? { ...item, action: "skipped" as const, reason: "event_history_unbounded" as const }
       : item);
+    const eventReadFailureItems = scanned.items.filter((item) => issueEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
+    scanned.items = scanned.items.filter((item) => !issueEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
@@ -1089,6 +1095,12 @@ export async function runIssueEnrichmentCycle(input: {
     };
     const items: IssueEnrichmentCycleResult["items"] = [];
     const settled = new Set<string>();
+
+    for (const item of eventReadFailureItems) {
+      const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt), error = issueEventReadFailures.get(issueKey(item.repo, item.issueNumber))!;
+      if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error, now: new Date(checkedAt) });
+      summary.failed += 1; items.push({ ...item, ...(!input.dryRun ? { recordStatus: "failed" as const } : {}), error });
+    }
 
     for (const item of scan.items.filter((candidate) => candidate.action === "skipped")) {
       const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt);
