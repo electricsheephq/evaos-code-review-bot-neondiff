@@ -1362,6 +1362,7 @@ export async function runIssueEnrichmentCycle(input: {
       repo.deferred = repoItems.filter((item) => item.action === "deferred").length;
     }
     Object.assign(summary, summarizeScan(scan.repos));
+    scan.recommendedActions = buildScanRecommendedActions(status, summary);
 
     if (!input.dryRun && input.advanceWatermarks !== false) {
       for (const repo of scanned.repos) {
