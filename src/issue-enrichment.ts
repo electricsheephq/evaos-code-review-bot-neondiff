@@ -1087,7 +1087,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      if (input.force !== true && existing?.status === "skipped" && existing.reason === "event_history_unbounded" && existing.issueUpdatedAt === issueUpdatedAt) { summary.alreadyProcessed += 1; admissionLedger.release(admitted.candidate); settled.add(admitted.candidate.key); items.push({ ...item, skippedExisting: true, recordStatus: "skipped" }); continue; }
+      if (input.force !== true && existing?.status === "skipped" && existing.reason === "event_history_unbounded" && existing.issueUpdatedAt === issueUpdatedAt) { summary.alreadyProcessed += 1; admissionLedger.release(admitted.candidate); settled.add(admitted.candidate.key); items.push({ ...item, action: "skipped", reason: "event_history_unbounded", skippedExisting: true, recordStatus: "skipped" }); continue; }
       if (shouldCollectModelEvidence && issue) {
         const repoKey = item.repo.toLowerCase(), wasPrepared = sourceSnapshots.has(repoKey);
         try {
