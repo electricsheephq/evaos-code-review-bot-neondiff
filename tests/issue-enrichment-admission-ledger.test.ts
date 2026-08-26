@@ -34,7 +34,7 @@ describe("issue-enrichment admission ledger", () => {
   });
 
   it("releases and blocks repositories so healthy siblings backfill", () => {
-    const admission = ledger([item("a/repo", 1), item("a/repo", 2), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1 }) });
+    const admission = ledger([item("a/repo", 1), item("a/repo", 2), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 1 }) });
     const first = admission.next()!; expect(first.candidate.key).toBe("a/repo#1");
     admission.release(first.candidate); admission.blockRepo("a/repo");
     expect(admission.next()?.candidate.key).toBe("b/repo#1");
@@ -42,7 +42,7 @@ describe("issue-enrichment admission ledger", () => {
   });
 
   it("does not re-admit an issue-cap denial after another reservation is released", () => {
-    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1 }) });
+    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 1 }) });
     const first = admission.next()!; expect(first.candidate.key).toBe("a/repo#1");
     expect(admission.next()).toBeUndefined(); admission.release(first.candidate);
     expect(admission.next()).toBeUndefined();
@@ -50,13 +50,12 @@ describe("issue-enrichment admission ledger", () => {
   });
 
   it("keeps snapshot cap denials terminal after release", () => {
-    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1 }) }), first = admission.next()!;
+    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 1 }) }), first = admission.next()!;
     expect(admission.snapshot().find(({ candidate }) => candidate.key === "b/repo#1")?.reason).toBe("global_max_issues_per_cycle");
     admission.release(first.candidate); expect(admission.next()).toBeUndefined();
   });
-
   it("reconsiders healthy cap denials after their blocking repository is removed", () => {
-    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1 }) });
+    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 1 }) });
     expect(admission.next()?.candidate.key).toBe("a/repo#1"); expect(admission.next()).toBeUndefined();
     admission.blockRepo("a/repo");
     expect(admission.next()?.candidate.key).toBe("b/repo#1");
@@ -101,11 +100,12 @@ describe("issue-enrichment admission ledger", () => {
     const proxiedSnapshot = Object.freeze({ ...accepted, candidates: Object.freeze([proxiedCandidate]) });
     expect(() => createIssueEnrichmentAdmissionLedger(proxiedSnapshot, Object.freeze([proxiedDecision]))).toThrow("invalid_inputs");
   });
-
   it("rejects proxied limit graphs and zero issue or burst caps", () => {
     const accepted = snapshotIssueEnrichmentAdmission({ allowlist: ["a/repo"], checkedAt, items: [item("a/repo", 1)], limits: limits() }), decisions = classifyIssueEnrichmentAdmission(accepted);
     expect(() => createIssueEnrichmentAdmissionLedger(Object.freeze({ ...accepted, limits: new Proxy(accepted.limits, {}) }), decisions)).toThrow("invalid_inputs");
-    for (const value of [limits({ globalMaxIssuesPerCycle: 0 }), limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 2, maxCommentsPerCycle: 1, maxIssuesPerBurst: 0 } } })]) {
+    let touched = false; const inheritedLimits = Object.freeze(Object.assign(Object.create({ get repos() { touched = true; return accepted.limits.repos; } }), { globalMaxIssuesPerCycle: 3, globalMaxCommentsPerCycle: 2 }));
+    expect(() => createIssueEnrichmentAdmissionLedger(Object.freeze({ ...accepted, limits: inheritedLimits }), decisions)).toThrow("invalid_limit"); expect(touched).toBe(false);
+    for (const value of [limits({ globalMaxIssuesPerCycle: 0 }), limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 2, maxCommentsPerCycle: 1, maxIssuesPerBurst: 0 } } }), limits({ globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 2 }), limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 1, maxCommentsPerCycle: 2, maxIssuesPerBurst: 3 } } })]) {
       const snapshot = snapshotIssueEnrichmentAdmission({ allowlist: ["a/repo"], checkedAt, items: [item("a/repo", 1)], limits: value }); expect(() => createIssueEnrichmentAdmissionLedger(snapshot, classifyIssueEnrichmentAdmission(snapshot))).toThrow("invalid_limit");
     }
   });
