@@ -1401,7 +1401,7 @@ export function resolveIssueEnrichmentRepoPolicy(
   suggestions: IssueEnrichmentSuggestionPolicy;
   repoPolicy: IssueEnrichmentRepoPolicy;
 } {
-  const override = config.repos?.[repo];
+  const override = config.repos?.[repo] ?? Object.entries(config.repos ?? {}).find(([candidate]) => candidate.toLowerCase() === repo.toLowerCase())?.[1];
   const throttle = {
     maxIssuesPerCycle: override?.maxIssuesPerCycle ?? config.maxIssuesPerCycle,
     maxCommentsPerCycle: override?.maxCommentsPerCycle ?? config.maxCommentsPerCycle,
