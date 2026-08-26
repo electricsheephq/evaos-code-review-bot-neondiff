@@ -970,6 +970,9 @@ describe("GitHub App read authentication", () => {
     expect(pagesRequested).toEqual([1, 4, 5, 6, 7, 8]);
     expect(result).toHaveLength(500);
     expect(result).toMatchObject({ pagesRead: 6, lastPage: 8, terminal: "bounded_tail", truncated: true, overflow: false });
+    pagesRequested.length = 0; globalThis.fetch = vi.fn(async (url) => { const page = Number(new URL(String(url)).searchParams.get("page")); pagesRequested.push(page); const link = page === 1 ? '<https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=2>; rel="next", <https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=2>; rel="last"' : '<https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=1>; rel="first", <https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=1>; rel="prev"'; return jsonResponse(Array.from({ length: 100 }, (_unused, id) => ({ id: page * 100 + id })), 200, "", { Link: link }); }) as typeof fetch;
+    const complete = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 970);
+    expect(pagesRequested).toEqual([1, 2]); expect(complete).toMatchObject({ lastPage: 2, terminal: "complete", truncated: false, overflow: false });
     pagesRequested.length = 0;
     globalThis.fetch = vi.fn(async (url) => { const page = Number(new URL(String(url)).searchParams.get("page")); pagesRequested.push(page); return jsonResponse(page <= 2 ? Array.from({ length: 100 }, (_unused, index) => ({ id: page * 100 + index })) : []); }) as typeof fetch;
     const overflow = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 970);
