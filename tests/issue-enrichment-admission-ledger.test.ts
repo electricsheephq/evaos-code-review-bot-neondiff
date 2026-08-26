@@ -46,7 +46,7 @@ describe("issue-enrichment admission ledger", () => {
     const first = admission.next()!; expect(first.candidate.key).toBe("a/repo#1");
     expect(admission.next()).toBeUndefined(); admission.release(first.candidate);
     expect(admission.next()).toBeUndefined();
-    expect(admission.snapshot().find(({ candidate }) => candidate.key === "b/repo#1")?.reason).toBe("global_max_issues_per_cycle");
+    expect(admission.snapshot().find(({ candidate }) => candidate.key === "b/repo#1")?.reason).toBe("global_max_issues_per_cycle"); admission.blockRepo("unknown/repo"); expect(admission.next()).toBeUndefined();
   });
 
   it("keeps snapshot cap denials terminal after release", () => {
