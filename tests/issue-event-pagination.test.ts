@@ -11,7 +11,7 @@ const chain = (page: number, last: number) => [
   page < last ? link("next", page + 1) : "",
   link("last", last)
 ].filter(Boolean).join(", ");
-const run = (pages: Record<number, { page: number; items: Event[]; link?: string }>) => readIssueEventHistory<Event>({ apiOrigin: origin, issueEventsPath: path, readPage: async (page) => pages[page] ?? { page, items: [] } });
+const run = (pages: Record<number, { page: number; items: Event[]; link?: string }>, repositoryId?: number) => readIssueEventHistory<Event>({ apiOrigin: origin, issueEventsPath: path, repositoryId, readPage: async (page) => pages[page] ?? { page, items: [] } });
 describe("strict issue-event pagination state machine", () => {
   it("rejects an empty advertised final page without admitting older tail rows", async () => {
     const pagesRequested: number[] = [];
@@ -48,7 +48,7 @@ describe("strict issue-event pagination state machine", () => {
   it("handles short history and exact full-page probes", async () => {
     expect((await run({ 1: { page: 1, items: events(1, 3) } })).terminal).toBe("short_page"); expect((await run({ 1: { page: 1, items: [], link: link("last", 1) } })).terminal).toBe("event_history_unbounded");
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: [] } })).toMatchObject({ rawCount: 100, pagesRead: 2, lastPage: 1, terminal: "short_page" });
-    expect(await run({ 1: { page: 1, items: events(1), link: chain(1, 2) }, 2: { page: 2, items: events(2, 3), link: `${link("prev", 1)}, ${link("first", 1)}` } })).toMatchObject({ rawCount: 103, pagesRead: 2, lastPage: 2, terminal: "bounded_tail", truncated: false });
+    expect(await run({ 1: { page: 1, items: events(1), link: `<${origin}/repositories/1285247004/issues/970/events?per_page=100&page=2>; rel="next", <${origin}/repositories/1285247004/issues/970/events?per_page=100&page=2>; rel="last"` }, 2: { page: 2, items: events(2, 3), link: `<${origin}/repositories/1285247004/issues/970/events?per_page=100&page=1>; rel="prev", <${origin}/repositories/1285247004/issues/970/events?per_page=100&page=1>; rel="first"` } }, 1285247004)).toMatchObject({ rawCount: 103, pagesRead: 2, lastPage: 2, terminal: "bounded_tail", truncated: false });
     expect((await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2) } })).terminal).toBe("event_history_unbounded");
   });
   it("fails closed on hostile or contradictory pagination metadata", async () => {

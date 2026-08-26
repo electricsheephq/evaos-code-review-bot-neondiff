@@ -6,7 +6,7 @@ interface Relations { first?: number; prev?: number; next?: number; last?: numbe
 interface ReadPage<T> { page?: IssueEventPage<T>; relations?: Relations; present: boolean; valid: boolean; }
 const PAGE_SIZE = 100, MAX_ITEMS = 200, RELATIONS = new Set(["first", "prev", "next", "last"]);
 
-export async function readIssueEventHistory<T extends { id?: unknown }>(input: { readPage: (page: number) => Promise<IssueEventPage<T>>; apiOrigin: string; issueEventsPath: string }): Promise<IssueEventPaginationReceipt<T>> {
+export async function readIssueEventHistory<T extends { id?: unknown }>(input: { readPage: (page: number) => Promise<IssueEventPage<T>>; apiOrigin: string; issueEventsPath: string; repositoryId?: number }): Promise<IssueEventPaginationReceipt<T>> {
   const newest = new Map<string, T>();
   let anonymous = 0, trustedRawCount = 0, rawCount = 0, pagesRead = 0, skippedPages = false, lastPage: number | undefined;
   const add = (items: T[]) => {
@@ -46,7 +46,7 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
     if (hasLink && hasHeader && candidate.link !== candidate.linkHeader) return { page: candidate, present: true, valid: false };
     const value = hasLink ? candidate.link : hasHeader ? candidate.linkHeader : undefined;
     if (value === undefined) return { page: candidate, present: false, valid: true };
-    const relations = parseRelations(value, input.apiOrigin, input.issueEventsPath);
+    const relations = parseRelations(value, input.apiOrigin, input.issueEventsPath, input.repositoryId);
     return { page: candidate, relations: relations ?? undefined, present: true, valid: relations !== null };
   };
   const chain = (relations: Relations | undefined, page: number, last: number): boolean => Boolean(
@@ -104,9 +104,9 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
   add(secondItems);
   return tail(2);
 }
-function parseRelations(value: unknown, origin: string, path: string): Relations | null {
+function parseRelations(value: unknown, origin: string, path: string, repositoryId?: number): Relations | null {
   if (typeof value !== "string") return null;
-  let parsed: ReturnType<typeof parseIssueEventLink>;
+  let parsed: ReturnType<typeof parseIssueEventLink>; const canonicalPath = Number.isSafeInteger(repositoryId) && repositoryId! > 0 ? `/repositories/${repositoryId}${path.slice(path.lastIndexOf("/issues/"))}` : "";
   try { parsed = parseIssueEventLink(value); } catch { return null; }
   if (parsed.kind === "absent") return null;
   const result: Relations = {}, seen = new Set<string>();
@@ -116,7 +116,7 @@ function parseRelations(value: unknown, origin: string, path: string): Relations
     const keys = [...target.searchParams.keys()];
     const pageValues = target.searchParams.getAll("page");
     const perPageValues = target.searchParams.getAll("per_page");
-    if (target.origin !== origin || target.pathname !== path || target.username || target.password || target.hash
+    if (target.origin !== origin || (target.pathname !== path && target.pathname !== canonicalPath) || target.username || target.password || target.hash
       || keys.length !== 2 || pageValues.length !== 1 || perPageValues.length !== 1 || perPageValues[0] !== "100"
       || keys.some((key) => key !== "page" && key !== "per_page") || !/^[1-9]\d*$/.test(pageValues[0]!)) return null;
     const page = Number(pageValues[0]);
