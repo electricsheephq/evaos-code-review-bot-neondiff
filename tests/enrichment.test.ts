@@ -853,7 +853,7 @@ describe("sticky enrichment comments", () => {
     expect(JSON.stringify(output)).not.toContain("body");
   });
 
-  it("records upstream-intake as skipped without invoking the model or creating a comment", async () => {
+  it("records unbounded event history without consuming sibling admission or blocking the watermark", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-upstream-intake-"));
     try {
       const configPath = join(root, "config.json");
@@ -862,7 +862,7 @@ describe("sticky enrichment comments", () => {
         statePath,
         issueEnrichment: {
           enabled: true,
-          postIssueComment: true,
+          postIssueComment: false,
           allowlist: ["Electricsheephq/lcm-x", "electricsheephq/lcm-x"],
           maxIssuesPerCycle: 1,
           maxCommentsPerCycle: 1,
@@ -894,7 +894,8 @@ describe("sticky enrichment comments", () => {
               updated_at: "2026-08-15T20:24:56Z",
               labels: [{ name: "upstream-intake" }, { name: "upstream-pr" }],
               body: "Attributed preservation record only."
-            }],
+            }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z" }],
+            listIssueLabelEvents: async (_repo, issueNumber) => issueNumber === 127 ? Object.assign([], { items: [], pagesRead: 2, rawCount: 200, uniqueCount: 0, duplicateCount: 0, terminal: "event_history_unbounded", truncated: true, overflow: true }) : [],
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
@@ -912,17 +913,19 @@ describe("sticky enrichment comments", () => {
 
         expect(result.summary).toMatchObject({
           skippedRecorded: 1,
+          dryRunRecorded: 1,
           posted: 0,
           failed: 0
         });
         expect(result.items[0]).toMatchObject({
           issueNumber: 127,
           action: "skipped",
-          reason: "preservation_only_upstream_intake",
+          reason: "event_history_unbounded",
           recordStatus: "skipped"
         });
         expect(analysisCalls).toBe(0);
         expect(postCalls).toBe(0);
+        expect(state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")).toMatchObject({ lastCheckedAt: "2026-08-15T21:00:00.000Z" });
       } finally {
         state.close();
       }

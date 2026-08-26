@@ -952,13 +952,40 @@ describe("GitHub App read authentication", () => {
     expect(result.truncated).toBe(true);
     expect(result.overflow).toBe(true);
   });
+
+  it("listIssueLabelEvents reads only the newest five pages from trusted pagination metadata", async () => {
+    const pagesRequested: number[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      const match = /\/repos\/owner\/repo\/issues\/970\/events\?per_page=100&page=(\d+)$/.exec(String(url));
+      if (!match) return jsonResponse({ message: "unexpected" }, 404);
+      const page = Number(match[1]);
+      pagesRequested.push(page);
+      if (page > 8) return jsonResponse([]);
+      const link = page < 8
+        ? `<https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=${page + 1}>; rel="next", <https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=8>; rel="last"`
+        : `<https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=1>; rel="first", <https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=7>; rel="prev"`;
+      return jsonResponse(Array.from({ length: 100 }, (_unused, index) => ({ id: page * 100 + index })), 200, "", { Link: link });
+    }) as typeof fetch;
+
+    const result = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 970);
+
+    expect(pagesRequested).toEqual([1, 4, 5, 6, 7, 8]);
+    expect(result).toHaveLength(500);
+    expect(result).toMatchObject({ pagesRead: 6, lastPage: 8, terminal: "bounded_tail", truncated: true, overflow: false });
+
+    pagesRequested.length = 0;
+    globalThis.fetch = vi.fn(async (url) => { const page = Number(new URL(String(url)).searchParams.get("page")); pagesRequested.push(page); return jsonResponse(page <= 2 ? Array.from({ length: 100 }, (_unused, index) => ({ id: page * 100 + index })) : []); }) as typeof fetch;
+    const overflow = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 970);
+    expect(pagesRequested).toEqual([1, 2]);
+    expect(overflow).toMatchObject({ pagesRead: 2, terminal: "event_history_unbounded", truncated: true, overflow: true });
+  });
 });
 
-function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
+function jsonResponse(body: unknown, status = 200, statusText = "", headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
     statusText,
-    headers: { "Content-Type": "application/json" }
+    headers: { "Content-Type": "application/json", ...headers }
   });
 }
 
