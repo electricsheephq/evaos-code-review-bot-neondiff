@@ -2,7 +2,9 @@ import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isMap, isProxy, isSet } from "node:util/types";
 import type { IssueCommentCommandSource } from "./commands.js";
+import { resolveGitHubIssueEventEndpointIdentity } from "./github-issue-event-endpoint-identity.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import { readIssueEventHistory, type IssueEventPaginationReceipt, type IssueEventTerminal } from "./issue-event-pagination-state.js";
 import type { IssueEnrichmentIssueList } from "./issue-enrichment.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
@@ -28,6 +30,19 @@ export type BoundedGithubList<T> = T[] & {
   truncated: boolean;
   overflow: boolean;
 };
+
+export type GitHubIssueLabelEvent = { id?: unknown; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null };
+export type BoundedIssueEventRead = GitHubIssueLabelEvent[] & IssueEventPaginationReceipt<GitHubIssueLabelEvent>;
+
+function boundedIssueEventRead(receipt: IssueEventPaginationReceipt<GitHubIssueLabelEvent>): BoundedIssueEventRead {
+  const result = receipt.items.slice() as BoundedIssueEventRead;
+  return Object.assign(result, receipt, { items: receipt.items.slice() });
+}
+
+export function issueEventPaginationTerminal(result: unknown): IssueEventTerminal | undefined {
+  const terminal = (result as { terminal?: unknown } | null)?.terminal;
+  return terminal === "short_page" || terminal === "bounded_tail" || terminal === "event_history_unbounded" ? terminal : undefined;
+}
 
 /**
  * Additive P1a issue-comment pagination receipt (#738). This reader is intentionally not used by
@@ -434,26 +449,23 @@ export class GitHubApi {
     });
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>> {
-    const events: Array<{
-      event?: string;
-      created_at?: string;
-      actor?: { login?: string | null } | null;
-      label?: { name?: string | null } | null;
-    }> = [];
-    for (let page = 1; ; page += 1) {
-      const chunk = await this.request<typeof events>(
-        `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
-        { token: await this.getReadToken(repo) }
-      );
-      events.push(...chunk);
-      if (chunk.length < 100) return events;
-    }
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedIssueEventRead> {
+    const token = await this.getReadToken(repo);
+    const repository = await this.request<RepositorySummary & { id?: unknown }>(`/repos/${repo}`, { token });
+    const endpoint = resolveGitHubIssueEventEndpointIdentity({ apiBaseUrl: this.apiBaseUrl.toString(), repository: repo, repositoryId: repository.id as number, issueNumber });
+    if (!endpoint.ok) return boundedIssueEventRead({ items: [], pagesRead: 0, rawCount: 0, uniqueCount: 0, duplicateCount: 0, terminal: "event_history_unbounded", truncated: true, overflow: true });
+    const receipt = await readIssueEventHistory<GitHubIssueLabelEvent>({
+      endpointIdentity: endpoint.identity,
+      readPage: async (page) => {
+        let link: string | null = null;
+        const items = await this.request<GitHubIssueLabelEvent[]>(
+          `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
+          { token, onResponse: (response) => { link = response.headers.get("link"); } }
+        );
+        return { page, items, link };
+      }
+    });
+    return boundedIssueEventRead(receipt);
   }
 
   async getCollaboratorPermission(
@@ -508,6 +520,7 @@ export class GitHubApi {
       pageLimit?: number;
       excludePullRequests?: boolean;
       minIssueResults?: number;
+      qualifyForMinimum?: (issue: GitHubRelatedIssueOrPull) => Promise<boolean>;
     } = {}
   ): Promise<IssueEnrichmentIssueList> {
     const issues: IssueEnrichmentIssueList = [];
@@ -516,6 +529,7 @@ export class GitHubApi {
     const pageLimit = options.pageLimit ?? 1;
     const excludePullRequests = options.excludePullRequests === true;
     const minIssueResults = Math.max(0, options.minIssueResults ?? 0);
+    let qualifiedIssueResults = 0;
     for (let page = 1; page <= pageLimit; page += 1) {
       const params = new URLSearchParams({
         state,
@@ -528,9 +542,13 @@ export class GitHubApi {
       const chunk = await this.request<GitHubRelatedIssueOrPull[]>(`/repos/${repo}/issues?${params.toString()}`, {
         token: await this.getReadToken(repo)
       });
-      issues.push(...(excludePullRequests ? chunk.filter((issue) => !issue.pull_request) : chunk));
+      const pageIssues = excludePullRequests ? chunk.filter((issue) => !issue.pull_request) : chunk;
+      issues.push(...pageIssues);
+      if (options.qualifyForMinimum) for (const issue of pageIssues) {
+        if (await options.qualifyForMinimum(issue)) qualifiedIssueResults += 1;
+      }
       if (chunk.length < perPage) return Object.assign(issues, { scanCompletion: "complete" as const });
-      if (minIssueResults > 0 && issues.length >= minIssueResults) {
+      if (minIssueResults > 0 && (options.qualifyForMinimum ? qualifiedIssueResults : issues.length) >= minIssueResults) {
         return Object.assign(issues, { scanCompletion: "stopped_after_min_issue_results" as const });
       }
     }
@@ -700,7 +718,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; onResponse?: (response: Response) => void } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     const controller = new AbortController();
@@ -727,6 +745,7 @@ export class GitHubApi {
           responseText: text
         });
       }
+      options.onResponse?.(response);
       return (await response.json()) as T;
     } catch (error) {
       if (error instanceof GitHubApiRequestError) throw error;

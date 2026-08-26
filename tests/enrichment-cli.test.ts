@@ -1388,6 +1388,7 @@ function routeMockGitHub(
   ) {
     if (!mockSourceRepositoryRoot) throw new Error("mock source repository is not initialized");
     respondJson(response, 200, {
+      id: request.url.includes("second-") ? 202 : 101,
       full_name: request.url.slice("/repos/".length),
       private: false,
       default_branch: "main",
@@ -1477,6 +1478,7 @@ function routeMockGitHub(
     respondJson(response, 200, []);
     return;
   }
+  if (request.method === "GET" && /^\/repos\/owner\/(?:second-)?issue-repo\/issues\/\d+\/events\?per_page=100&page=1$/.test(request.url ?? "")) { respondJson(response, 200, []); return; }
   if (request.method === "GET" && /^\/repos\/owner\/issue-repo\/issues\/(11|12|13)$/.test(request.url ?? "")) {
     const number = Number((request.url ?? "").split("/").at(-1));
     respondJson(response, 200, {
