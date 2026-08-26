@@ -26,31 +26,32 @@ describe("issue-enrichment lazy source settlement", () => {
     shared.recordIssueEnrichmentRepoWatermark = (value: unknown) => { watermarks.push(value); return value as never; };
     let terminalReads = 0;
     const receipt = (terminal: "short_page" | "event_history_unbounded") => Object.assign([], { items: [], pagesRead: 1, rawCount: 0, uniqueCount: 0, duplicateCount: 0, terminal, truncated: terminal === "event_history_unbounded", overflow: terminal === "event_history_unbounded" });
-    const terminalIssue = { ...issue(1), labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] };
+    const terminalIssue = issue(1), promotionTerminalIssue = { ...issue(2), labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] };
     let terminalUpdatedAt = terminalIssue.updated_at;
     prepareBranchWorktree.mockResolvedValue({ path: "/tmp/repo", headSha: "a".repeat(40) });
     const permission = vi.fn(async () => "admin" as const), github = {
-      getRepo: async () => ({ default_branch: "main" }), listIssuesForEnrichment: async () => Object.assign([{ ...terminalIssue, updated_at: terminalUpdatedAt }, issue(2)], { scanCompletion: "complete" as const }),
-      listIssueLabelEvents: async (_repo: string, number: number) => { if (number === 1) terminalReads += 1; return receipt(number === 1 ? "event_history_unbounded" : "short_page"); },
+      getRepo: async () => ({ default_branch: "main" }), listIssuesForEnrichment: async () => Object.assign([{ ...terminalIssue, updated_at: terminalUpdatedAt }, promotionTerminalIssue, issue(3)], { scanCompletion: "complete" as const }),
+      listIssueLabelEvents: async (_repo: string, number: number) => { if (number !== 3) terminalReads += 1; return receipt(number !== 3 ? "event_history_unbounded" : "short_page"); },
       getCollaboratorPermission: permission, getIssueOrPull: async (_repo: string, number: number) => issue(number), canPostAsApp: () => true,
       upsertIssueComment: async ({ issueNumber }: { issueNumber: number }) => { posts.push(issueNumber); return { action: "created" as const, id: issueNumber }; }
     };
     const first = await runIssueEnrichmentCycle({ config: configured, state: shared, github, dryRun: false, includeExisting: true, checkedAt: "2026-08-26T10:00:00.000Z", licenseAdmission: admission });
-    expect(first.summary).toMatchObject({ skipped: 1, skippedRecorded: 1, posted: 1 });
+    expect(first.summary).toMatchObject({ skipped: 2, skippedRecorded: 2, posted: 1 });
     expect(first.items.find(({ issueNumber }) => issueNumber === 1)).toMatchObject({ action: "skipped", reason: "event_history_unbounded", recordStatus: "skipped" });
-    expect(first.items.find(({ issueNumber }) => issueNumber === 2)?.recordStatus).toBe("posted");
-    expect(posts).toEqual([2]);
+    expect(first.items.find(({ issueNumber }) => issueNumber === 2)).toMatchObject({ action: "skipped", reason: "event_history_unbounded", recordStatus: "skipped" });
+    expect(first.items.find(({ issueNumber }) => issueNumber === 3)?.recordStatus).toBe("posted");
+    expect(posts).toEqual([3]);
     expect(runIssueAnalysis).toHaveBeenCalledTimes(1);
     expect(permission).not.toHaveBeenCalled();
-    expect(terminalReads).toBe(1);
+    expect(terminalReads).toBe(2);
     expect(watermarks).toHaveLength(1);
     const replay = await runIssueEnrichmentCycle({ config: configured, state: shared, github, dryRun: false, includeExisting: true, checkedAt: "2026-08-26T10:01:00.000Z", licenseAdmission: admission });
     expect(replay.items.find(({ issueNumber }) => issueNumber === 1)).toMatchObject({ action: "skipped", reason: "event_history_unbounded", recordStatus: "skipped" });
-    expect(terminalReads).toBe(1);
+    expect(terminalReads).toBe(2);
     terminalUpdatedAt = "2026-08-26T09:30:00.000Z";
     await runIssueEnrichmentCycle({ config: configured, state: shared, github, dryRun: false, includeExisting: true, checkedAt: "2026-08-26T10:02:00.000Z", licenseAdmission: admission });
-    expect(terminalReads).toBe(2);
-    await runIssueEnrichmentCycle({ config: configured, state: shared, github, dryRun: false, includeExisting: true, force: true, checkedAt: "2026-08-26T10:03:00.000Z", licenseAdmission: admission });
     expect(terminalReads).toBe(3);
+    await runIssueEnrichmentCycle({ config: configured, state: shared, github, dryRun: false, includeExisting: true, force: true, checkedAt: "2026-08-26T10:03:00.000Z", licenseAdmission: admission });
+    expect(terminalReads).toBe(5);
   });
 });

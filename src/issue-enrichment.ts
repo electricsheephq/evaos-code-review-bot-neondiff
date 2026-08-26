@@ -301,6 +301,7 @@ export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentComme
   listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueEnrichmentComment>>;
   getIssueOrPull?(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined>;
 };
+type IssueEventResult = Awaited<ReturnType<NonNullable<IssueEnrichmentCycleGithub["listIssueLabelEvents"]>>>;
 
 export interface IssueEnrichmentRepoScan {
   repo: string;
@@ -386,7 +387,8 @@ async function evaluateIssuePromotion(input: {
   issue: GitHubRelatedIssueOrPull;
   override?: IssueEnrichmentRepoOverride;
   github: IssueEnrichmentCycleGithub;
-}): Promise<{ issue: GitHubRelatedIssueOrPull; evidence?: IssuePromotionEvidence; eventHistoryTerminal?: "event_history_unbounded" }> {
+  events?: IssueEventResult;
+}): Promise<{ issue: GitHubRelatedIssueOrPull; evidence?: IssuePromotionEvidence }> {
   const labels = (input.issue.labels ?? [])
     .map((label) => typeof label === "string" ? label : label.name ?? "")
     .map((label) => label.trim().toLowerCase())
@@ -395,15 +397,11 @@ async function evaluateIssuePromotion(input: {
     return { issue: input.issue };
   }
   const allowlist = input.override?.promotionMaintainers ?? [];
-  if (allowlist.length === 0 || !input.github.listIssueLabelEvents || !input.github.getCollaboratorPermission) {
+  if (allowlist.length === 0 || !input.events || !input.github.getCollaboratorPermission) {
     return { issue: input.issue };
   }
   try {
-    const events = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
-    if (issueEventPaginationTerminal(events) === "event_history_unbounded") {
-      return { issue: input.issue, eventHistoryTerminal: "event_history_unbounded" };
-    }
-    const labelEvent = events
+    const labelEvent = input.events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
       .sort((a, b) => Date.parse(b.created_at!) - Date.parse(a.created_at!))[0];
@@ -447,6 +445,7 @@ export async function buildIssueEvidenceContext(input: {
   github: IssueEnrichmentCycleGithub;
   defaultBranch: string;
   headSha: string;
+  timeline?: IssueEventResult;
 }): Promise<IssueAnalysisEvidenceContext> {
   const commentResult = input.github.listIssueCommentsForEnrichment
     ? await input.github.listIssueCommentsForEnrichment(input.repo, input.issue.number)
@@ -457,9 +456,9 @@ export async function buildIssueEvidenceContext(input: {
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
-  const timelineResult = input.github.listIssueLabelEvents
+  const timelineResult = input.timeline ?? (input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
-    : [];
+    : []);
   const { items: rawTimeline, rawCount: rawTimelineCount, truncated: timelineTruncated } = unpackBoundedGithubList(timelineResult);
   const linkedNumbers = extractIssueReferenceNumbers(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`, input.issue.number);
   const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
@@ -938,6 +937,7 @@ export async function runIssueEnrichmentCycle(input: {
     const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
     const promotionEvidenceByIssue = new Map<string, IssuePromotionEvidence>();
     const terminalEventHistoryIssues = new Set<string>();
+    const issueEventHistoryByIssue = new Map<string, IssueEventResult>();
     const plannedEnrichmentByIssue = new Map<string, EnrichmentComment>();
     const plannedAnalysisInputHashByIssue = new Map<string, string | undefined>();
     const analysisIdentityHash = (repo: string, issue: GitHubRelatedIssueOrPull): string => {
@@ -1004,15 +1004,25 @@ export async function runIssueEnrichmentCycle(input: {
                   terminalEventHistoryIssues.add(key);
                   continue;
                 }
+                const events = input.github.listIssueLabelEvents
+                  ? await input.github.listIssueLabelEvents(repo, issue.number)
+                  : undefined;
+                if (events) issueEventHistoryByIssue.set(key, events);
+                if (issueEventPaginationTerminal(events) === "event_history_unbounded") {
+                  prepared.push(issue);
+                  issuesByKey.set(key, issue);
+                  terminalEventHistoryIssues.add(key);
+                  continue;
+                }
                 const promotion = await evaluateIssuePromotion({
                   repo,
                   issue,
                   override: canonicalIssueEnrichmentRepository(config, repo).override,
-                  github: input.github
+                  github: input.github,
+                  ...(events ? { events } : {})
                 });
                 prepared.push(promotion.issue);
                 issuesByKey.set(key, promotion.issue);
-                if (promotion.eventHistoryTerminal) terminalEventHistoryIssues.add(key);
                 if (promotion.evidence) {
                   promotionEvidenceByIssue.set(key, promotion.evidence);
                 }
@@ -1108,7 +1118,8 @@ export async function runIssueEnrichmentCycle(input: {
             defaultBranches.set(repoKey, defaultBranch);
           }
           issueEvidenceContextByIssue.set(issueKey(item.repo, item.issueNumber), await buildIssueEvidenceContext({
-            repo: item.repo, issue, github: input.github, defaultBranch: defaultBranches.get(repoKey)!, headSha: sourceSnapshots.get(repoKey)!.headSha
+            repo: item.repo, issue, github: input.github, defaultBranch: defaultBranches.get(repoKey)!, headSha: sourceSnapshots.get(repoKey)!.headSha,
+            ...(issueEventHistoryByIssue.get(issueKey(item.repo, item.issueNumber)) ? { timeline: issueEventHistoryByIssue.get(issueKey(item.repo, item.issueNumber))! } : {})
           }));
         } catch (error) {
           const message = redactSecrets(error instanceof Error ? error.message : String(error));
