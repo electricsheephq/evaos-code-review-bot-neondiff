@@ -333,9 +333,7 @@ export type IssueEnrichmentScanReason =
   | "repo_max_comments_per_cycle"
   | "global_max_issues_per_cycle"
   | "global_max_comments_per_cycle"
-  | "burst_threshold_exceeded"
-  | "persisted_defer_active"
-  | "repository_blocked";
+  | "burst_threshold_exceeded" | "persisted_defer_active" | "repository_blocked";
 
 export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
   return reason === "preservation_only_upstream_intake";
@@ -1135,6 +1133,7 @@ export async function runIssueEnrichmentCycle(input: {
         items.push({ ...item, skippedExisting: true, recordStatus: existing.status });
         continue;
       }
+      if (admitted.reason === "source_probe") { admissionLedger.requeue(admitted.candidate); continue; }
       if (input.dryRun) {
         settled.add(admitted.candidate.key);
         items.push({ ...item });
