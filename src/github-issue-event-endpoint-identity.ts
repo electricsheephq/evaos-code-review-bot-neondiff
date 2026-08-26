@@ -44,7 +44,7 @@ export function matchesGitHubIssueEventEndpointIdentity(
   identity: Readonly<GitHubIssueEventEndpointIdentity>,
   targetUrl: string
 ): boolean {
-  if (!Object.isFrozen(identity) || typeof targetUrl !== "string" || hasForbiddenRawSyntax(targetUrl)) return false;
+  if (!isEndpointIdentity(identity) || typeof targetUrl !== "string" || hasForbiddenRawSyntax(targetUrl)) return false;
   try {
     const target = new URL(targetUrl);
     const exact = `${target.origin}${target.pathname}`;
@@ -68,6 +68,18 @@ function hasForbiddenRawSyntax(value: string): boolean {
   return value.trim() !== value || /[%\\\u0000-\u0020\u007f-\uffff]/.test(value)
     || value.includes("?") || value.includes("#") || value.includes("@")
     || /(?:^|\/)\.{1,2}(?:\/|$)/.test(value);
+}
+
+function isEndpointIdentity(value: unknown): value is Readonly<GitHubIssueEventEndpointIdentity> {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value) || !Object.isFrozen(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const record = value as Record<string, unknown>;
+    return Object.keys(record).length === 4 && typeof record.origin === "string"
+      && typeof record.basePath === "string" && typeof record.repositoryPath === "string"
+      && typeof record.canonicalRepositoryPath === "string";
+  } catch { return false; }
 }
 
 function positiveSafeInteger(value: unknown): value is number {

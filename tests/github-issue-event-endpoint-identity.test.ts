@@ -60,6 +60,12 @@ describe("exact raw GitHub issue-event endpoint identity", () => {
       "https://ghe.example.com/api/v3/repositories/1285247004/issues/990/évents"
     ];
     for (const target of rejected) expect(matchesGitHubIssueEventEndpointIdentity(result.identity, target)).toBe(false);
+
+    const forgedArray = Object.freeze(Object.assign([], result.identity));
+    expect(matchesGitHubIssueEventEndpointIdentity(
+      forgedArray as unknown as typeof result.identity,
+      accepted[0]
+    )).toBe(false);
   });
 
   it("rejects noncanonical base and malformed identity input", () => {
