@@ -19,6 +19,7 @@ export type GitHubIssueEventEndpointIdentityResult =
   | Readonly<{ ok: false; reason: "invalid_endpoint_identity" }>;
 
 const INVALID = Object.freeze({ ok: false, reason: "invalid_endpoint_identity" } as const);
+const ENDPOINT_IDENTITIES = new WeakSet<object>();
 const REPOSITORY = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)\/([A-Za-z0-9._-]{1,100})$/;
 
 export function resolveGitHubIssueEventEndpointIdentity(input: GitHubIssueEventEndpointIdentityInput): GitHubIssueEventEndpointIdentityResult {
@@ -36,6 +37,7 @@ export function resolveGitHubIssueEventEndpointIdentity(input: GitHubIssueEventE
       repositoryPath: `${base.basePath}/repos/${match[1]}/${match[2]}/issues/${issueNumber}/events`,
       canonicalRepositoryPath: `${base.basePath}/repositories/${repositoryId}/issues/${issueNumber}/events`
     });
+    ENDPOINT_IDENTITIES.add(identity);
     return Object.freeze({ ok: true as const, identity });
   } catch { return INVALID; }
 }
@@ -72,7 +74,8 @@ function hasForbiddenRawSyntax(value: string): boolean {
 
 function isEndpointIdentity(value: unknown): value is Readonly<GitHubIssueEventEndpointIdentity> {
   try {
-    if (!value || typeof value !== "object" || Array.isArray(value) || !Object.isFrozen(value)) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value) || !Object.isFrozen(value)
+      || !ENDPOINT_IDENTITIES.has(value)) return false;
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype) return false;
     const record = value as Record<string, unknown>;

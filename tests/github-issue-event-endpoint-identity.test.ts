@@ -71,6 +71,16 @@ describe("exact raw GitHub issue-event endpoint identity", () => {
       nullPrototype as typeof result.identity,
       accepted[0]
     )).toBe(false);
+    const forgedFrozenIdentity = Object.freeze({
+      origin: "https://attacker.example",
+      basePath: "",
+      repositoryPath: "/accepted",
+      canonicalRepositoryPath: "/other"
+    });
+    expect(matchesGitHubIssueEventEndpointIdentity(
+      forgedFrozenIdentity,
+      "https://attacker.example/accepted"
+    )).toBe(false);
   });
 
   it("rejects noncanonical base and malformed identity input", () => {
