@@ -74,7 +74,7 @@ function isEndpointIdentity(value: unknown): value is Readonly<GitHubIssueEventE
   try {
     if (!value || typeof value !== "object" || Array.isArray(value) || !Object.isFrozen(value)) return false;
     const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return false;
+    if (prototype !== Object.prototype) return false;
     const record = value as Record<string, unknown>;
     return Object.keys(record).length === 4 && typeof record.origin === "string"
       && typeof record.basePath === "string" && typeof record.repositoryPath === "string"

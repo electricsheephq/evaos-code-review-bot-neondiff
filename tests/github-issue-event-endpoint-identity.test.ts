@@ -66,6 +66,11 @@ describe("exact raw GitHub issue-event endpoint identity", () => {
       forgedArray as unknown as typeof result.identity,
       accepted[0]
     )).toBe(false);
+    const nullPrototype = Object.freeze(Object.assign(Object.create(null), result.identity));
+    expect(matchesGitHubIssueEventEndpointIdentity(
+      nullPrototype as typeof result.identity,
+      accepted[0]
+    )).toBe(false);
   });
 
   it("rejects noncanonical base and malformed identity input", () => {
