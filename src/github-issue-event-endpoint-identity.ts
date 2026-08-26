@@ -65,5 +65,6 @@ function hasForbiddenUrlSyntax(value: string): boolean {
   const authorityEnd = schemeEnd < 0 ? -1 : value.indexOf("/", schemeEnd + 3);
   const authority = schemeEnd < 0 ? "" : value.slice(schemeEnd + 3, authorityEnd < 0 ? undefined : authorityEnd);
   return value.trim() !== value || /[%\\\u0000-\u0020\u007f-\uffff]/.test(value)
-    || value.includes("?") || value.includes("#") || authority.includes("@");
+    || value.includes("?") || value.includes("#") || authority.includes("@")
+    || /(?:^|\/)\.{1,2}(?:\/|$)/.test(value);
 }

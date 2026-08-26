@@ -57,7 +57,8 @@ describe("GitHub issue-event endpoint identity", () => {
       `https://@ghe.example.com${result.identity.canonicalRepositoryPath}`,
       "https://ghe.example.com\\api\\v3\\repositories\\1285247004\\issues\\990\\events",
       "https://ghe.example.com/api/v3/repositories/%31%32%38%35%32%34%37%30%30%34/issues/990/events",
-      "https://ghe.example.com/api/v3/repos/electric-sheep/neondiff.é/issues/990/events"
+      "https://ghe.example.com/api/v3/repos/electric-sheep/neondiff.é/issues/990/events",
+      "https://ghe.example.com/api/v3/repos/electric-sheep/neondiff.js/issues/990/x/../events"
     ]) expect(matchesGitHubIssueEventEndpointIdentity(result.identity, target)).toBe(false);
   });
 
