@@ -4,6 +4,7 @@ import { isMap, isProxy, isSet } from "node:util/types";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type { IssueEnrichmentIssueList } from "./issue-enrichment.js";
+import { parseIssueEventLink } from "./issue-event-pagination-links.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
@@ -45,6 +46,14 @@ export interface BoundedIssueCommentRead {
   overflow: boolean;
 }
 
+export interface IssueLabelEvent { id?: number; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null; }
+
+export type BoundedIssueLabelEventRead = IssueLabelEvent[] & {
+  items: IssueLabelEvent[]; pagesRead: number; rawCount: number; uniqueCount: number; duplicateCount: number; lastPage?: number;
+  terminal: "short_page" | "bounded_tail" | "event_history_unbounded";
+  truncated: boolean; overflow: boolean;
+};
+
 function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
   const result = items as BoundedGithubList<T>;
   result.items = items.slice();
@@ -65,6 +74,13 @@ function boundedIssueCommentRead(
     truncated: metadata.terminal === "page_cap",
     overflow: metadata.terminal === "page_cap"
   };
+}
+
+function boundedIssueLabelEventRead(items: IssueLabelEvent[], metadata: Omit<BoundedIssueLabelEventRead, keyof IssueLabelEvent[] | "items" | "uniqueCount" | "truncated" | "overflow">): BoundedIssueLabelEventRead {
+  return Object.assign(items, {
+    items: items.slice(), ...metadata, uniqueCount: items.length, truncated: metadata.terminal !== "short_page",
+    overflow: metadata.terminal === "event_history_unbounded"
+  });
 }
 
 export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
@@ -191,6 +207,34 @@ export class GitHubApiTimeoutError extends Error {
     this.path = input.path;
     this.timeoutMs = input.timeoutMs;
   }
+}
+
+function trustedIssueEventLastPage(link: unknown, endpoint: URL, currentPage: number, expectedLastPage?: number): number | undefined {
+  const parsed = parseIssueEventLink(link);
+  if (parsed.kind === "absent") { if (expectedLastPage !== undefined) throw new Error("missing issue-event tail Link"); return undefined; }
+  const relations = new Map<string, number>();
+  for (const member of parsed.members) {
+    const target = new URL(member.target);
+    if (target.origin !== endpoint.origin || target.pathname !== endpoint.pathname || target.username || target.password || target.hash) throw new Error("untrusted issue-event Link target");
+    const pageValues = target.searchParams.getAll("page"), perPageValues = target.searchParams.getAll("per_page");
+    if (pageValues.length !== 1 || perPageValues.length !== 1 || [...target.searchParams.keys()].length !== 2 || perPageValues[0] !== "100" || !/^[1-9]\d*$/.test(pageValues[0]!)) {
+      throw new Error("untrusted issue-event Link query");
+    }
+    const page = Number(pageValues[0]);
+    if (!Number.isSafeInteger(page)) throw new Error("untrusted issue-event Link page");
+    const value = member.relation.startsWith('"') ? member.relation.slice(1, -1) : member.relation;
+    for (const relation of value.split(" ")) {
+      if (!new Set(["first", "prev", "next", "last"]).has(relation) || relations.has(relation)) throw new Error("untrusted issue-event Link relation");
+      relations.set(relation, page);
+    }
+  }
+  const lastPage = expectedLastPage ?? relations.get("last");
+  if (!lastPage || (relations.has("last") && relations.get("last") !== lastPage)) throw new Error("untrusted issue-event last page");
+  if (relations.has("first") && relations.get("first") !== 1) throw new Error("untrusted issue-event first page");
+  if (relations.has("prev") && relations.get("prev") !== currentPage - 1) throw new Error("untrusted issue-event previous page");
+  if (currentPage < lastPage && (relations.get("next") !== currentPage + 1 || relations.get("last") !== lastPage)) throw new Error("untrusted issue-event forward pagination");
+  if (currentPage === lastPage && relations.has("next")) throw new Error("untrusted issue-event terminal pagination");
+  return lastPage;
 }
 
 export class GitHubApi {
@@ -434,26 +478,53 @@ export class GitHubApi {
     });
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>> {
-    const events: Array<{
-      event?: string;
-      created_at?: string;
-      actor?: { login?: string | null } | null;
-      label?: { name?: string | null } | null;
-    }> = [];
-    for (let page = 1; ; page += 1) {
-      const chunk = await this.request<typeof events>(
-        `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
-        { token: await this.getReadToken(repo) }
-      );
-      events.push(...chunk);
-      if (chunk.length < 100) return events;
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedIssueLabelEventRead> {
+    const path = `/repos/${repo}/issues/${issueNumber}/events`;
+    const endpoint = new URL(buildApiUrl(this.apiBaseUrl, path, "GitHub issue-event endpoint"));
+    const token = await this.getReadToken(repo);
+    const readPage = async (page: number) => {
+      let link: string | null = null;
+      const items = await this.request<IssueLabelEvent[]>(`${path}?per_page=100&page=${page}`, {
+        token,
+        responseHeaders: (headers) => { link = headers.get("link"); }
+      });
+      return { items, link };
+    };
+    const first = await readPage(1);
+    if (first.items.length < 100) {
+      return boundedIssueLabelEventRead(first.items, { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, lastPage: 1, terminal: "short_page" });
     }
+    let lastPage: number | undefined;
+    try {
+      lastPage = trustedIssueEventLastPage(first.link, endpoint, 1);
+    } catch {
+      return boundedIssueLabelEventRead([], { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, terminal: "event_history_unbounded" });
+    }
+    if (!lastPage) {
+      const probe = await readPage(2);
+      if (probe.items.length === 0) return boundedIssueLabelEventRead(first.items, { pagesRead: 2, rawCount: first.items.length, duplicateCount: 0, lastPage: 1, terminal: "short_page" });
+      return boundedIssueLabelEventRead([], { pagesRead: 2, rawCount: first.items.length + probe.items.length, duplicateCount: 0, terminal: "event_history_unbounded" });
+    }
+    const raw = lastPage <= 5 ? first.items.slice() : [];
+    let pagesRead = 1;
+    try {
+      for (let page = Math.max(2, lastPage - 4); page <= lastPage; page += 1) {
+        const result = await readPage(page);
+        pagesRead += 1;
+        trustedIssueEventLastPage(result.link, endpoint, page, lastPage);
+        raw.push(...result.items);
+      }
+    } catch {
+      return boundedIssueLabelEventRead([], { pagesRead, rawCount: raw.length, duplicateCount: 0, lastPage, terminal: "event_history_unbounded" });
+    }
+    const seen = new Set<number>(), items: IssueLabelEvent[] = [];
+    let duplicateCount = 0;
+    for (const event of raw) {
+      if (event.id !== undefined && seen.has(event.id)) { duplicateCount += 1; continue; }
+      if (event.id !== undefined) seen.add(event.id);
+      items.push(event);
+    }
+    return boundedIssueLabelEventRead(items, { pagesRead, rawCount: raw.length, duplicateCount, lastPage, terminal: "bounded_tail" });
   }
 
   async getCollaboratorPermission(
@@ -700,7 +771,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; responseHeaders?: (headers: Headers) => void } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     const controller = new AbortController();
@@ -727,6 +798,7 @@ export class GitHubApi {
           responseText: text
         });
       }
+      options.responseHeaders?.(response.headers);
       return (await response.json()) as T;
     } catch (error) {
       if (error instanceof GitHubApiRequestError) throw error;

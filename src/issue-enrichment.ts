@@ -12,7 +12,7 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
-import { unpackBoundedGithubList, type BoundedGithubList } from "./github.js";
+import { unpackBoundedGithubList, type BoundedGithubList, type BoundedIssueLabelEventRead, type IssueLabelEvent } from "./github.js";
 import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
@@ -290,12 +290,7 @@ type IssueEnrichmentComment = {
 
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
-  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>>;
+  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<IssueLabelEvent[] | BoundedIssueLabelEventRead>;
   getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
   listIssueComments?(repo: string, issueNumber: number): Promise<IssueEnrichmentComment[] | BoundedGithubList<IssueEnrichmentComment>>;
   listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueEnrichmentComment>>;
@@ -328,7 +323,7 @@ export type IssueEnrichmentScanReason =
   | "eligible"
   | "stale_issue_closed"
   | "issue_is_pull_request"
-  | "preservation_only_upstream_intake"
+  | "preservation_only_upstream_intake" | "event_history_unbounded"
   | "repo_max_issues_per_cycle"
   | "repo_max_comments_per_cycle"
   | "global_max_issues_per_cycle"
@@ -386,6 +381,7 @@ async function evaluateIssuePromotion(input: {
   issue: GitHubRelatedIssueOrPull;
   override?: IssueEnrichmentRepoOverride;
   github: IssueEnrichmentCycleGithub;
+  events?: IssueLabelEvent[];
 }): Promise<{ issue: GitHubRelatedIssueOrPull; evidence?: IssuePromotionEvidence }> {
   const labels = (input.issue.labels ?? [])
     .map((label) => typeof label === "string" ? label : label.name ?? "")
@@ -399,7 +395,7 @@ async function evaluateIssuePromotion(input: {
     return { issue: input.issue };
   }
   try {
-    const events = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const events = input.events ?? await input.github.listIssueLabelEvents(input.repo, input.issue.number);
     const labelEvent = events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
@@ -444,6 +440,7 @@ export async function buildIssueEvidenceContext(input: {
   github: IssueEnrichmentCycleGithub;
   defaultBranch: string;
   headSha: string;
+  labelEvents?: IssueLabelEvent[];
 }): Promise<IssueAnalysisEvidenceContext> {
   const commentResult = input.github.listIssueCommentsForEnrichment
     ? await input.github.listIssueCommentsForEnrichment(input.repo, input.issue.number)
@@ -454,9 +451,9 @@ export async function buildIssueEvidenceContext(input: {
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
-  const rawTimeline = input.github.listIssueLabelEvents
+  const rawTimeline = input.labelEvents ?? (input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
-    : [];
+    : []);
   const linkedNumbers = extractIssueReferenceNumbers(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`, input.issue.number);
   const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
   if (input.github.getIssueOrPull) {
@@ -484,7 +481,7 @@ export async function buildIssueEvidenceContext(input: {
       updatedAt: boundedIssueContext(redactSecrets(comment.updated_at ?? ""), 100),
       body: boundedIssueContext(redactSecrets(comment.body ?? ""), 8_000)
     })),
-    timeline: rawTimeline.slice(0, 200).map((event) => ({
+    timeline: rawTimeline.slice(-200).map((event) => ({
       event: boundedIssueContext(redactSecrets(event.event ?? ""), 100),
       actor: boundedIssueContext(redactSecrets(event.actor?.login ?? ""), 200),
       createdAt: boundedIssueContext(redactSecrets(event.created_at ?? ""), 100),
@@ -931,6 +928,7 @@ export async function runIssueEnrichmentCycle(input: {
     }
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
+    const eventHistoryByIssue = new Map<string, IssueLabelEvent[]>(), eventHistoryOverflow: Array<{ repo: string; issue: GitHubRelatedIssueOrPull }> = [];
     const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
     const promotionEvidenceByIssue = new Map<string, IssuePromotionEvidence>();
     const plannedEnrichmentByIssue = new Map<string, EnrichmentComment>();
@@ -991,11 +989,17 @@ export async function runIssueEnrichmentCycle(input: {
               const issues = await input.github.listIssuesForEnrichment(repo, options);
               const prepared: GitHubRelatedIssueOrPull[] = [];
               for (const issue of issues) {
+                let events: IssueLabelEvent[] | undefined;
+                try { events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : []; } catch {}
+                if (events) eventHistoryByIssue.set(issueKey(repo, issue.number), events);
+                if ((events as Partial<BoundedIssueLabelEventRead> | undefined)?.terminal === "event_history_unbounded") {
+                  issuesByKey.set(issueKey(repo, issue.number), issue); eventHistoryOverflow.push({ repo, issue }); continue;
+                }
                 const promotion = await evaluateIssuePromotion({
                   repo,
                   issue,
                   override: canonicalIssueEnrichmentRepository(config, repo).override,
-                  github: input.github
+                  github: input.github, events
                 });
                 prepared.push(promotion.issue);
                 issuesByKey.set(issueKey(repo, issue.number), promotion.issue);
@@ -1026,6 +1030,10 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
+    for (const { repo, issue } of eventHistoryOverflow) {
+      const repoScan = scanned.repos.find((candidate) => candidate.repo === repo); if (repoScan) repoScan.issuesSeen += 1;
+      scanned.items.push({ repo, issueNumber: issue.number, state: issue.state ?? "unknown", action: "skipped", reason: "event_history_unbounded", ...(issue.html_url ? { url: issue.html_url } : {}) });
+    }
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
@@ -1065,6 +1073,10 @@ export async function runIssueEnrichmentCycle(input: {
 
     for (const item of scan.items.filter((candidate) => candidate.action === "skipped")) {
       const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt);
+      const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+      if (item.reason === "event_history_unbounded" && input.force !== true && existing?.status === "skipped" && existing.reason === item.reason && existing.issueUpdatedAt === issueUpdatedAt) {
+        summary.alreadyProcessed += 1; items.push({ ...item, skippedExisting: true, recordStatus: "skipped" }); continue;
+      }
       if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "skipped", reason: item.reason, now: new Date(checkedAt) });
       if (!input.dryRun) summary.skippedRecorded += 1;
       items.push({ ...item, ...(!input.dryRun ? { recordStatus: "skipped" as const } : {}) });
@@ -1091,7 +1103,8 @@ export async function runIssueEnrichmentCycle(input: {
             defaultBranches.set(repoKey, defaultBranch);
           }
           issueEvidenceContextByIssue.set(issueKey(item.repo, item.issueNumber), await buildIssueEvidenceContext({
-            repo: item.repo, issue, github: input.github, defaultBranch: defaultBranches.get(repoKey)!, headSha: sourceSnapshots.get(repoKey)!.headSha
+            repo: item.repo, issue, github: input.github, defaultBranch: defaultBranches.get(repoKey)!, headSha: sourceSnapshots.get(repoKey)!.headSha,
+            labelEvents: eventHistoryByIssue.get(issueKey(item.repo, item.issueNumber))
           }));
         } catch (error) {
           const message = redactSecrets(error instanceof Error ? error.message : String(error));
