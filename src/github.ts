@@ -490,7 +490,7 @@ export class GitHubApi {
     const raw = lastPage <= 5 ? first.items.slice() : []; let pagesRead = 1;
     for (let page = Math.max(2, lastPage - 4); page <= lastPage; page += 1) {
       const result = await readPage(page); pagesRead += 1;
-      try { trustedIssueEventLastPage(result.link, endpoint, page, lastPage); } catch { return boundedIssueLabelEventRead([], { pagesRead, rawCount: raw.length, duplicateCount: 0, lastPage, terminal: "event_history_unbounded" }); }
+      try { trustedIssueEventLastPage(result.link, endpoint, page, lastPage); } catch { return boundedIssueLabelEventRead([], { pagesRead, rawCount: raw.length, duplicateCount: 0, lastPage, terminal: "event_history_unbounded" }); } if (page < lastPage && result.items.length !== 100) return boundedIssueLabelEventRead([], { pagesRead, rawCount: raw.length + result.items.length, duplicateCount: 0, lastPage, terminal: "event_history_unbounded" });
       raw.push(...result.items);
     }
     const seen = new Set<number>(), items: IssueLabelEvent[] = [];
