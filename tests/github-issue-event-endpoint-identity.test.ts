@@ -40,18 +40,21 @@ describe("GitHub issue-event endpoint identity", () => {
   it("matches only the exact configured origin and either derived path", () => {
     const result = resolveGitHubIssueEventEndpointIdentity({ ...valid, apiBaseUrl: "https://ghe.example.com/api/v3" });
     if (!result.ok) throw new Error("expected valid identity");
-    expect(matchesGitHubIssueEventEndpointIdentity(result.identity, new URL("https://ghe.example.com/api/v3/repos/electric-sheep/neondiff.js/issues/990/events"))).toBe(true);
-    expect(matchesGitHubIssueEventEndpointIdentity(result.identity, new URL("https://ghe.example.com/api/v3/repositories/1285247004/issues/990/events"))).toBe(true);
+    expect(matchesGitHubIssueEventEndpointIdentity(result.identity, "https://ghe.example.com/api/v3/repos/electric-sheep/neondiff.js/issues/990/events")).toBe(true);
+    expect(matchesGitHubIssueEventEndpointIdentity(result.identity, "https://ghe.example.com/api/v3/repositories/1285247004/issues/990/events")).toBe(true);
     for (const target of [
-      new URL(`https://other.example.com${result.identity.canonicalRepositoryPath}`),
-      new URL("https://ghe.example.com/repositories/1285247004/issues/990/events"),
-      new URL("https://ghe.example.com/api/v3/repositories/9/issues/990/events"),
-      new URL("https://ghe.example.com/api/v3/repos/other/neondiff.js/issues/990/events"),
-      new URL("https://ghe.example.com/api/v3/repositories/1285247004/issues/991/events"),
-      new URL(`https://ghe.example.com${result.identity.canonicalRepositoryPath}/extra`),
-      new URL(`https://ghe.example.com${result.identity.canonicalRepositoryPath}?page=2`),
-      new URL(`https://ghe.example.com${result.identity.canonicalRepositoryPath}#fragment`),
-      new URL(`https://token@ghe.example.com${result.identity.canonicalRepositoryPath}`)
+      `https://other.example.com${result.identity.canonicalRepositoryPath}`,
+      "https://ghe.example.com/repositories/1285247004/issues/990/events",
+      "https://ghe.example.com/api/v3/repositories/9/issues/990/events",
+      "https://ghe.example.com/api/v3/repos/other/neondiff.js/issues/990/events",
+      "https://ghe.example.com/api/v3/repositories/1285247004/issues/991/events",
+      `https://ghe.example.com${result.identity.canonicalRepositoryPath}/extra`,
+      `https://ghe.example.com${result.identity.canonicalRepositoryPath}?page=2`,
+      `https://ghe.example.com${result.identity.canonicalRepositoryPath}#fragment`,
+      `https://token@ghe.example.com${result.identity.canonicalRepositoryPath}`,
+      "https://ghe.example.com\\api\\v3\\repositories\\1285247004\\issues\\990\\events",
+      "https://ghe.example.com/api/v3/repositories/%31%32%38%35%32%34%37%30%30%34/issues/990/events",
+      "https://ghe.example.com/api/v3/repos/electric-sheep/neondiff.é/issues/990/events"
     ]) expect(matchesGitHubIssueEventEndpointIdentity(result.identity, target)).toBe(false);
   });
 
@@ -62,6 +65,7 @@ describe("GitHub issue-event endpoint identity", () => {
       { apiBaseUrl: "https://ghe.example.com/api/v3?tenant=x" },
       { apiBaseUrl: "https://ghe.example.com/api/v3#fragment" },
       { apiBaseUrl: "https://ghe.example.com/api/%76%33" },
+      { apiBaseUrl: "https://ghe.example.com/api/é" },
       { apiBaseUrl: "https://ghe.example.com/api/../v3" },
       { apiBaseUrl: "https://ghe.example.com/api/.." },
       { repository: "electric-sheep" },

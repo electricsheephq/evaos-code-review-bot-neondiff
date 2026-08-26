@@ -26,7 +26,7 @@ export function resolveGitHubIssueEventEndpointIdentity(input: GitHubIssueEventE
     if (!input || typeof input !== "object" || Array.isArray(input)) return INVALID;
     const { apiBaseUrl, repository, repositoryId, issueNumber } = input;
     if (typeof apiBaseUrl !== "string" || typeof repository !== "string" || apiBaseUrl.trim() !== apiBaseUrl
-      || /[%\\\u0000-\u0020\u007f]/.test(apiBaseUrl) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(apiBaseUrl)) return INVALID;
+      || /[%\\\u0000-\u0020\u007f-\uffff]/.test(apiBaseUrl) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(apiBaseUrl)) return INVALID;
     const base = new URL(apiBaseUrl);
     if ((base.protocol !== "https:" && !(base.protocol === "http:" && isLoopbackHost(base.hostname)))
       || base.username || base.password || base.search || base.hash) return INVALID;
@@ -46,11 +46,15 @@ export function resolveGitHubIssueEventEndpointIdentity(input: GitHubIssueEventE
 
 export function matchesGitHubIssueEventEndpointIdentity(
   identity: Readonly<GitHubIssueEventEndpointIdentity>,
-  target: Readonly<Pick<URL, "origin" | "pathname" | "search" | "hash" | "username" | "password">>
+  targetUrl: string
 ): boolean {
-  return Object.isFrozen(identity) && !target.username && !target.password && !target.search && !target.hash
-    && target.origin === identity.origin
-    && (target.pathname === identity.repositoryPath || target.pathname === identity.canonicalRepositoryPath);
+  if (!Object.isFrozen(identity) || typeof targetUrl !== "string" || targetUrl.trim() !== targetUrl
+    || /[%\\\u0000-\u0020\u007f-\uffff]/.test(targetUrl)) return false;
+  try {
+    const target = new URL(targetUrl);
+    return !target.username && !target.password && !target.search && !target.hash && target.origin === identity.origin
+      && (target.pathname === identity.repositoryPath || target.pathname === identity.canonicalRepositoryPath);
+  } catch { return false; }
 }
 
 function positiveSafeInteger(value: unknown): value is number {
