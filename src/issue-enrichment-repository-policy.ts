@@ -10,14 +10,19 @@ export function canonicalIssueEnrichmentRepositories(
   config: IssueEnrichmentConfig,
   repositories: readonly string[] = config.allowlist
 ): CanonicalIssueEnrichmentRepository[] {
-  const groups = new Map<string, string[]>();
-  for (const repo of repositories) {
-    const key = repo.toLowerCase();
-    const aliases = groups.get(key);
-    if (aliases) aliases.push(repo);
-    else groups.set(key, [repo]);
-  }
-  return [...groups].map(([key, aliases]) => {
+  const group = (values: readonly string[]): Map<string, string[]> => {
+    const groups = new Map<string, string[]>();
+    for (const repo of values) {
+      const key = repo.toLowerCase();
+      const aliases = groups.get(key);
+      if (aliases) aliases.push(repo);
+      else groups.set(key, [repo]);
+    }
+    return groups;
+  };
+  const configured = group(config.allowlist);
+  return [...group(repositories)].map(([key, requestedAliases]) => {
+    const aliases = configured.get(key) ?? requestedAliases;
     const repo = [...aliases].sort()[0]!;
     const exact = config.repos?.[repo];
     const fallback = Object.entries(config.repos ?? {})

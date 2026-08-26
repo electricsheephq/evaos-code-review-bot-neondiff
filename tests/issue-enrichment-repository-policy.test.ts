@@ -56,6 +56,10 @@ describe("issue-enrichment canonical repository policy", () => {
       { "Owner/Repo": exact, "owner/repo": alias }
     ))[0]?.override).toBe(exact);
     expect(canonicalIssueEnrichmentRepositories(config(
+      ["owner/repo", "Owner/Repo"],
+      { "Owner/Repo": exact, "owner/repo": alias }
+    ), ["owner/repo"])[0]).toMatchObject({ repo: "Owner/Repo", override: exact });
+    expect(canonicalIssueEnrichmentRepositories(config(
       ["Owner/Repo", "owner/repo"],
       { "owner/repo": alias }
     ))[0]?.override).toBe(alias);
