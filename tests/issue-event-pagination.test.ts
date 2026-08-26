@@ -46,7 +46,7 @@ describe("strict issue-event pagination state machine", () => {
     expect(result).toMatchObject({ pagesRead: 2, rawCount: 200, lastPage: 8, terminal: "event_history_unbounded", truncated: true, overflow: true });
   });
   it("handles short history and exact full-page probes", async () => {
-    expect((await run({ 1: { page: 1, items: events(1, 3) } })).terminal).toBe("short_page");
+    expect((await run({ 1: { page: 1, items: events(1, 3) } })).terminal).toBe("short_page"); expect((await run({ 1: { page: 1, items: [], link: link("last", 1) } })).terminal).toBe("event_history_unbounded");
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: [] } })).toMatchObject({ rawCount: 100, pagesRead: 2, lastPage: 1, terminal: "short_page" });
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2, 3) } })).toMatchObject({ rawCount: 103, pagesRead: 2, lastPage: 2, terminal: "short_page" });
     expect((await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2) } })).terminal).toBe("event_history_unbounded");

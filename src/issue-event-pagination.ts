@@ -76,7 +76,7 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
   const firstItems = first.page!.items;
   if (firstItems.length > PAGE_SIZE) return fail();
   if (firstItems.length < PAGE_SIZE) {
-    if (first.present && !terminalLinks(first.relations, 1, 1)) return fail();
+    if (first.present && (firstItems.length === 0 || !terminalLinks(first.relations, 1, 1))) return fail();
     lastPage = 1;
     add(firstItems);
     return receipt("short_page");
