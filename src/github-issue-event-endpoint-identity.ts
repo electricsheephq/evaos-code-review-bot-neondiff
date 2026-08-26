@@ -25,8 +25,8 @@ export function resolveGitHubIssueEventEndpointIdentity(input: GitHubIssueEventE
   try {
     if (!input || typeof input !== "object" || Array.isArray(input)) return INVALID;
     const { apiBaseUrl, repository, repositoryId, issueNumber } = input;
-    if (typeof apiBaseUrl !== "string" || typeof repository !== "string" || apiBaseUrl.trim() !== apiBaseUrl
-      || /[%\\\u0000-\u0020\u007f-\uffff]/.test(apiBaseUrl) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(apiBaseUrl)) return INVALID;
+    if (typeof apiBaseUrl !== "string" || typeof repository !== "string" || hasForbiddenUrlSyntax(apiBaseUrl)
+      || /(?:^|\/)\.{1,2}(?:\/|$)/.test(apiBaseUrl)) return INVALID;
     const base = new URL(apiBaseUrl);
     if ((base.protocol !== "https:" && !(base.protocol === "http:" && isLoopbackHost(base.hostname)))
       || base.username || base.password || base.search || base.hash) return INVALID;
@@ -48,8 +48,7 @@ export function matchesGitHubIssueEventEndpointIdentity(
   identity: Readonly<GitHubIssueEventEndpointIdentity>,
   targetUrl: string
 ): boolean {
-  if (!Object.isFrozen(identity) || typeof targetUrl !== "string" || targetUrl.trim() !== targetUrl
-    || /[%\\\u0000-\u0020\u007f-\uffff]/.test(targetUrl)) return false;
+  if (!Object.isFrozen(identity) || typeof targetUrl !== "string" || hasForbiddenUrlSyntax(targetUrl)) return false;
   try {
     const target = new URL(targetUrl);
     return !target.username && !target.password && !target.search && !target.hash && target.origin === identity.origin
@@ -59,4 +58,12 @@ export function matchesGitHubIssueEventEndpointIdentity(
 
 function positiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function hasForbiddenUrlSyntax(value: string): boolean {
+  const schemeEnd = value.indexOf("://");
+  const authorityEnd = schemeEnd < 0 ? -1 : value.indexOf("/", schemeEnd + 3);
+  const authority = schemeEnd < 0 ? "" : value.slice(schemeEnd + 3, authorityEnd < 0 ? undefined : authorityEnd);
+  return value.trim() !== value || /[%\\\u0000-\u0020\u007f-\uffff]/.test(value)
+    || value.includes("?") || value.includes("#") || authority.includes("@");
 }
