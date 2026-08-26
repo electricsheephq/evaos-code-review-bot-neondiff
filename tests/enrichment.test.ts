@@ -928,6 +928,10 @@ describe("sticky enrichment comments", () => {
         expect(analysisCalls).toBe(1);
         expect(postCalls).toBe(1);
         expect(state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")).toMatchObject({ lastCheckedAt: "2026-08-15T21:00:00.000Z" });
+        let eventReads = 0; const generic = { number: 129, title: "Generic live issue", state: "open", updated_at: "2026-08-15T20:26:00Z", labels: [{ name: "support" }] };
+        const rawInput = { config: { ...loadConfig(configPath), workRoot: root, evidenceDir: root, codexRuntime: { enabled: true, cliPath: "/fixture/codex", model: "gpt-5.6-luna", reasoningEffort: "max", timeoutMs: 30_000, maxOutputBytes: 1024 } }, state, github: { listIssuesForEnrichment: async () => [generic], listIssueLabelEvents: async () => { eventReads += 1; return Object.assign([], { terminal: "event_history_unbounded" }); }, getRepo: async () => ({ default_branch: "main" }), canPostAsApp: () => true } as never, dryRun: false, includeExisting: true, checkedAt: "2026-08-15T21:01:00.000Z", licenseAdmission: issueEnrichmentTestAdmission } as Parameters<typeof runIssueEnrichmentCycleImpl>[0];
+        const first = await runIssueEnrichmentCycleImpl(rawInput), rerun = await runIssueEnrichmentCycleImpl(rawInput);
+        expect(first.summary).toMatchObject({ skippedRecorded: 1, alreadyProcessed: 0 }); expect(rerun.summary).toMatchObject({ skippedRecorded: 0, alreadyProcessed: 1 }); expect(eventReads).toBe(1);
       } finally {
         state.close();
       }

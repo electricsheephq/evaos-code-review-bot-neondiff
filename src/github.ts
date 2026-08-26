@@ -464,10 +464,8 @@ export class GitHubApi {
   }
 
   async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedIssueLabelEventRead> {
-    const path = `/repos/${repo}/issues/${issueNumber}/events`;
-    const endpoint = new URL(buildApiUrl(this.apiBaseUrl, path, "GitHub issue-event endpoint"));
-    const token = await this.getReadToken(repo);
-    const readPage = async (page: number) => {
+    const path = `/repos/${repo}/issues/${issueNumber}/events`, endpoint = new URL(buildApiUrl(this.apiBaseUrl, path, "GitHub issue-event endpoint"));
+    const token = await this.getReadToken(repo), readPage = async (page: number) => {
       let link: string | null = null;
       const items = await this.request<IssueLabelEvent[]>(`${path}?per_page=100&page=${page}`, {
         token,
@@ -476,10 +474,7 @@ export class GitHubApi {
       return { items, link };
     };
     const first = await readPage(1);
-    let lastPage: number | undefined;
-    try {
-      lastPage = trustedIssueEventLastPage(first.link, endpoint, 1);
-    } catch {
+    let lastPage: number | undefined; try { lastPage = trustedIssueEventLastPage(first.link, endpoint, 1); } catch {
       return boundedIssueLabelEventRead([], { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, terminal: "event_history_unbounded" });
     }
     if (first.items.length < 100) {
@@ -488,11 +483,11 @@ export class GitHubApi {
     }
     if (!lastPage) {
       const probe = await readPage(2);
-      if (probe.items.length === 0) return boundedIssueLabelEventRead(first.items, { pagesRead: 2, rawCount: first.items.length, duplicateCount: 0, lastPage: 1, terminal: "short_page" });
+      try { lastPage = trustedIssueEventLastPage(probe.link, endpoint, 2); } catch { return boundedIssueLabelEventRead([], { pagesRead: 2, rawCount: first.items.length + probe.items.length, duplicateCount: 0, terminal: "event_history_unbounded" }); }
+      if (probe.items.length < 100 && (!lastPage || lastPage === 2)) { const raw = [...first.items, ...probe.items], items = [...new Map(raw.map((event, index) => [event.id === undefined ? `missing:${index}` : `id:${event.id}`, event])).values()]; return boundedIssueLabelEventRead(items, { pagesRead: 2, rawCount: raw.length, duplicateCount: raw.length - items.length, lastPage: probe.items.length ? 2 : 1, terminal: "complete" }); }
       return boundedIssueLabelEventRead([], { pagesRead: 2, rawCount: first.items.length + probe.items.length, duplicateCount: 0, terminal: "event_history_unbounded" });
     }
-    const raw = lastPage <= 5 ? first.items.slice() : [];
-    let pagesRead = 1;
+    const raw = lastPage <= 5 ? first.items.slice() : []; let pagesRead = 1;
     for (let page = Math.max(2, lastPage - 4); page <= lastPage; page += 1) {
       const result = await readPage(page); pagesRead += 1;
       try { trustedIssueEventLastPage(result.link, endpoint, page, lastPage); } catch { return boundedIssueLabelEventRead([], { pagesRead, rawCount: raw.length, duplicateCount: 0, lastPage, terminal: "event_history_unbounded" }); }
