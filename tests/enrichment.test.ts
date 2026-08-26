@@ -883,8 +883,9 @@ describe("sticky enrichment comments", () => {
       const state = new ReviewStateStore(statePath);
       let analysisCalls = 0;
       let postCalls = 0;
+      const eventReads = new Map<number, number>();
       try {
-        const result = await runIssueEnrichmentCycle({
+        const run = () => runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
@@ -896,7 +897,7 @@ describe("sticky enrichment comments", () => {
               labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
               body: "Attributed preservation record only."
             }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }],
-            listIssueLabelEvents: async (_repo, issueNumber) => issueNumber === 127 ? Object.assign([], { terminal: "bounded_tail" }) : [{ event: "labeled", created_at: "2026-08-15T20:24:00Z", actor: { login: "Tosko4" }, label: { name: "active-continuation" } }],
+            listIssueLabelEvents: async (_repo, issueNumber) => { eventReads.set(issueNumber, (eventReads.get(issueNumber) ?? 0) + 1); return issueNumber === 127 ? Object.assign([], { terminal: "bounded_tail" }) : [{ event: "labeled", created_at: "2026-08-15T20:24:00Z", actor: { login: "Tosko4" }, label: { name: "active-continuation" } }]; },
             getCollaboratorPermission: async () => "maintain",
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
@@ -911,7 +912,7 @@ describe("sticky enrichment comments", () => {
             analysisCalls += 1;
             return fixtureIssueAnalysis(issue);
           }
-        });
+        }); const result = await run();
 
         expect(result.summary).toMatchObject({
           skippedRecorded: 1,
@@ -927,11 +928,10 @@ describe("sticky enrichment comments", () => {
         });
         expect(analysisCalls).toBe(1);
         expect(postCalls).toBe(1);
-        expect(state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")).toMatchObject({ lastCheckedAt: "2026-08-15T21:00:00.000Z" });
-        let eventReads = 0; const generic = { number: 129, title: "Generic live issue", state: "open", updated_at: "2026-08-15T20:26:00Z", labels: [{ name: "support" }] };
-        const rawInput = { config: { ...loadConfig(configPath), workRoot: root, evidenceDir: root, codexRuntime: { enabled: true, cliPath: "/fixture/codex", model: "gpt-5.6-luna", reasoningEffort: "max", timeoutMs: 30_000, maxOutputBytes: 1024 } }, state, github: { listIssuesForEnrichment: async () => [generic], listIssueLabelEvents: async () => { eventReads += 1; return Object.assign([], { terminal: "event_history_unbounded" }); }, getRepo: async () => ({ default_branch: "main" }), canPostAsApp: () => true } as never, dryRun: false, includeExisting: true, checkedAt: "2026-08-15T21:01:00.000Z", licenseAdmission: issueEnrichmentTestAdmission } as Parameters<typeof runIssueEnrichmentCycleImpl>[0];
+        expect(state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")).toMatchObject({ lastCheckedAt: "2026-08-15T21:00:00.000Z" }); const promotionRerun = await run(); expect(eventReads.get(127)).toBe(1); expect(promotionRerun.summary).toMatchObject({ skippedRecorded: 0, alreadyProcessed: 2, posted: 0 });
+        let lazyEventReads = 0; const generic = { number: 129, title: "Generic live issue", state: "open", updated_at: "2026-08-15T20:26:00Z", labels: [{ name: "support" }] }; const rawInput = { config: { ...loadConfig(configPath), workRoot: root, evidenceDir: root, codexRuntime: { enabled: true, cliPath: "/fixture/codex", model: "gpt-5.6-luna", reasoningEffort: "max", timeoutMs: 30_000, maxOutputBytes: 1024 } }, state, github: { listIssuesForEnrichment: async () => [generic], listIssueLabelEvents: async () => { lazyEventReads += 1; return Object.assign([], { terminal: "event_history_unbounded" }); }, getRepo: async () => ({ default_branch: "main" }), canPostAsApp: () => true } as never, dryRun: false, includeExisting: true, checkedAt: "2026-08-15T21:01:00.000Z", licenseAdmission: issueEnrichmentTestAdmission } as Parameters<typeof runIssueEnrichmentCycleImpl>[0];
         const first = await runIssueEnrichmentCycleImpl(rawInput), rerun = await runIssueEnrichmentCycleImpl(rawInput);
-        expect(first.summary).toMatchObject({ skippedRecorded: 1, alreadyProcessed: 0 }); expect(rerun.summary).toMatchObject({ skippedRecorded: 0, alreadyProcessed: 1 }); expect(eventReads).toBe(1);
+        expect(first.summary).toMatchObject({ skippedRecorded: 1, alreadyProcessed: 0 }); expect(rerun.summary).toMatchObject({ skippedRecorded: 0, alreadyProcessed: 1 }); expect(lazyEventReads).toBe(1);
       } finally {
         state.close();
       }

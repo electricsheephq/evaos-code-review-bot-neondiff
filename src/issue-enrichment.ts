@@ -991,6 +991,7 @@ export async function runIssueEnrichmentCycle(input: {
               for (const issue of issues) {
                 const override = canonicalIssueEnrichmentRepository(config, repo).override, labels = (issue.labels ?? []).map((label) => (typeof label === "string" ? label : label.name ?? "").trim().toLowerCase());
                 const needsPromotion = labels.includes("upstream-intake") && labels.includes("active-continuation") && (override?.promotionMaintainers?.length ?? 0) > 0;
+                const existing = input.state.getIssueEnrichmentRecord(repo, issue.number); if (needsPromotion && input.force !== true && existing?.status === "skipped" && existing.reason === "event_history_unbounded" && existing.issueUpdatedAt === canonicalIssueUpdatedAt(issue, checkedAt)) { issuesByKey.set(issueKey(repo, issue.number), issue); eventHistoryOverflow.push({ repo, issue }); continue; }
                 let events: IssueLabelEvent[] | undefined; if (needsPromotion) try { events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : []; } catch { events = Object.assign([], { terminal: "event_history_read_failed" }); }
                 if (events) eventHistoryByIssue.set(issueKey(repo, issue.number), events); const terminal = (events as { terminal?: string } | undefined)?.terminal;
                 if (terminal === "event_history_read_failed") throw new Error("issue_enrichment_event_history_read_failed");
