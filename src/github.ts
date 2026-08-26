@@ -606,7 +606,12 @@ export class GitHubApi {
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
       );
-      const existing = comments.find((comment) => comment.body?.includes(marker) && this.isBotAuthoredComment(comment));
+      const issueMarker = marker.includes(" issue=");
+      const normalizedMarker = issueMarker ? marker.toLowerCase() : marker;
+      const existing = comments.find((comment) => {
+        const body = issueMarker ? comment.body?.toLowerCase() : comment.body;
+        return body?.includes(normalizedMarker) && this.isBotAuthoredComment(comment);
+      });
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }

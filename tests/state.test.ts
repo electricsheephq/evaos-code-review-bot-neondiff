@@ -232,6 +232,56 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("preserves one legacy mixed-case issue enrichment record and watermark identity", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-casefold-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+
+    store.recordIssueEnrichment({
+      repo: "Owner/Issue-Repo",
+      issueNumber: 42,
+      issueUpdatedAt: "2026-08-26T10:00:00.000Z",
+      status: "posted",
+      commentUrl: "https://github.test/comment/1",
+      now: new Date("2026-08-26T10:05:00.000Z")
+    });
+    store.recordIssueEnrichmentRepoWatermark({
+      repo: "Owner/Issue-Repo",
+      activatedAt: "2026-08-26T10:00:00.000Z",
+      lastCheckedAt: "2026-08-26T10:05:00.000Z",
+      now: new Date("2026-08-26T10:05:00.000Z")
+    });
+
+    expect(store.getIssueEnrichmentRecord("owner/issue-repo", 42)?.repo).toBe("Owner/Issue-Repo");
+    expect(store.getIssueEnrichmentRepoWatermark("owner/issue-repo")?.repo).toBe("Owner/Issue-Repo");
+    store.recordIssueEnrichment({
+      repo: "owner/issue-repo",
+      issueNumber: 42,
+      issueUpdatedAt: "2026-08-26T10:06:00.000Z",
+      status: "posted",
+      commentUrl: "https://github.test/comment/1",
+      now: new Date("2026-08-26T10:06:00.000Z")
+    });
+    store.recordIssueEnrichmentRepoWatermark({
+      repo: "owner/issue-repo",
+      activatedAt: "2026-08-26T10:06:00.000Z",
+      lastCheckedAt: "2026-08-26T10:06:00.000Z",
+      now: new Date("2026-08-26T10:06:00.000Z")
+    });
+    store.close();
+
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(db.prepare("select repo, count(*) as count from issue_enrichment_records group by repo").all())
+        .toEqual([{ repo: "Owner/Issue-Repo", count: 1 }]);
+      expect(db.prepare("select repo, count(*) as count from issue_enrichment_repo_watermarks group by repo").all())
+        .toEqual([{ repo: "Owner/Issue-Repo", count: 1 }]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("migrates pre-body-hash issue enrichment records before storing hashes", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-body-hash-migration-"));
     roots.push(root);
