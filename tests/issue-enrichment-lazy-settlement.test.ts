@@ -20,6 +20,9 @@ describe("issue-enrichment lazy source settlement", () => {
     const result = await runIssueEnrichmentCycle({ config: config(["owner/empty"]), state: state(), github: { getRepo: async () => ({ default_branch: "main" }), listIssuesForEnrichment: async () => [], canPostAsApp: () => true, upsertIssueComment: async () => { throw new Error("must not post"); } }, dryRun: false, includeExisting: true, checkedAt: "2026-08-26T10:00:00.000Z", licenseAdmission: admission });
     expect(result.summary).toMatchObject({ issuesSeen: 0, posted: 0, failed: 0 }); expect(prepareBranchWorktree).not.toHaveBeenCalled();
   });
+  it("scans case-insensitive duplicate allowlist entries once", async () => {
+    const listIssuesForEnrichment = vi.fn(async () => []); const result = await runIssueEnrichmentCycle({ config: config(["Owner/Repo", "owner/repo"]), state: state(), github: { getRepo: async () => ({ default_branch: "main" }), listIssuesForEnrichment, canPostAsApp: () => true, upsertIssueComment: async () => { throw new Error("must not post"); } }, dryRun: false, includeExisting: true, checkedAt: "2026-08-26T10:00:00.000Z", licenseAdmission: admission }); expect(result.summary.issuesSeen).toBe(0); expect(listIssuesForEnrichment).toHaveBeenCalledTimes(1); expect(prepareBranchWorktree).not.toHaveBeenCalled();
+  });
   it("releases preparation failures and backfills a healthy repository", async () => {
     const repos = ["owner/fail-a", "owner/fail-b", "owner/healthy"], posted: number[] = [];
     prepareBranchWorktree.mockImplementation(async ({ repo }: { repo: string }) => { if (repo.includes("fail")) throw new Error("fixture prepare failure"); return { path: "/tmp/healthy", headSha: "a".repeat(40) }; });

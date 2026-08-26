@@ -875,7 +875,7 @@ export async function runIssueEnrichmentCycle(input: {
     const baselineRepos: IssueEnrichmentRepoScan[] = [];
     const reposToScan: string[] = [];
     const sinceByRepo: Record<string, string> = {};
-    const candidateRepos = input.repo ? [input.repo] : config.allowlist;
+    const candidateRepos = [...new Map((input.repo ? [input.repo] : config.allowlist).map((repo) => [repo.toLowerCase(), repo])).values()];
     const canUseActivationWatermark = input.includeExisting !== true && input.since === undefined;
     for (const repo of candidateRepos) {
       const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
