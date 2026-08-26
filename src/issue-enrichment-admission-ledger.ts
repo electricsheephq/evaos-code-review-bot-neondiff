@@ -12,7 +12,7 @@ type Limits = { globalIssues: number; globalComments: number; repos: Map<string,
 type Usage = { globalIssues: number; globalComments: number; repos: Map<string, { issues: number; comments: number }> };
 
 export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnrichmentAdmissionSnapshot>, decisions: readonly Readonly<IssueEnrichmentAdmissionDecision>[]): IssueEnrichmentAdmissionLedger {
-  if (!Object.isFrozen(snapshot) || !Object.isFrozen(decisions) || decisions.length !== snapshot.candidates.length) fail("invalid_inputs");
+  if (!deepFrozen(snapshot) || !deepFrozen(decisions) || decisions.length !== snapshot.candidates.length) fail("invalid_inputs");
   const limits = readLimits(snapshot.limits), candidates: IssueEnrichmentAdmissionLedgerCandidate[] = [];
   for (let index = 0; index < decisions.length; index += 1) {
     const classification = decisions[index]!, candidate = snapshot.candidates[index]!;
@@ -50,7 +50,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
         if (released.has(key)) { output.push(projected(entry, "deferred", "released")); continue; }
         if (active.has(key)) { output.push(projected(entry, entry.intendedAction, "eligible")); continue; }
         const stored = deferred.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, burstBlocked);
-        if (reason) { output.push(projected(entry, "deferred", reason)); if (!stored && commentReason(reason)) addIssue(usage, entry); continue; }
+        if (reason) { output.push(projected(entry, "deferred", reason)); if (!stored) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } } continue; }
         output.push(projected(entry, entry.intendedAction, "eligible")); addFull(usage, entry);
       }
       return Object.freeze(output);
@@ -75,9 +75,10 @@ function projected(entry: IssueEnrichmentAdmissionLedgerCandidate, outputAction:
 function commentReason(reason: IssueEnrichmentAdmissionLedgerReason): boolean { return reason === "repo_max_comments_per_cycle" || reason === "global_max_comments_per_cycle"; }
 function repoLimits(limits: Limits, repo: string): RepoLimits { return limits.repos.get(repoKey(repo)) ?? fail(`missing_repo_limits:${repo}`); }
 function repoKey(repo: string): string { return repo.toLowerCase(); }
-function readLimits(value: Readonly<Record<string, unknown>>): Limits { const repos = plain(value.repos), parsed = new Map<string, RepoLimits>(); for (const [repo, raw] of Object.entries(repos)) { const limits = plain(raw); parsed.set(repoKey(repo), { issues: count(limits.maxIssuesPerCycle), comments: count(limits.maxCommentsPerCycle), burst: count(limits.maxIssuesPerBurst) }); } return { globalIssues: count(value.globalMaxIssuesPerCycle), globalComments: count(value.globalMaxCommentsPerCycle), repos: parsed }; }
+function readLimits(value: Readonly<Record<string, unknown>>): Limits { const repos = plain(value.repos), parsed = new Map<string, RepoLimits>(); for (const [repo, raw] of Object.entries(repos)) { const limits = plain(raw); parsed.set(repoKey(repo), { issues: positive(limits.maxIssuesPerCycle), comments: count(limits.maxCommentsPerCycle), burst: positive(limits.maxIssuesPerBurst) }); } return { globalIssues: positive(value.globalMaxIssuesPerCycle), globalComments: count(value.globalMaxCommentsPerCycle), repos: parsed }; }
 function plain(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid_limits"); return value as Record<string, unknown>; }
 function count(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 0) fail("invalid_limit"); return value as number; }
+function positive(value: unknown): number { const parsed = count(value); if (parsed === 0) fail("invalid_limit"); return parsed; }
 function deepFrozen(value: unknown, seen = new WeakSet<object>()): boolean {
   if ((!value || typeof value !== "object") && typeof value !== "function") return true;
   try { if (utilTypes.isProxy(value) || !Object.isFrozen(value)) return false; if (seen.has(value)) return true; seen.add(value);
