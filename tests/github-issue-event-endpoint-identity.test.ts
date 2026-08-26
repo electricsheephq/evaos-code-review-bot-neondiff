@@ -72,10 +72,8 @@ describe("exact raw GitHub issue-event endpoint identity", () => {
       accepted[0]
     )).toBe(false);
     const forgedFrozenIdentity = Object.freeze({
-      origin: "https://attacker.example",
-      basePath: "",
-      repositoryPath: "/accepted",
-      canonicalRepositoryPath: "/other"
+      origin: "https://attacker.example", basePath: "",
+      repositoryPath: "/accepted", canonicalRepositoryPath: "/other"
     });
     expect(matchesGitHubIssueEventEndpointIdentity(
       forgedFrozenIdentity,
