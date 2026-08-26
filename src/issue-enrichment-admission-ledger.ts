@@ -15,7 +15,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
   const limits = readLimits(snapshot.limits), candidates: IssueEnrichmentAdmissionLedgerCandidate[] = [];
   for (let index = 0; index < decisions.length; index += 1) {
     const classification = decisions[index]!, candidate = snapshot.candidates[index]!;
-    if (!Object.isFrozen(classification) || !Object.isFrozen(candidate)) fail("invalid_inputs");
+    if (!deepFrozen(classification) || !deepFrozen(candidate)) fail("invalid_inputs");
     if (classification.candidate !== candidate || classification.key !== candidate.key) fail("decision_mismatch");
     if (candidate.action === "skipped") continue;
     const intendedAction = candidate.action === "deferred" ? candidate.intendedAction : candidate.action;
@@ -77,4 +77,10 @@ function repoKey(repo: string): string { return repo.toLowerCase(); }
 function readLimits(value: Readonly<Record<string, unknown>>): Limits { const repos = plain(value.repos), parsed = new Map<string, RepoLimits>(); for (const [repo, raw] of Object.entries(repos)) { const limits = plain(raw); parsed.set(repoKey(repo), { issues: count(limits.maxIssuesPerCycle), comments: count(limits.maxCommentsPerCycle), burst: count(limits.maxIssuesPerBurst) }); } return { globalIssues: count(value.globalMaxIssuesPerCycle), globalComments: count(value.globalMaxCommentsPerCycle), repos: parsed }; }
 function plain(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid_limits"); return value as Record<string, unknown>; }
 function count(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 0) fail("invalid_limit"); return value as number; }
+function deepFrozen(value: unknown, seen = new WeakSet<object>()): boolean {
+  if ((!value || typeof value !== "object") && typeof value !== "function") return true;
+  try { if (!Object.isFrozen(value)) return false; if (seen.has(value)) return true; seen.add(value);
+    return Reflect.ownKeys(value).every((key) => { const descriptor = Object.getOwnPropertyDescriptor(value, key); return Boolean(descriptor && "value" in descriptor && deepFrozen(descriptor.value, seen)); });
+  } catch { return false; }
+}
 function fail(reason: string): never { throw new Error(`issue_enrichment_admission_ledger_${reason}`); }

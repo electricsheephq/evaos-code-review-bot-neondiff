@@ -85,5 +85,9 @@ describe("issue-enrichment admission ledger", () => {
     const candidate = { ...accepted.candidates[0]! }, decision = { ...classifyIssueEnrichmentAdmission(accepted)[0]!, candidate };
     const shallowSnapshot = Object.freeze({ ...accepted, candidates: Object.freeze([candidate]) });
     expect(() => createIssueEnrichmentAdmissionLedger(shallowSnapshot, Object.freeze([decision]))).toThrow("invalid_inputs");
+    const nestedCandidate = Object.freeze({ ...accepted.candidates[0]!, extension: { mutable: true } });
+    const nestedDecision = Object.freeze({ ...classifyIssueEnrichmentAdmission(accepted)[0]!, candidate: nestedCandidate });
+    const nestedSnapshot = Object.freeze({ ...accepted, candidates: Object.freeze([nestedCandidate]) });
+    expect(() => createIssueEnrichmentAdmissionLedger(nestedSnapshot, Object.freeze([nestedDecision]))).toThrow("invalid_inputs");
   });
 });
