@@ -696,7 +696,7 @@ describe("build-enrichment-comment issue CLI", () => {
         "--config",
         configPath,
         "--repo",
-        "owner/issue-repo",
+        "Owner/Issue-Repo",
         "--issue",
         "17",
         "--issue",
