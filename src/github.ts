@@ -47,12 +47,7 @@ export interface BoundedIssueCommentRead {
 }
 
 export interface IssueLabelEvent { id?: number; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null; }
-
-export type BoundedIssueLabelEventRead = IssueLabelEvent[] & {
-  items: IssueLabelEvent[]; pagesRead: number; rawCount: number; uniqueCount: number; duplicateCount: number; lastPage?: number;
-  terminal: "short_page" | "bounded_tail" | "event_history_unbounded"; truncated: boolean; overflow: boolean;
-};
-
+export type BoundedIssueLabelEventRead = IssueLabelEvent[] & { items: IssueLabelEvent[]; pagesRead: number; rawCount: number; uniqueCount: number; duplicateCount: number; lastPage?: number; terminal: "short_page" | "bounded_tail" | "event_history_unbounded"; truncated: boolean; overflow: boolean; };
 function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
   const result = items as BoundedGithubList<T>;
   result.items = items.slice();
@@ -76,10 +71,7 @@ function boundedIssueCommentRead(
 }
 
 function boundedIssueLabelEventRead(items: IssueLabelEvent[], metadata: Omit<BoundedIssueLabelEventRead, keyof IssueLabelEvent[] | "items" | "uniqueCount" | "truncated" | "overflow">): BoundedIssueLabelEventRead {
-  return Object.assign(items, {
-    items: items.slice(), ...metadata, uniqueCount: items.length, truncated: metadata.terminal !== "short_page",
-    overflow: metadata.terminal === "event_history_unbounded"
-  });
+  return Object.assign(items, { items: items.slice(), ...metadata, uniqueCount: items.length, truncated: metadata.terminal !== "short_page", overflow: metadata.terminal === "event_history_unbounded" });
 }
 
 export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
@@ -209,22 +201,16 @@ export class GitHubApiTimeoutError extends Error {
 }
 
 function trustedIssueEventLastPage(link: unknown, endpoint: URL, currentPage: number, expectedLastPage?: number): number | undefined {
-  const parsed = parseIssueEventLink(link);
-  if (parsed.kind === "absent") { if (expectedLastPage !== undefined) throw new Error("missing issue-event tail Link"); return undefined; }
+  const parsed = parseIssueEventLink(link); if (parsed.kind === "absent") { if (expectedLastPage !== undefined) throw new Error("missing issue-event tail Link"); return undefined; }
   const relations = new Map<string, number>();
   for (const member of parsed.members) {
-    const target = new URL(member.target);
-    if (target.origin !== endpoint.origin || target.pathname !== endpoint.pathname || target.username || target.password || target.hash) throw new Error("untrusted issue-event Link target");
+    const target = new URL(member.target); if (target.origin !== endpoint.origin || target.pathname !== endpoint.pathname || target.username || target.password || target.hash) throw new Error("untrusted issue-event Link target");
     const pageValues = target.searchParams.getAll("page"), perPageValues = target.searchParams.getAll("per_page");
-    if (pageValues.length !== 1 || perPageValues.length !== 1 || [...target.searchParams.keys()].length !== 2 || perPageValues[0] !== "100" || !/^[1-9]\d*$/.test(pageValues[0]!)) {
-      throw new Error("untrusted issue-event Link query");
-    }
-    const page = Number(pageValues[0]);
-    if (!Number.isSafeInteger(page)) throw new Error("untrusted issue-event Link page");
+    if (pageValues.length !== 1 || perPageValues.length !== 1 || [...target.searchParams.keys()].length !== 2 || perPageValues[0] !== "100" || !/^[1-9]\d*$/.test(pageValues[0]!)) throw new Error("untrusted issue-event Link query");
+    const page = Number(pageValues[0]); if (!Number.isSafeInteger(page)) throw new Error("untrusted issue-event Link page");
     const value = member.relation.startsWith('"') ? member.relation.slice(1, -1) : member.relation;
     for (const relation of value.split(" ")) {
-      if (!new Set(["first", "prev", "next", "last"]).has(relation) || relations.has(relation)) throw new Error("untrusted issue-event Link relation");
-      relations.set(relation, page);
+      if (!new Set(["first", "prev", "next", "last"]).has(relation) || relations.has(relation)) throw new Error("untrusted issue-event Link relation"); relations.set(relation, page);
     }
   }
   const lastPage = expectedLastPage ?? relations.get("last");

@@ -989,16 +989,17 @@ export async function runIssueEnrichmentCycle(input: {
               const issues = await input.github.listIssuesForEnrichment(repo, options);
               const prepared: GitHubRelatedIssueOrPull[] = [];
               for (const issue of issues) {
-                let events: IssueLabelEvent[] | undefined;
-                try { events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : []; } catch { events = Object.assign([], { terminal: "event_history_unbounded" }); }
-                if (events) eventHistoryByIssue.set(issueKey(repo, issue.number), events);
-                if ((events as Partial<BoundedIssueLabelEventRead> | undefined)?.terminal === "event_history_unbounded") {
+                const override = canonicalIssueEnrichmentRepository(config, repo).override, labels = (issue.labels ?? []).map((label) => (typeof label === "string" ? label : label.name ?? "").trim().toLowerCase());
+                const needsPromotion = labels.includes("upstream-intake") && labels.includes("active-continuation") && (override?.promotionMaintainers?.length ?? 0) > 0;
+                let events: IssueLabelEvent[] | undefined; if (needsPromotion) try { events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : []; } catch { events = Object.assign([], { terminal: "event_history_unbounded" }); }
+                if (events) eventHistoryByIssue.set(issueKey(repo, issue.number), events); const terminal = (events as Partial<BoundedIssueLabelEventRead> | undefined)?.terminal;
+                if (terminal === "event_history_unbounded" || (terminal === "bounded_tail" && !events!.some((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation" && event.actor?.login && event.created_at))) {
                   issuesByKey.set(issueKey(repo, issue.number), issue); eventHistoryOverflow.push({ repo, issue }); continue;
                 }
                 const promotion = await evaluateIssuePromotion({
                   repo,
                   issue,
-                  override: canonicalIssueEnrichmentRepository(config, repo).override,
+                  override,
                   github: input.github, events
                 });
                 prepared.push(promotion.issue);
@@ -1030,10 +1031,8 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
-    for (const { repo, issue } of eventHistoryOverflow) {
-      const repoScan = scanned.repos.find((candidate) => candidate.repo === repo); if (repoScan) repoScan.issuesSeen += 1;
-      scanned.items.push({ repo, issueNumber: issue.number, state: issue.state ?? "unknown", action: "skipped", reason: "event_history_unbounded", ...(issue.html_url ? { url: issue.html_url } : {}) });
-    }
+    for (const { repo, issue } of eventHistoryOverflow) { const repoScan = scanned.repos.find((candidate) => candidate.repo === repo); if (repoScan) repoScan.issuesSeen += 1;
+      scanned.items.push({ repo, issueNumber: issue.number, state: issue.state ?? "unknown", action: "skipped", reason: "event_history_unbounded", ...(issue.html_url ? { url: issue.html_url } : {}) }); }
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
@@ -1074,9 +1073,7 @@ export async function runIssueEnrichmentCycle(input: {
     for (const item of scan.items.filter((candidate) => candidate.action === "skipped")) {
       const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      if (item.reason === "event_history_unbounded" && input.force !== true && existing?.status === "skipped" && existing.reason === item.reason && existing.issueUpdatedAt === issueUpdatedAt) {
-        summary.alreadyProcessed += 1; items.push({ ...item, skippedExisting: true, recordStatus: "skipped" }); continue;
-      }
+      if (item.reason === "event_history_unbounded" && input.force !== true && existing?.status === "skipped" && existing.reason === item.reason && existing.issueUpdatedAt === issueUpdatedAt) { summary.alreadyProcessed += 1; items.push({ ...item, skippedExisting: true, recordStatus: "skipped" }); continue; }
       if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "skipped", reason: item.reason, now: new Date(checkedAt) });
       if (!input.dryRun) summary.skippedRecorded += 1;
       items.push({ ...item, ...(!input.dryRun ? { recordStatus: "skipped" as const } : {}) });
@@ -1092,6 +1089,8 @@ export async function runIssueEnrichmentCycle(input: {
       if (shouldCollectModelEvidence && issue) {
         const repoKey = item.repo.toLowerCase(), wasPrepared = sourceSnapshots.has(repoKey);
         try {
+          let events = eventHistoryByIssue.get(issueKey(item.repo, item.issueNumber)); if (!events && input.github.listIssueLabelEvents) try { events = await input.github.listIssueLabelEvents(item.repo, item.issueNumber); } catch { events = Object.assign([], { terminal: "event_history_unbounded" }); }
+          if ((events as Partial<BoundedIssueLabelEventRead> | undefined)?.terminal === "event_history_unbounded") throw new Error("issue_enrichment_event_history_unbounded"); if (events) eventHistoryByIssue.set(issueKey(item.repo, item.issueNumber), events);
           if (!wasPrepared) {
             const metadata = await input.github.getRepo!(item.repo), defaultBranch = metadata.default_branch?.trim();
             if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${item.repo}`);
@@ -1108,6 +1107,9 @@ export async function runIssueEnrichmentCycle(input: {
           }));
         } catch (error) {
           const message = redactSecrets(error instanceof Error ? error.message : String(error));
+          if (message === "issue_enrichment_event_history_unbounded") {
+            if (!input.dryRun) { input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "skipped", reason: "event_history_unbounded", now: new Date(checkedAt) }); summary.skippedRecorded += 1; }
+            admissionLedger.release(admitted.candidate); settled.add(admitted.candidate.key); items.push({ ...item, action: "skipped", reason: "event_history_unbounded", ...(!input.dryRun ? { recordStatus: "skipped" as const } : {}) }); continue; }
           if (!wasPrepared && !sourceSnapshots.has(repoKey)) admissionLedger.blockRepo(item.repo);
           else admissionLedger.release(admitted.candidate);
           input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error: message, now: new Date(checkedAt) });

@@ -862,7 +862,7 @@ describe("sticky enrichment comments", () => {
         statePath,
         issueEnrichment: {
           enabled: true,
-          postIssueComment: false,
+          postIssueComment: true,
           allowlist: ["Electricsheephq/lcm-x", "electricsheephq/lcm-x"],
           maxIssuesPerCycle: 1,
           maxCommentsPerCycle: 1,
@@ -874,7 +874,8 @@ describe("sticky enrichment comments", () => {
               cooldownMs: 60_000,
               burstWindowMs: 60_000,
               maxIssuesPerBurst: 2,
-              lookbackMs: 60_000
+              lookbackMs: 60_000,
+              promotionMaintainers: [{ login: "Tosko4", validFrom: "2026-08-01T00:00:00Z", validUntil: "2026-09-01T00:00:00Z" }]
             }
           }
         }
@@ -892,14 +893,15 @@ describe("sticky enrichment comments", () => {
               title: "[Upstream PR #461] retrieval: add exhaustive citable recall mode",
               state: "open",
               updated_at: "2026-08-15T20:24:56Z",
-              labels: [{ name: "upstream-intake" }, { name: "upstream-pr" }],
+              labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
               body: "Attributed preservation record only."
-            }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z" }],
-            listIssueLabelEvents: async (_repo, issueNumber) => { if (issueNumber === 127) throw new Error("fixture event-read failure"); return []; },
+            }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }, { number: 129, title: "Failed history sibling", state: "open", updated_at: "2026-08-15T20:26:00Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }],
+            listIssueLabelEvents: async (_repo, issueNumber) => { if (issueNumber === 127) return Object.assign([], { terminal: "bounded_tail" }); if (issueNumber === 129) throw new Error("fixture event-read failure"); return [{ event: "labeled", created_at: "2026-08-15T20:24:00Z", actor: { login: "Tosko4" }, label: { name: "active-continuation" } }]; },
+            getCollaboratorPermission: async () => "maintain",
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
-              throw new Error("preservation records must not post");
+              return { action: "created" as const, comment: { html_url: "https://github.test/comment/128" } };
             }
           },
           dryRun: false,
@@ -912,9 +914,9 @@ describe("sticky enrichment comments", () => {
         });
 
         expect(result.summary).toMatchObject({
-          skippedRecorded: 1,
-          dryRunRecorded: 1,
-          posted: 0,
+          skippedRecorded: 2,
+          dryRunRecorded: 0,
+          posted: 1,
           failed: 0
         });
         expect(result.items[0]).toMatchObject({
@@ -923,8 +925,8 @@ describe("sticky enrichment comments", () => {
           reason: "event_history_unbounded",
           recordStatus: "skipped"
         });
-        expect(analysisCalls).toBe(0);
-        expect(postCalls).toBe(0);
+        expect(analysisCalls).toBe(1);
+        expect(postCalls).toBe(1);
         expect(state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")).toMatchObject({ lastCheckedAt: "2026-08-15T21:00:00.000Z" });
       } finally {
         state.close();
