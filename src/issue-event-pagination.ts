@@ -8,7 +8,7 @@ const PAGE_SIZE = 100, MAX_ITEMS = 200, RELATIONS = new Set(["first", "prev", "n
 
 export async function readIssueEventHistory<T extends { id?: unknown }>(input: { readPage: (page: number) => Promise<IssueEventPage<T>>; apiOrigin: string; issueEventsPath: string }): Promise<IssueEventPaginationReceipt<T>> {
   const newest = new Map<string, T>();
-  let anonymous = 0, trustedRawCount = 0, rawCount = 0, pagesRead = 0, lastPage: number | undefined;
+  let anonymous = 0, trustedRawCount = 0, rawCount = 0, pagesRead = 0, skippedPages = false, lastPage: number | undefined;
   const add = (items: T[]) => {
     trustedRawCount += items.length;
     for (const event of items) {
@@ -27,7 +27,7 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
       items: allItems.slice(-MAX_ITEMS), rawCount, uniqueCount,
       duplicateCount: untrusted ? 0 : trustedRawCount - uniqueCount,
       pagesRead, ...(lastPage === undefined ? {} : { lastPage }), terminal,
-      truncated: untrusted || terminal === "bounded_tail" || uniqueCount > MAX_ITEMS,
+      truncated: untrusted || skippedPages || uniqueCount > MAX_ITEMS,
       overflow: untrusted
     };
   };
@@ -50,18 +50,18 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
     return { page: candidate, relations: relations ?? undefined, present: true, valid: relations !== null };
   };
   const chain = (relations: Relations | undefined, page: number, last: number): boolean => Boolean(
-    relations && relations.last === last && (relations.first === undefined || relations.first === 1) &&
+    relations && (relations.last === last || (page === last && relations.last === undefined)) && (relations.first === undefined || relations.first === 1) &&
     (page === 1
       ? relations.prev === undefined && (last === 1 ? relations.next === undefined : relations.next === 2)
       : relations.prev === page - 1 && (page === last ? relations.next === undefined : relations.next === page + 1))
   );
   const terminalLinks = (relations: Relations | undefined, page: number, last: number): boolean => Boolean(
-    relations && relations.last === last && (relations.first === undefined || relations.first === 1) &&
+    relations && (relations.last === last || (page === last && relations.last === undefined)) && (relations.first === undefined || relations.first === 1) &&
     relations.prev === (page === 1 ? undefined : page - 1) && relations.next === undefined
   );
   const tail = async (existing: number): Promise<IssueEventPaginationReceipt<T>> => {
     if (!lastPage || lastPage < existing) return fail();
-    const start = Math.max(existing + 1, Math.max(2, lastPage - 4));
+    const start = Math.max(existing + 1, Math.max(2, lastPage - 4)); skippedPages = start > existing + 1;
     for (let page = start; page <= lastPage; page += 1) {
       const result = await read(page);
       if (!result.valid || !result.present || !chain(result.relations, page, lastPage)) return fail();
