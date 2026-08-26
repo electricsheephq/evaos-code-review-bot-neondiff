@@ -602,7 +602,7 @@ const LIVE_REPO_THRESHOLD_FIELDS = [
 
 function reposMissingLiveIssueEnrichmentThresholds(config: IssueEnrichmentConfig): string[] {
   return config.allowlist.filter((repo) => {
-    const override = config.repos?.[repo];
+    const override = config.repos?.[repo] ?? Object.entries(config.repos ?? {}).find(([candidate]) => candidate.toLowerCase() === repo.toLowerCase())?.[1];
     if (override?.enabled === false) return false;
     return override === undefined ||
       LIVE_REPO_THRESHOLD_FIELDS.some((field) => override[field] === undefined);
