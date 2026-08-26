@@ -47,7 +47,7 @@ export interface BoundedIssueCommentRead {
 }
 
 export interface IssueLabelEvent { id?: number; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null; }
-export type BoundedIssueLabelEventRead = IssueLabelEvent[] & { items: IssueLabelEvent[]; pagesRead: number; rawCount: number; uniqueCount: number; duplicateCount: number; lastPage?: number; terminal: "short_page" | "bounded_tail" | "event_history_unbounded"; truncated: boolean; overflow: boolean; };
+export type BoundedIssueLabelEventRead = IssueLabelEvent[] & { items: IssueLabelEvent[]; pagesRead: number; rawCount: number; uniqueCount: number; duplicateCount: number; lastPage?: number; terminal: "short_page" | "complete" | "bounded_tail" | "event_history_unbounded"; truncated: boolean; overflow: boolean; };
 function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
   const result = items as BoundedGithubList<T>;
   result.items = items.slice();
@@ -71,7 +71,7 @@ function boundedIssueCommentRead(
 }
 
 function boundedIssueLabelEventRead(items: IssueLabelEvent[], metadata: Omit<BoundedIssueLabelEventRead, keyof IssueLabelEvent[] | "items" | "uniqueCount" | "truncated" | "overflow">): BoundedIssueLabelEventRead {
-  return Object.assign(items, { items: items.slice(), ...metadata, uniqueCount: items.length, truncated: metadata.terminal !== "short_page", overflow: metadata.terminal === "event_history_unbounded" });
+  return Object.assign(items, { items: items.slice(), ...metadata, uniqueCount: items.length, truncated: metadata.terminal === "bounded_tail" || metadata.terminal === "event_history_unbounded", overflow: metadata.terminal === "event_history_unbounded" });
 }
 
 export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
@@ -510,7 +510,7 @@ export class GitHubApi {
       if (event.id !== undefined) seen.add(event.id);
       items.push(event);
     }
-    return boundedIssueLabelEventRead(items, { pagesRead, rawCount: raw.length, duplicateCount, lastPage, terminal: "bounded_tail" });
+    return boundedIssueLabelEventRead(items, { pagesRead, rawCount: raw.length, duplicateCount, lastPage, terminal: lastPage <= 5 ? "complete" : "bounded_tail" });
   }
 
   async getCollaboratorPermission(
