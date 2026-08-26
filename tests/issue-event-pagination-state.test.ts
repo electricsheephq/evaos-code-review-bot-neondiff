@@ -11,6 +11,7 @@ const link = (relation: string, page: number, path = identity.repositoryPath) =>
 const chain = (page: number, last: number) => [page > 1 ? link("prev", page - 1) : "", page < last ? link("next", page + 1) : "", link("last", last)].filter(Boolean).join(
   ", "
 );
+const terminal = (page: number) => [link("first", 1), link("prev", page - 1)].join(", ");
 const run = (pages: Record<number, IssueEventPage<Event>>) => readIssueEventHistory({ endpointIdentity: identity, readPage: async (page) => pages[page] ?? { page, items: [] } });
 
 describe("strict issue-event pagination state", () => {
@@ -37,10 +38,10 @@ describe("strict issue-event pagination state", () => {
   it("handles short pages, exact probes, bounded tails, dedupe, and transport errors", async () => {
     expect((await run({ 1: { page: 1, items: events(1, 3) } })).terminal).toBe("short_page");
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: [] } })).toMatchObject({ pagesRead: 2, rawCount: 100, lastPage: 1, terminal: "short_page" });
-    expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2, 3), link: chain(2, 2) }, 3: { page: 3, items: [] } })).toMatchObject({ rawCount: 103, lastPage: 2, terminal: "short_page" });
+    expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2, 3), link: terminal(2) }, 3: { page: 3, items: [] } })).toMatchObject({ rawCount: 103, lastPage: 2, terminal: "short_page" });
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2) } })).toMatchObject({ terminal: "event_history_unbounded", truncated: true, overflow: true });
     const pages: Record<number, IssueEventPage<Event>> = {};
-    for (let page = 1; page <= 5; page += 1) pages[page] = { page, items: page === 5 ? [{ id: 450, value: "new" }, ...events(page, 49)] : events(page), link: chain(page, 5) };
+    for (let page = 1; page <= 5; page += 1) pages[page] = { page, items: page === 5 ? [{ id: 450, value: "new" }, ...events(page, 49)] : events(page), link: page === 5 ? terminal(page) : chain(page, 5) };
     pages[4].items[50] = { id: 450, value: "old" };
     const bounded = await run(pages);
     expect(bounded).toMatchObject({ rawCount: 450, uniqueCount: 449, duplicateCount: 1, pagesRead: 5, lastPage: 5, terminal: "bounded_tail", truncated: true, overflow: false });

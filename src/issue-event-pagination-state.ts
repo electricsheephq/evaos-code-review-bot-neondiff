@@ -61,8 +61,9 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
       return { page: candidate, present: true, relations: parsed, valid: parsed !== undefined };
     } catch { return { page: candidate, present: true, valid: false }; }
   };
-  const chain = (r: Relations | undefined, page: number, last: number) => Boolean(r && r.last === last && (r.first === undefined || r.first === 1) && (page === 1 ? r.prev === undefined && (last === 1 ? r.next === undefined : r.next === 2) : r.prev === page - 1 && (page === last ? r.next === undefined : r.next === page + 1)));
-  const terminalLinks = (r: Relations | undefined, page: number, last: number) => Boolean(r && r.last === last && (r.first === undefined || r.first === 1) && r.prev === (page === 1 ? undefined : page - 1) && r.next === undefined);
+  const lastMatches = (r: Relations, page: number, last: number) => r.last === last || (page === last && r.last === undefined);
+  const chain = (r: Relations | undefined, page: number, last: number) => Boolean(r && lastMatches(r, page, last) && (r.first === undefined || r.first === 1) && (page === 1 ? r.prev === undefined && (last === 1 ? r.next === undefined : r.next === 2) : r.prev === page - 1 && (page === last ? r.next === undefined : r.next === page + 1)));
+  const terminalLinks = (r: Relations | undefined, page: number, last: number) => Boolean(r && lastMatches(r, page, last) && (r.first === undefined || r.first === 1) && r.prev === (page === 1 ? undefined : page - 1) && r.next === undefined);
   const tail = async (existing: number): Promise<IssueEventPaginationReceipt<T>> => {
     if (!lastPage || lastPage < existing) return fail();
     const start = Math.max(existing + 1, Math.max(2, lastPage - 4)); skipped = start > existing + 1;
