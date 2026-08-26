@@ -100,11 +100,11 @@ describe("issue-enrichment admission ledger", () => {
     const proxiedSnapshot = Object.freeze({ ...accepted, candidates: Object.freeze([proxiedCandidate]) });
     expect(() => createIssueEnrichmentAdmissionLedger(proxiedSnapshot, Object.freeze([proxiedDecision]))).toThrow("invalid_inputs");
   });
-  it("rejects proxied limit graphs and zero issue or burst caps", () => {
-    const accepted = snapshotIssueEnrichmentAdmission({ allowlist: ["a/repo"], checkedAt, items: [item("a/repo", 1)], limits: limits() }), decisions = classifyIssueEnrichmentAdmission(accepted);
-    expect(() => createIssueEnrichmentAdmissionLedger(Object.freeze({ ...accepted, limits: new Proxy(accepted.limits, {}) }), decisions)).toThrow("invalid_inputs");
+  it("rejects mutable built-ins, proxied limits, and invalid caps", () => {
+    const accepted = snapshotIssueEnrichmentAdmission({ allowlist: ["a/repo"], checkedAt, items: [item("a/repo", 1)], limits: limits() }), decisions = classifyIssueEnrichmentAdmission(accepted), mutable = Object.freeze(new Map([["x", 1]])), candidate = Object.freeze(Object.assign(Object.create(null), { ...accepted.candidates[0], metadata: mutable })), mutableSnapshot = Object.freeze({ ...accepted, candidates: Object.freeze([candidate]) }), mutableDecision = Object.freeze(Object.assign(Object.create(null), { ...decisions[0], candidate }));
+    expect(() => createIssueEnrichmentAdmissionLedger(mutableSnapshot, Object.freeze([mutableDecision]))).toThrow("invalid_inputs"); expect(() => createIssueEnrichmentAdmissionLedger(Object.freeze({ ...accepted, limits: new Proxy(accepted.limits, {}) }), decisions)).toThrow("invalid_inputs");
     let touched = false; const inheritedLimits = Object.freeze(Object.assign(Object.create({ get repos() { touched = true; return accepted.limits.repos; } }), { globalMaxIssuesPerCycle: 3, globalMaxCommentsPerCycle: 2 }));
-    expect(() => createIssueEnrichmentAdmissionLedger(Object.freeze({ ...accepted, limits: inheritedLimits }), decisions)).toThrow("invalid_limit"); expect(touched).toBe(false);
+    expect(() => createIssueEnrichmentAdmissionLedger(Object.freeze({ ...accepted, limits: inheritedLimits }), decisions)).toThrow("invalid_inputs"); expect(touched).toBe(false);
     for (const value of [limits({ globalMaxIssuesPerCycle: 0 }), limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 2, maxCommentsPerCycle: 1, maxIssuesPerBurst: 0 } } }), limits({ globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 2 }), limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 1, maxCommentsPerCycle: 2, maxIssuesPerBurst: 3 } } })]) {
       const snapshot = snapshotIssueEnrichmentAdmission({ allowlist: ["a/repo"], checkedAt, items: [item("a/repo", 1)], limits: value }); expect(() => createIssueEnrichmentAdmissionLedger(snapshot, classifyIssueEnrichmentAdmission(snapshot))).toThrow("invalid_limit");
     }

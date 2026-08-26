@@ -81,7 +81,7 @@ function count(value: unknown): number { if (!Number.isSafeInteger(value) || (va
 function positive(value: unknown): number { const parsed = count(value); if (parsed === 0) fail("invalid_limit"); return parsed; }
 function deepFrozen(value: unknown, seen = new WeakSet<object>()): boolean {
   if ((!value || typeof value !== "object") && typeof value !== "function") return true;
-  try { if (utilTypes.isProxy(value) || !Object.isFrozen(value)) return false; if (seen.has(value)) return true; seen.add(value);
+  try { if (utilTypes.isProxy(value) || !Object.isFrozen(value)) return false; const prototype = Object.getPrototypeOf(value); if (Array.isArray(value) ? prototype !== Array.prototype : ![Object.prototype, null].includes(prototype)) return false; if (seen.has(value)) return true; seen.add(value);
     return Reflect.ownKeys(value).every((key) => { const descriptor = Object.getOwnPropertyDescriptor(value, key); return Boolean(descriptor && "value" in descriptor && deepFrozen(descriptor.value, seen)); });
   } catch { return false; }
 }
