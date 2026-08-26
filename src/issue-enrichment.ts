@@ -1015,7 +1015,7 @@ export async function runIssueEnrichmentCycle(input: {
                 const promotion = await evaluateIssuePromotion({
                   repo,
                   issue,
-                  override: config.repos?.[repo],
+                  override: canonicalIssueEnrichmentRepository(config, repo).override,
                   github: input.github
                 });
                 prepared.push(promotion.issue);

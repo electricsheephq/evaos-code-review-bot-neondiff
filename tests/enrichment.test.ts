@@ -941,7 +941,7 @@ describe("sticky enrichment comments", () => {
         issueEnrichment: {
           enabled: true,
           postIssueComment: true,
-          allowlist: ["electricsheephq/lcm-x"],
+          allowlist: ["Electricsheephq/lcm-x", "electricsheephq/lcm-x"],
           maxIssuesPerCycle: 1,
           maxCommentsPerCycle: 1,
           processExistingOpenIssuesOnActivation: true,
