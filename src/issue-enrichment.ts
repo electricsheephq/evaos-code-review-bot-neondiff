@@ -1346,8 +1346,8 @@ export async function runIssueEnrichmentCycle(input: {
         if (!input.dryRun) summary.failed += 1; items.push({ ...item, ...(!input.dryRun ? { recordStatus: "failed" as const, error } : {}) }); continue;
       }
       const policy = resolveIssueEnrichmentRepoPolicy(config, item.repo), deferredReason = decision.reason === "held" ? "persisted_defer_active" : decision.reason;
-      const deferredUntil = decision.candidate.record?.nextEligibleAt ?? decision.candidate.nextEligibleAt ??
-        (decision.reason.startsWith("global_") ? globalNextEligibleAt({ checkedAt, config, throttle: policy.throttle }) : nextEligibleAt({ checkedAt, throttle: policy.throttle }));
+      const deferredUntil = decision.reason === "held" ? decision.candidate.record?.nextEligibleAt ?? decision.candidate.nextEligibleAt ?? nextEligibleAt({ checkedAt, throttle: policy.throttle }) :
+        decision.reason.startsWith("global_") ? globalNextEligibleAt({ checkedAt, config, throttle: policy.throttle }) : nextEligibleAt({ checkedAt, throttle: policy.throttle });
       const deferredItem = { ...item, action: "deferred" as const, intendedAction: decision.intendedAction, reason: deferredReason as IssueEnrichmentScanReason, nextEligibleAt: deferredUntil };
       if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "deferred", reason: deferredReason, nextEligibleAt: deferredUntil, now: new Date(checkedAt) });
       if (!input.dryRun) summary.deferredRecorded += 1; items.push({ ...deferredItem, ...(!input.dryRun ? { recordStatus: "deferred" as const } : {}) });

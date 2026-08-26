@@ -23,17 +23,17 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
     if (intendedAction !== "would_enrich" && intendedAction !== "would_comment") fail("missing_intent");
     candidates.push(Object.freeze(Object.assign(Object.create(null), { candidate, classification, intendedAction })));
   }
-  const frozenCandidates = Object.freeze(candidates), active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>();
+  const frozenCandidates = Object.freeze(candidates), dispatchCandidates = Object.freeze([...frozenCandidates].sort((a, b) => Number(b.classification.state === "source_dependent") - Number(a.classification.state === "source_dependent"))), active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>();
   const deferred = new Map<string, IssueEnrichmentAdmissionLedgerReason>(), issueOnly = new Set<string>(), eligible = (entry: IssueEnrichmentAdmissionLedgerCandidate) => entry.classification.state === "pending" || entry.classification.state === "source_dependent";
   const eligibleByRepo = new Map<string, number>();
-  for (const entry of frozenCandidates) if (eligible(entry)) eligibleByRepo.set(repoKey(entry.candidate.repo), (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) + 1);
-  const burstBlocked = new Set(frozenCandidates.filter((entry) => eligible(entry) && (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) > repoLimits(limits, entry.candidate.repo).burst).map((entry) => entry.candidate.key));
+  for (const entry of frozenCandidates) if (eligible(entry) && entry.classification.state !== "source_dependent") eligibleByRepo.set(repoKey(entry.candidate.repo), (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) + 1);
+  const burstBlocked = new Set(frozenCandidates.filter((entry) => eligible(entry) && entry.classification.state !== "source_dependent" && (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) > repoLimits(limits, entry.candidate.repo).burst).map((entry) => entry.candidate.key));
 
   const ledger: IssueEnrichmentAdmissionLedger = {
     candidates: Object.freeze(frozenCandidates.map((entry) => entry.candidate)),
     next() {
       const usage = currentUsage(frozenCandidates, active, issueOnly);
-      for (const entry of frozenCandidates) {
+      for (const entry of dispatchCandidates) {
         const key = entry.candidate.key;
         if (!eligible(entry) || active.has(key) || released.has(key) || deferred.has(key)) continue;
         const reason = capReason(entry, usage, limits, blocked, burstBlocked);
