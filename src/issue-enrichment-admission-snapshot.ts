@@ -13,7 +13,7 @@ const ACTIONS = new Set<IssueEnrichmentAdmissionAction>(["would_enrich", "would_
 
 export function snapshotIssueEnrichmentAdmission(input: IssueEnrichmentAdmissionInput): IssueEnrichmentAdmissionSnapshot {
   const raw = clonePlain(input, "input") as Record<string, any>;
-  if (!Array.isArray(raw.allowlist) || !Array.isArray(raw.items) || (raw.records !== undefined && !Array.isArray(raw.records)) ||
+  if (!Array.isArray(raw.allowlist) || !Array.isArray(raw.items) || (Object.hasOwn(raw, "records") && !Array.isArray(raw.records)) ||
       !raw.limits || typeof raw.limits !== "object" || Array.isArray(raw.limits)) fail("input_shape");
   const checkedAt = timestamp(raw.checkedAt) ?? fail("invalid_checkedAt");
   const allowlist = raw.allowlist.map((repo: unknown) => text(repo, "allowlist"));
@@ -52,6 +52,7 @@ export const buildIssueEnrichmentAdmissionSnapshot = snapshotIssueEnrichmentAdmi
 
 function normalizeItem(value: unknown, index: number): IssueEnrichmentAdmissionScanItem {
   const item = plainRecord(value, `items[${index}]`);
+  for (const field of ["record", "status", "bodyHash", "analysisInputHash", "createdAt", "updatedAt", "deadlineAt"]) if (Object.hasOwn(item, field)) fail(`items[${index}].${field}`);
   const repo = text(item.repo, `items[${index}].repo`);
   const issueNumber = positiveInteger(item.issueNumber, `items[${index}].issueNumber`);
   const state = text(item.state, `items[${index}].state`);
@@ -114,7 +115,7 @@ function clonePlain(value: unknown, label: string, active = new WeakSet<object>(
     }
   } else {
     copy = {};
-    for (const [name, descriptor] of Object.entries(descriptors)) {
+    for (const name of Reflect.ownKeys(descriptors)) { if (typeof name !== "string") fail(`non_plain:${label}`); const descriptor = descriptors[name]!;
       if (!descriptor.enumerable) fail(`non_plain:${label}.${name}`);
       Object.defineProperty(copy, name, { value: clonePlain(descriptor.value, `${label}.${name}`, active), enumerable: true, writable: true, configurable: true });
     }
