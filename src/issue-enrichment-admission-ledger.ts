@@ -55,7 +55,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
       return Object.freeze(output);
     },
     release(candidate) { if (active.delete(candidate.key)) released.add(candidate.key); },
-    blockRepo(repo) { const normalized = repoKey(repo); blocked.add(normalized); for (const entry of frozenCandidates) if (repoKey(entry.candidate.repo) === normalized) { active.delete(entry.candidate.key); deferred.delete(entry.candidate.key); issueOnly.delete(entry.candidate.key); } }
+    blockRepo(repo) { const normalized = repoKey(repo); blocked.add(normalized); deferred.clear(); issueOnly.clear(); for (const entry of frozenCandidates) if (repoKey(entry.candidate.repo) === normalized) active.delete(entry.candidate.key); }
   };
   return Object.freeze(ledger);
 }

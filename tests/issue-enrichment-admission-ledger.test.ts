@@ -49,6 +49,13 @@ describe("issue-enrichment admission ledger", () => {
     expect(admission.snapshot().find(({ candidate }) => candidate.key === "b/repo#1")?.reason).toBe("global_max_issues_per_cycle");
   });
 
+  it("reconsiders healthy cap denials after their blocking repository is removed", () => {
+    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1 }) });
+    expect(admission.next()?.candidate.key).toBe("a/repo#1"); expect(admission.next()).toBeUndefined();
+    admission.blockRepo("a/repo");
+    expect(admission.next()?.candidate.key).toBe("b/repo#1");
+  });
+
   it("applies atomic burst limits and multiple blocked repositories deterministically", () => {
     const burst = ledger([item("a/repo", 1), item("a/repo", 2), item("a/repo", 3)], { limits: limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, maxIssuesPerBurst: 2 } } }) });
     expect(burst.next()).toBeUndefined(); expect(burst.snapshot().every(({ reason }) => reason === "burst_threshold_exceeded")).toBe(true);
