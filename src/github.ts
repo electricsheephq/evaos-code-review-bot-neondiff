@@ -50,8 +50,7 @@ export interface IssueLabelEvent { id?: number; event?: string; created_at?: str
 
 export type BoundedIssueLabelEventRead = IssueLabelEvent[] & {
   items: IssueLabelEvent[]; pagesRead: number; rawCount: number; uniqueCount: number; duplicateCount: number; lastPage?: number;
-  terminal: "short_page" | "bounded_tail" | "event_history_unbounded";
-  truncated: boolean; overflow: boolean;
+  terminal: "short_page" | "bounded_tail" | "event_history_unbounded"; truncated: boolean; overflow: boolean;
 };
 
 function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
@@ -491,14 +490,15 @@ export class GitHubApi {
       return { items, link };
     };
     const first = await readPage(1);
-    if (first.items.length < 100) {
-      return boundedIssueLabelEventRead(first.items, { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, lastPage: 1, terminal: "short_page" });
-    }
     let lastPage: number | undefined;
     try {
       lastPage = trustedIssueEventLastPage(first.link, endpoint, 1);
     } catch {
       return boundedIssueLabelEventRead([], { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, terminal: "event_history_unbounded" });
+    }
+    if (first.items.length < 100) {
+      if (lastPage !== undefined && lastPage !== 1) return boundedIssueLabelEventRead([], { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, lastPage, terminal: "event_history_unbounded" });
+      return boundedIssueLabelEventRead(first.items, { pagesRead: 1, rawCount: first.items.length, duplicateCount: 0, lastPage: 1, terminal: "short_page" });
     }
     if (!lastPage) {
       const probe = await readPage(2);

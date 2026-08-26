@@ -978,6 +978,11 @@ describe("GitHub App read authentication", () => {
     const overflow = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 970);
     expect(pagesRequested).toEqual([1, 2]);
     expect(overflow).toMatchObject({ pagesRead: 2, terminal: "event_history_unbounded", truncated: true, overflow: true });
+
+    pagesRequested.length = 0;
+    globalThis.fetch = vi.fn(async () => { pagesRequested.push(1); return jsonResponse(Array.from({ length: 50 }, (_unused, id) => ({ id })), 200, "", { Link: '<https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=2>; rel="next", <https://api.github.com/repos/owner/repo/issues/970/events?per_page=100&page=2>; rel="last"' }); }) as typeof fetch;
+    const contradiction = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 970);
+    expect(contradiction).toMatchObject({ pagesRead: 1, lastPage: 2, terminal: "event_history_unbounded", overflow: true });
   });
 });
 
