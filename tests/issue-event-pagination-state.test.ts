@@ -46,6 +46,9 @@ describe("strict issue-event pagination state", () => {
     const bounded = await run(pages);
     expect(bounded).toMatchObject({ rawCount: 450, uniqueCount: 449, duplicateCount: 1, pagesRead: 5, lastPage: 5, terminal: "bounded_tail", truncated: true, overflow: false });
     expect(bounded.items).toHaveLength(200); expect(bounded.items.find((event) => event.id === 450)?.value).toBe("new");
+    const duplicateTail: Record<number, IssueEventPage<Event>> = {};
+    for (let page = 1; page <= 8; page += 1) duplicateTail[page] = { page, items: page === 1 ? events(1) : events(8), link: page === 8 ? terminal(page) : chain(page, 8) };
+    expect(await run(duplicateTail)).toMatchObject({ items: [], terminal: "event_history_unbounded", overflow: true });
     await expect(readIssueEventHistory({ endpointIdentity: identity, readPage: async (page) => { if (page === 4) throw new Error("transport"); return { page, items: events(page), link: chain(page, 8) }; } })).rejects.toThrow("transport");
   });
 

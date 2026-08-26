@@ -16,14 +16,15 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
   endpointIdentity: Readonly<GitHubIssueEventEndpointIdentity>;
   readPage: (page: number) => Promise<IssueEventPage<T>>;
 }): Promise<IssueEventPaginationReceipt<T>> {
-  const newest = new Map<string, T>();
+  const newest = new Map<string, T>(), tailKeys = new Set<string>();
   let anonymous = 0, pagesRead = 0, rawCount = 0, trustedRawCount = 0, skipped = false, lastPage: number | undefined;
-  const add = (items: T[]) => {
+  const add = (items: T[], tail = false) => {
     trustedRawCount += items.length;
     for (const item of items) {
       const value = item?.id;
       const known = (typeof value === "number" && Number.isSafeInteger(value)) || (typeof value === "string" && value.trim() !== "");
       const key = known ? `id:${String(value).trim()}` : `anonymous:${anonymous++}`;
+      if (tail) tailKeys.add(key);
       newest.delete(key); newest.set(key, item);
     }
   };
@@ -72,8 +73,9 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
       if (!result.valid || !result.present || !chain(result.relations, page, lastPage)) return fail();
       const count = result.page.items.length;
       if (page < lastPage ? count !== SIZE : count < 1 || count > SIZE) return fail();
-      add(result.page.items);
+      add(result.page.items, true);
     }
+    if (skipped && tailKeys.size < MAX) return fail();
     return finish("bounded_tail");
   };
   const first = await read(1);
