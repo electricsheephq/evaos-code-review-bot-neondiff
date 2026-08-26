@@ -895,7 +895,7 @@ describe("sticky enrichment comments", () => {
               labels: [{ name: "upstream-intake" }, { name: "upstream-pr" }],
               body: "Attributed preservation record only."
             }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z" }],
-            listIssueLabelEvents: async (_repo, issueNumber) => issueNumber === 127 ? Object.assign([], { items: [], pagesRead: 2, rawCount: 200, uniqueCount: 0, duplicateCount: 0, terminal: "event_history_unbounded", truncated: true, overflow: true }) : [],
+            listIssueLabelEvents: async (_repo, issueNumber) => { if (issueNumber === 127) throw new Error("fixture event-read failure"); return []; },
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;

@@ -990,7 +990,7 @@ export async function runIssueEnrichmentCycle(input: {
               const prepared: GitHubRelatedIssueOrPull[] = [];
               for (const issue of issues) {
                 let events: IssueLabelEvent[] | undefined;
-                try { events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : []; } catch {}
+                try { events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : []; } catch { events = Object.assign([], { terminal: "event_history_unbounded" }); }
                 if (events) eventHistoryByIssue.set(issueKey(repo, issue.number), events);
                 if ((events as Partial<BoundedIssueLabelEventRead> | undefined)?.terminal === "event_history_unbounded") {
                   issuesByKey.set(issueKey(repo, issue.number), issue); eventHistoryOverflow.push({ repo, issue }); continue;
