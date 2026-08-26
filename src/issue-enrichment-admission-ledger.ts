@@ -2,10 +2,10 @@ import { types as utilTypes } from "node:util";
 import type { IssueEnrichmentAdmissionAction, IssueEnrichmentAdmissionCandidate, IssueEnrichmentAdmissionSnapshot } from "./issue-enrichment-admission-snapshot.js";
 import { classifyIssueEnrichmentAdmission, type IssueEnrichmentAdmissionDecision } from "./issue-enrichment-admission-decision.js";
 
-export type IssueEnrichmentAdmissionLedgerReason = "eligible" | "held" | "already_recorded" | "released" | "repository_blocked" | "burst_threshold_exceeded" | "repo_max_issues_per_cycle" | "repo_max_comments_per_cycle" | "global_max_issues_per_cycle" | "global_max_comments_per_cycle";
+export type IssueEnrichmentAdmissionLedgerReason = "source_probe" | "eligible" | "held" | "already_recorded" | "released" | "repository_blocked" | "burst_threshold_exceeded" | "repo_max_issues_per_cycle" | "repo_max_comments_per_cycle" | "global_max_issues_per_cycle" | "global_max_comments_per_cycle";
 export interface IssueEnrichmentAdmissionLedgerCandidate { candidate: Readonly<IssueEnrichmentAdmissionCandidate>; classification: Readonly<IssueEnrichmentAdmissionDecision>; intendedAction: IssueEnrichmentAdmissionAction; }
 export interface IssueEnrichmentAdmissionLedgerDecision extends IssueEnrichmentAdmissionLedgerCandidate { outputAction: IssueEnrichmentAdmissionAction | "deferred"; reason: IssueEnrichmentAdmissionLedgerReason; }
-export interface IssueEnrichmentAdmissionLedger { candidates: readonly Readonly<IssueEnrichmentAdmissionCandidate>[]; next(): Readonly<IssueEnrichmentAdmissionLedgerDecision> | undefined; snapshot(): readonly Readonly<IssueEnrichmentAdmissionLedgerDecision>[]; release(candidate: Readonly<IssueEnrichmentAdmissionCandidate>): void; blockRepo(repo: string): void; }
+export interface IssueEnrichmentAdmissionLedger { candidates: readonly Readonly<IssueEnrichmentAdmissionCandidate>[]; next(): Readonly<IssueEnrichmentAdmissionLedgerDecision> | undefined; snapshot(): readonly Readonly<IssueEnrichmentAdmissionLedgerDecision>[]; release(candidate: Readonly<IssueEnrichmentAdmissionCandidate>): void; requeue(candidate: Readonly<IssueEnrichmentAdmissionCandidate>): void; blockRepo(repo: string): void; }
 
 type RepoLimits = { issues: number; comments: number; burst: number };
 type Limits = { globalIssues: number; globalComments: number; repos: Map<string, RepoLimits> };
@@ -23,20 +23,20 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
     if (intendedAction !== "would_enrich" && intendedAction !== "would_comment") fail("missing_intent");
     candidates.push(Object.freeze(Object.assign(Object.create(null), { candidate, classification, intendedAction })));
   }
-  const frozenCandidates = Object.freeze(candidates), active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>();
-  const deferred = new Map<string, IssueEnrichmentAdmissionLedgerReason>(), issueOnly = new Set<string>(), eligible = (entry: IssueEnrichmentAdmissionLedgerCandidate) => entry.classification.state === "pending" || entry.classification.state === "source_dependent";
+  const frozenCandidates = Object.freeze(candidates), active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>(), probed = new Set<string>(), requeued = new Set<string>();
+  const deferred = new Map<string, IssueEnrichmentAdmissionLedgerReason>(), issueOnly = new Set<string>(), eligible = (entry: IssueEnrichmentAdmissionLedgerCandidate) => entry.classification.state === "pending" || requeued.has(entry.candidate.key);
   const eligibleByRepo = new Map<string, number>();
   for (const entry of frozenCandidates) if (eligible(entry)) eligibleByRepo.set(repoKey(entry.candidate.repo), (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) + 1);
-  const burstBlocked = new Set(frozenCandidates.filter((entry) => eligible(entry) && (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) > repoLimits(limits, entry.candidate.repo).burst).map((entry) => entry.candidate.key));
 
   const ledger: IssueEnrichmentAdmissionLedger = {
     candidates: Object.freeze(frozenCandidates.map((entry) => entry.candidate)),
     next() {
+      for (const entry of frozenCandidates) if (entry.classification.state === "source_dependent" && !probed.has(entry.candidate.key) && !released.has(entry.candidate.key) && !blocked.has(repoKey(entry.candidate.repo))) { probed.add(entry.candidate.key); return projected(entry, entry.intendedAction, "source_probe"); }
       const usage = currentUsage(frozenCandidates, active, issueOnly);
       for (const entry of frozenCandidates) {
         const key = entry.candidate.key;
         if (!eligible(entry) || active.has(key) || released.has(key) || deferred.has(key)) continue;
-        const reason = capReason(entry, usage, limits, blocked, burstBlocked);
+        const reason = capReason(entry, usage, limits, blocked, eligibleByRepo);
         if (reason) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } continue; }
         active.add(key); addFull(usage, entry); return projected(entry, entry.intendedAction, "eligible");
       }
@@ -49,21 +49,22 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
         if (entry.classification.state === "already_recorded") { output.push(projected(entry, "deferred", "already_recorded")); continue; }
         if (released.has(key)) { output.push(projected(entry, "deferred", "released")); continue; }
         if (active.has(key)) { output.push(projected(entry, entry.intendedAction, "eligible")); continue; }
-        const stored = deferred.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, burstBlocked);
+        const stored = deferred.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, eligibleByRepo);
         if (reason) { output.push(projected(entry, "deferred", reason)); if (!stored) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } } continue; }
         output.push(projected(entry, entry.intendedAction, "eligible")); addFull(usage, entry);
       }
       return Object.freeze(output);
     },
-    release(candidate) { if (active.delete(candidate.key)) released.add(candidate.key); },
+    release(candidate) { active.delete(candidate.key); released.add(candidate.key); },
+    requeue(candidate) { if (!requeued.has(candidate.key)) { requeued.add(candidate.key); const repo = repoKey(candidate.repo); eligibleByRepo.set(repo, (eligibleByRepo.get(repo) ?? 0) + 1); } },
     blockRepo(repo) { const normalized = repoKey(repo); if (!frozenCandidates.some((entry) => repoKey(entry.candidate.repo) === normalized)) return; blocked.add(normalized); deferred.clear(); issueOnly.clear(); for (const entry of frozenCandidates) if (repoKey(entry.candidate.repo) === normalized) active.delete(entry.candidate.key); }
   };
   return Object.freeze(ledger);
 }
 
-function capReason(entry: IssueEnrichmentAdmissionLedgerCandidate, usage: Usage, limits: Limits, blocked: Set<string>, burstBlocked: Set<string>): IssueEnrichmentAdmissionLedgerReason | undefined {
-  const repo = repoKey(entry.candidate.repo); if (blocked.has(repo)) return "repository_blocked"; if (burstBlocked.has(entry.candidate.key)) return "burst_threshold_exceeded";
-  const used = usage.repos.get(repo) ?? { issues: 0, comments: 0 }, cap = repoLimits(limits, repo);
+function capReason(entry: IssueEnrichmentAdmissionLedgerCandidate, usage: Usage, limits: Limits, blocked: Set<string>, eligibleByRepo: Map<string, number>): IssueEnrichmentAdmissionLedgerReason | undefined {
+  const repo = repoKey(entry.candidate.repo), cap = repoLimits(limits, repo); if (blocked.has(repo)) return "repository_blocked"; if ((eligibleByRepo.get(repo) ?? 0) > cap.burst) return "burst_threshold_exceeded";
+  const used = usage.repos.get(repo) ?? { issues: 0, comments: 0 };
   if (used.issues >= cap.issues) return "repo_max_issues_per_cycle"; if (usage.globalIssues >= limits.globalIssues) return "global_max_issues_per_cycle";
   if (entry.intendedAction === "would_comment" && used.comments >= cap.comments) return "repo_max_comments_per_cycle";
   if (entry.intendedAction === "would_comment" && usage.globalComments >= limits.globalComments) return "global_max_comments_per_cycle";
