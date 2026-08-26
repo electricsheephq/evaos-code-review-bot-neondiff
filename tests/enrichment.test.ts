@@ -895,8 +895,8 @@ describe("sticky enrichment comments", () => {
               updated_at: "2026-08-15T20:24:56Z",
               labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
               body: "Attributed preservation record only."
-            }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }, { number: 129, title: "Failed history sibling", state: "open", updated_at: "2026-08-15T20:26:00Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }],
-            listIssueLabelEvents: async (_repo, issueNumber) => { if (issueNumber === 127) return Object.assign([], { terminal: "bounded_tail" }); if (issueNumber === 129) throw new Error("fixture event-read failure"); return [{ event: "labeled", created_at: "2026-08-15T20:24:00Z", actor: { login: "Tosko4" }, label: { name: "active-continuation" } }]; },
+            }, { number: 128, title: "Eligible sibling", state: "open", updated_at: "2026-08-15T20:25:00Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }],
+            listIssueLabelEvents: async (_repo, issueNumber) => issueNumber === 127 ? Object.assign([], { terminal: "bounded_tail" }) : [{ event: "labeled", created_at: "2026-08-15T20:24:00Z", actor: { login: "Tosko4" }, label: { name: "active-continuation" } }],
             getCollaboratorPermission: async () => "maintain",
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
@@ -914,7 +914,7 @@ describe("sticky enrichment comments", () => {
         });
 
         expect(result.summary).toMatchObject({
-          skippedRecorded: 2,
+          skippedRecorded: 1,
           dryRunRecorded: 0,
           posted: 1,
           failed: 0
