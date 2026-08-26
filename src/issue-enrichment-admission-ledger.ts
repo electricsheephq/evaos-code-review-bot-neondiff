@@ -15,6 +15,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
   const limits = readLimits(snapshot.limits), candidates: IssueEnrichmentAdmissionLedgerCandidate[] = [];
   for (let index = 0; index < decisions.length; index += 1) {
     const classification = decisions[index]!, candidate = snapshot.candidates[index]!;
+    if (!Object.isFrozen(classification) || !Object.isFrozen(candidate)) fail("invalid_inputs");
     if (classification.candidate !== candidate || classification.key !== candidate.key) fail("decision_mismatch");
     if (candidate.action === "skipped") continue;
     const intendedAction = candidate.action === "deferred" ? candidate.intendedAction : candidate.action;
@@ -22,7 +23,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
     candidates.push(Object.freeze(Object.assign(Object.create(null), { candidate, classification, intendedAction })));
   }
   const frozenCandidates = Object.freeze(candidates), active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>();
-  const issueOnly = new Map<string, IssueEnrichmentAdmissionLedgerReason>(), eligible = (entry: IssueEnrichmentAdmissionLedgerCandidate) => entry.classification.state === "pending" || entry.classification.state === "source_dependent";
+  const deferred = new Map<string, IssueEnrichmentAdmissionLedgerReason>(), issueOnly = new Set<string>(), eligible = (entry: IssueEnrichmentAdmissionLedgerCandidate) => entry.classification.state === "pending" || entry.classification.state === "source_dependent";
   const eligibleByRepo = new Map<string, number>();
   for (const entry of frozenCandidates) if (eligible(entry)) eligibleByRepo.set(repoKey(entry.candidate.repo), (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) + 1);
   const burstBlocked = new Set(frozenCandidates.filter((entry) => eligible(entry) && (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) > repoLimits(limits, entry.candidate.repo).burst).map((entry) => entry.candidate.key));
@@ -33,9 +34,9 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
       const usage = currentUsage(frozenCandidates, active, issueOnly);
       for (const entry of frozenCandidates) {
         const key = entry.candidate.key;
-        if (!eligible(entry) || active.has(key) || released.has(key) || issueOnly.has(key)) continue;
+        if (!eligible(entry) || active.has(key) || released.has(key) || deferred.has(key)) continue;
         const reason = capReason(entry, usage, limits, blocked, burstBlocked);
-        if (reason) { if (commentReason(reason)) { issueOnly.set(key, reason); addIssue(usage, entry); } continue; }
+        if (reason) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } continue; }
         active.add(key); addFull(usage, entry); return projected(entry, entry.intendedAction, "eligible");
       }
     },
@@ -47,14 +48,14 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
         if (entry.classification.state === "already_recorded") { output.push(projected(entry, "deferred", "already_recorded")); continue; }
         if (released.has(key)) { output.push(projected(entry, "deferred", "released")); continue; }
         if (active.has(key)) { output.push(projected(entry, entry.intendedAction, "eligible")); continue; }
-        const stored = issueOnly.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, burstBlocked);
+        const stored = deferred.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, burstBlocked);
         if (reason) { output.push(projected(entry, "deferred", reason)); if (!stored && commentReason(reason)) addIssue(usage, entry); continue; }
         output.push(projected(entry, entry.intendedAction, "eligible")); addFull(usage, entry);
       }
       return Object.freeze(output);
     },
     release(candidate) { if (active.delete(candidate.key)) released.add(candidate.key); },
-    blockRepo(repo) { const normalized = repoKey(repo); blocked.add(normalized); for (const entry of frozenCandidates) if (repoKey(entry.candidate.repo) === normalized) { active.delete(entry.candidate.key); issueOnly.delete(entry.candidate.key); } }
+    blockRepo(repo) { const normalized = repoKey(repo); blocked.add(normalized); for (const entry of frozenCandidates) if (repoKey(entry.candidate.repo) === normalized) { active.delete(entry.candidate.key); deferred.delete(entry.candidate.key); issueOnly.delete(entry.candidate.key); } }
   };
   return Object.freeze(ledger);
 }
@@ -66,7 +67,7 @@ function capReason(entry: IssueEnrichmentAdmissionLedgerCandidate, usage: Usage,
   if (entry.intendedAction === "would_comment" && used.comments >= cap.comments) return "repo_max_comments_per_cycle";
   if (entry.intendedAction === "would_comment" && usage.globalComments >= limits.globalComments) return "global_max_comments_per_cycle";
 }
-function currentUsage(entries: readonly IssueEnrichmentAdmissionLedgerCandidate[], active: Set<string>, issueOnly: Map<string, IssueEnrichmentAdmissionLedgerReason>): Usage { const usage: Usage = { globalIssues: 0, globalComments: 0, repos: new Map() }; for (const entry of entries) { if (active.has(entry.candidate.key)) addFull(usage, entry); else if (issueOnly.has(entry.candidate.key)) addIssue(usage, entry); } return usage; }
+function currentUsage(entries: readonly IssueEnrichmentAdmissionLedgerCandidate[], active: Set<string>, issueOnly: Set<string>): Usage { const usage: Usage = { globalIssues: 0, globalComments: 0, repos: new Map() }; for (const entry of entries) { if (active.has(entry.candidate.key)) addFull(usage, entry); else if (issueOnly.has(entry.candidate.key)) addIssue(usage, entry); } return usage; }
 function addIssue(usage: Usage, entry: IssueEnrichmentAdmissionLedgerCandidate): void { const key = repoKey(entry.candidate.repo), repo = usage.repos.get(key) ?? { issues: 0, comments: 0 }; repo.issues += 1; usage.globalIssues += 1; usage.repos.set(key, repo); }
 function addFull(usage: Usage, entry: IssueEnrichmentAdmissionLedgerCandidate): void { addIssue(usage, entry); if (entry.intendedAction === "would_comment") { const repo = usage.repos.get(repoKey(entry.candidate.repo))!; repo.comments += 1; usage.globalComments += 1; } }
 function projected(entry: IssueEnrichmentAdmissionLedgerCandidate, outputAction: IssueEnrichmentAdmissionAction | "deferred", reason: IssueEnrichmentAdmissionLedgerReason): Readonly<IssueEnrichmentAdmissionLedgerDecision> { return Object.freeze(Object.assign(Object.create(null), { ...entry, outputAction, reason })); }

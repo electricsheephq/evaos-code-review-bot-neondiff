@@ -41,6 +41,14 @@ describe("issue-enrichment admission ledger", () => {
     expect(admission.snapshot().find(({ candidate }) => candidate.key === "a/repo#2")?.reason).toBe("repository_blocked");
   });
 
+  it("does not re-admit an issue-cap denial after another reservation is released", () => {
+    const admission = ledger([item("a/repo", 1), item("b/repo", 1)], { limits: limits({ globalMaxIssuesPerCycle: 1 }) });
+    const first = admission.next()!; expect(first.candidate.key).toBe("a/repo#1");
+    expect(admission.next()).toBeUndefined(); admission.release(first.candidate);
+    expect(admission.next()).toBeUndefined();
+    expect(admission.snapshot().find(({ candidate }) => candidate.key === "b/repo#1")?.reason).toBe("global_max_issues_per_cycle");
+  });
+
   it("applies atomic burst limits and multiple blocked repositories deterministically", () => {
     const burst = ledger([item("a/repo", 1), item("a/repo", 2), item("a/repo", 3)], { limits: limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, maxIssuesPerBurst: 2 } } }) });
     expect(burst.next()).toBeUndefined(); expect(burst.snapshot().every(({ reason }) => reason === "burst_threshold_exceeded")).toBe(true);
@@ -63,5 +71,12 @@ describe("issue-enrichment admission ledger", () => {
     const admission = ledger([item("a/repo", 1), { ...item("a/repo", 2, "deferred"), intendedAction: "would_enrich", nextEligibleAt: "2026-08-27T00:00:00Z" }, item("b/repo", 1, "skipped")], { records });
     expect(admission.next()).toBeUndefined(); expect(admission.candidates).toHaveLength(2); expect(Object.isFrozen(admission.candidates)).toBe(true);
     const empty = ledger([]); expect(empty.next()).toBeUndefined(); expect(empty.snapshot()).toEqual([]);
+  });
+
+  it("rejects shallow-frozen containers with mutable candidate or decision records", () => {
+    const accepted = snapshotIssueEnrichmentAdmission({ allowlist: ["a/repo"], checkedAt, items: [item("a/repo", 1)], limits: limits() });
+    const candidate = { ...accepted.candidates[0]! }, decision = { ...classifyIssueEnrichmentAdmission(accepted)[0]!, candidate };
+    const shallowSnapshot = Object.freeze({ ...accepted, candidates: Object.freeze([candidate]) });
+    expect(() => createIssueEnrichmentAdmissionLedger(shallowSnapshot, Object.freeze([decision]))).toThrow("invalid_inputs");
   });
 });
