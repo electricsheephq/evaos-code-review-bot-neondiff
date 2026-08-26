@@ -92,7 +92,7 @@ export async function readIssueEventHistory<T extends { id?: unknown }>(input: {
   const second = await read(2);
   if (!second.valid) return fail();
   if (second.page.items.length < SIZE) {
-    if (second.present && (second.page.items.length === 0 || !terminalLinks(second.relations, 2, second.page.items.length ? 2 : 1))) return fail();
+    if (second.present && !terminalLinks(second.relations, 2, second.page.items.length ? 2 : 1)) return fail();
     lastPage = second.page.items.length ? 2 : 1; add(first.page.items); if (second.page.items.length) add(second.page.items); return finish("short_page");
   }
   if (!second.present || !second.relations?.last || second.relations.last < 2 || !chain(second.relations, 2, second.relations.last)) return fail();

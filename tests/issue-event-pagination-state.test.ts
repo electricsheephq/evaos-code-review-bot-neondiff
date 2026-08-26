@@ -37,7 +37,7 @@ describe("strict issue-event pagination state", () => {
 
   it("handles short pages, exact probes, bounded tails, dedupe, and transport errors", async () => {
     expect((await run({ 1: { page: 1, items: events(1, 3) } })).terminal).toBe("short_page");
-    expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: [] } })).toMatchObject({ pagesRead: 2, rawCount: 100, lastPage: 1, terminal: "short_page" });
+    expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: [], link: [link("prev", 1), link("last", 1), link("first", 1)].join(", ") } })).toMatchObject({ pagesRead: 2, rawCount: 100, lastPage: 1, terminal: "short_page" });
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2, 3), link: terminal(2) }, 3: { page: 3, items: [] } })).toMatchObject({ rawCount: 103, lastPage: 2, terminal: "short_page" });
     expect(await run({ 1: { page: 1, items: events(1) }, 2: { page: 2, items: events(2) } })).toMatchObject({ terminal: "event_history_unbounded", truncated: true, overflow: true });
     const pages: Record<number, IssueEventPage<Event>> = {};
