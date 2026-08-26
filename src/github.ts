@@ -484,7 +484,7 @@ export class GitHubApi {
     if (!lastPage) {
       const probe = await readPage(2);
       try { lastPage = trustedIssueEventLastPage(probe.link, endpoint, 2); } catch { return boundedIssueLabelEventRead([], { pagesRead: 2, rawCount: first.items.length + probe.items.length, duplicateCount: 0, terminal: "event_history_unbounded" }); }
-      if (probe.items.length < 100 && (!lastPage || lastPage === 2)) { const raw = [...first.items, ...probe.items], items = [...new Map(raw.map((event, index) => [event.id === undefined ? `missing:${index}` : `id:${event.id}`, event])).values()]; return boundedIssueLabelEventRead(items, { pagesRead: 2, rawCount: raw.length, duplicateCount: raw.length - items.length, lastPage: probe.items.length ? 2 : 1, terminal: "complete" }); }
+      if (probe.items.length === 0 ? probe.link === null : lastPage === 2) { const raw = [...first.items, ...probe.items], items = [...new Map(raw.map((event, index) => [event.id === undefined ? `missing:${index}` : `id:${event.id}`, event])).values()]; return boundedIssueLabelEventRead(items, { pagesRead: 2, rawCount: raw.length, duplicateCount: raw.length - items.length, lastPage: probe.items.length ? 2 : 1, terminal: "complete" }); }
       return boundedIssueLabelEventRead([], { pagesRead: 2, rawCount: first.items.length + probe.items.length, duplicateCount: 0, terminal: "event_history_unbounded" });
     }
     const raw = lastPage <= 5 ? first.items.slice() : []; let pagesRead = 1;
