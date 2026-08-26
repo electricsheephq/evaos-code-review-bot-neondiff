@@ -27,7 +27,7 @@ describe("issue-enrichment lazy source settlement", () => {
     const terminalIssue = issue(1), promotionTerminalIssue = { ...issue(2), labels: [{ name: "upstream-intake" }, { name: "active-continuation" }] }; let terminalUpdatedAt = terminalIssue.updated_at;
     prepareBranchWorktree.mockResolvedValue({ path: "/tmp/repo", headSha: "a".repeat(40) });
     const permission = vi.fn(async () => "admin" as const), github = {
-      getRepo: async () => ({ default_branch: "main" }), listIssuesForEnrichment: async () => Object.assign([{ ...terminalIssue, updated_at: terminalUpdatedAt }, promotionTerminalIssue, issue(3)], { scanCompletion: "complete" as const }),
+      getRepo: async () => ({ default_branch: "main" }), listIssuesForEnrichment: async (_repo: string, options: { minIssueResults?: number }) => { expect(options.minIssueResults).toBe(0); return Object.assign([{ ...terminalIssue, updated_at: terminalUpdatedAt }, promotionTerminalIssue, issue(3)], { scanCompletion: "complete" as const }); },
       listIssueLabelEvents: async (_repo: string, number: number) => { if (number !== 3) terminalReads += 1; return receipt(number !== 3 ? "event_history_unbounded" : "short_page"); },
       getCollaboratorPermission: permission, getIssueOrPull: async (_repo: string, number: number) => issue(number), canPostAsApp: () => true,
       upsertIssueComment: async ({ issueNumber }: { issueNumber: number }) => { posts.push(issueNumber); return { action: "created" as const, id: issueNumber }; }

@@ -994,7 +994,7 @@ export async function runIssueEnrichmentCycle(input: {
           config: input.config,
           reader: {
             listIssuesForEnrichment: async (repo, options) => {
-              const issues = await input.github.listIssuesForEnrichment(repo, options);
+              const issues = await input.github.listIssuesForEnrichment(repo, { ...options, minIssueResults: 0 });
               const prepared: GitHubRelatedIssueOrPull[] = [];
               for (const issue of issues) {
                 const key = issueKey(repo, issue.number);
