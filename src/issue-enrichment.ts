@@ -33,6 +33,7 @@ import { isAuthenticProductionLicenseAdmission, type ProductionLicenseAdmission 
 import { prepareBranchWorktree, type PreparedWorktree } from "./git.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { writeSecureFileSync } from "./temp-files.js";
+import { canonicalIssueEnrichmentRepositories, canonicalIssueEnrichmentRepository } from "./issue-enrichment-repository-policy.js";
 
 export interface IssueEnrichmentConfig {
   enabled: boolean;
@@ -597,11 +598,9 @@ const LIVE_REPO_THRESHOLD_FIELDS = [
 ] satisfies Array<keyof IssueEnrichmentRepoOverride>;
 
 function reposMissingLiveIssueEnrichmentThresholds(config: IssueEnrichmentConfig): string[] {
-  return config.allowlist.filter((repo) => {
-    const override = config.repos?.[repo];
-    if (override?.enabled === false) return false;
-    return override === undefined ||
-      LIVE_REPO_THRESHOLD_FIELDS.some((field) => override[field] === undefined);
+  return canonicalIssueEnrichmentRepositories(config).flatMap(({ repo, override }) => {
+    if (override?.enabled === false) return [];
+    return override === undefined || LIVE_REPO_THRESHOLD_FIELDS.some((field) => override[field] === undefined) ? [repo] : [];
   });
 }
 
@@ -631,7 +630,7 @@ export async function collectIssueEnrichmentScan(input: {
     canPostAsApp: input.canPostAsApp ?? false,
     checkedAt
   });
-  const repos = input.repo ? [input.repo] : input.repos ?? config.allowlist;
+  const repos = canonicalIssueEnrichmentRepositories(config, input.repo ? [input.repo] : input.repos ?? config.allowlist).map(({ repo }) => repo);
   const repoScans: IssueEnrichmentRepoScan[] = [];
   const items: IssueEnrichmentScanItem[] = [];
 
@@ -871,7 +870,7 @@ export async function runIssueEnrichmentCycle(input: {
     const baselineRepos: IssueEnrichmentRepoScan[] = [];
     const reposToScan: string[] = [];
     const sinceByRepo: Record<string, string> = {};
-    const candidateRepos = input.repo ? [input.repo] : config.allowlist;
+    const candidateRepos = canonicalIssueEnrichmentRepositories(config, input.repo ? [input.repo] : config.allowlist).map(({ repo }) => repo);
     const canUseActivationWatermark = input.includeExisting !== true && input.since === undefined;
     for (const repo of candidateRepos) {
       const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
@@ -1343,7 +1342,7 @@ export function resolveIssueEnrichmentRepoPolicy(
   suggestions: IssueEnrichmentSuggestionPolicy;
   repoPolicy: IssueEnrichmentRepoPolicy;
 } {
-  const override = config.repos?.[repo];
+  const override = canonicalIssueEnrichmentRepository(config, repo).override;
   const throttle = {
     maxIssuesPerCycle: override?.maxIssuesPerCycle ?? config.maxIssuesPerCycle,
     maxCommentsPerCycle: override?.maxCommentsPerCycle ?? config.maxCommentsPerCycle,
@@ -1365,7 +1364,7 @@ export function resolveIssueEnrichmentRepoPolicy(
     suggestedReviewers: [...(override?.suggestedReviewers ?? [])],
     labelAliases: { ...(override?.labelAliases ?? {}) }
   };
-  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions, repoPolicy };
+  if (!config.allowlist.some((allowed) => allowed.toLowerCase() === repo.toLowerCase())) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions, repoPolicy };
   if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions, repoPolicy };
   return { allowed: true, throttle, suggestions, repoPolicy };
 }
