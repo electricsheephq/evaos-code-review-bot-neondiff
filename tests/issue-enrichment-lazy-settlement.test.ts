@@ -9,7 +9,7 @@ const config = (allowlist: string[]) => ({ workRoot: "/tmp/work", evidenceDir: "
   enabled: true, postIssueComment: true, allowlist, allowedLabels: [], allowedReviewers: [], maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 1, maxActiveRuns: 1, leaseTtlMs: 60_000, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 1, lookbackMs: 60_000, processExistingOpenIssuesOnActivation: true,
   repos: Object.fromEntries(allowlist.map((repo) => [repo, { maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 1, lookbackMs: 60_000 }]))
 } });
-const state = () => ({ getIssueEnrichmentRecord: () => undefined, recordIssueEnrichment: (value: unknown) => value as never, getIssueEnrichmentRepoWatermark: () => undefined, recordIssueEnrichmentRepoWatermark: (value: unknown) => value as never, tryAcquireIssueEnrichmentRunLease: () => ({ leaseId: "fixture" }), releaseIssueEnrichmentRunLease: () => undefined });
+const state = () => ({ getIssueEnrichmentRecord: () => undefined, recordIssueEnrichment: (value: unknown) => value as never, getIssueEnrichmentRepoWatermark: () => undefined, recordIssueEnrichmentRepoWatermark: (value: unknown) => value as never, tryAcquireIssueEnrichmentRunLease: () => ({ leaseId: "fixture", expiresAt: "2026-08-26T10:01:00.000Z", ownerPid: 1 }), releaseIssueEnrichmentRunLease: () => undefined });
 const issue = (number: number) => ({ number, title: `Issue ${number}`, state: "open", updated_at: "2026-08-26T09:00:00.000Z", body: "Acceptance criteria and owner present." });
 const admission = await createTestLicenseAdmission({ operation: "issue_enrichment" });
 
