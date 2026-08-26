@@ -114,7 +114,7 @@ function clonePlain(value: unknown, label: string, active = new WeakSet<object>(
       copy[Number(name)] = clonePlain(descriptors[name]!.value, `${label}.${name}`, active);
     }
   } else {
-    copy = {};
+    copy = Object.create(null);
     for (const name of Reflect.ownKeys(descriptors)) { if (typeof name !== "string") fail(`non_plain:${label}`); const descriptor = descriptors[name]!;
       if (!descriptor.enumerable) fail(`non_plain:${label}.${name}`);
       Object.defineProperty(copy, name, { value: clonePlain(descriptor.value, `${label}.${name}`, active), enumerable: true, writable: true, configurable: true });
@@ -131,7 +131,7 @@ function freezeDeep<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 function plainRecord(value: unknown, label: string): Record<string, any> {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail(`non_plain:${label}`);
+  if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) fail(`non_plain:${label}`);
   return value as Record<string, any>;
 }
 function text(value: unknown, label: string): string { if (typeof value !== "string" || value.length === 0) fail(label); return value; }
