@@ -2724,7 +2724,7 @@ describe("sticky enrichment comments", () => {
           maxCommentsPerCycle: 1,
           cooldownMs: 3_600_000,
           burstWindowMs: 3_600_000,
-          maxIssuesPerBurst: 6,
+          maxIssuesPerBurst: 10,
           lookbackMs: 600_000,
           processExistingOpenIssuesOnActivation: false,
           repos: {
@@ -2733,7 +2733,7 @@ describe("sticky enrichment comments", () => {
               maxCommentsPerCycle: 1,
               cooldownMs: 3_600_000,
               burstWindowMs: 3_600_000,
-              maxIssuesPerBurst: 6,
+              maxIssuesPerBurst: 10,
               lookbackMs: 600_000,
               processExistingOpenIssuesOnActivation: false
             }
@@ -2959,6 +2959,9 @@ describe("sticky enrichment comments", () => {
           issueNumber: 41,
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",
           status: "posted",
+          reason: "legacy_receipt",
+          error: "retained diagnostic",
+          nextEligibleAt: "2026-07-03T03:00:00.000Z",
           commentUrl: "https://github.test/comment/1",
           now: new Date("2026-07-03T02:05:30.000Z")
         });
@@ -3015,6 +3018,9 @@ describe("sticky enrichment comments", () => {
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",
           commentUrl: "https://github.test/comment/1",
+          reason: "legacy_receipt",
+          error: "retained diagnostic",
+          nextEligibleAt: "2026-07-03T03:00:00.000Z",
           analysisInputHash: firstRecord?.analysisInputHash
         });
         expect(backfilledRecord?.bodyHash).toBeUndefined();

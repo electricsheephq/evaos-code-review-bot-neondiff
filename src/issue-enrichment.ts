@@ -33,6 +33,9 @@ import { isAuthenticProductionLicenseAdmission, type ProductionLicenseAdmission 
 import { prepareBranchWorktree, type PreparedWorktree } from "./git.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { writeSecureFileSync } from "./temp-files.js";
+import { snapshotIssueEnrichmentAdmission } from "./issue-enrichment-admission-snapshot.js";
+import { classifyIssueEnrichmentAdmission } from "./issue-enrichment-admission-decision.js";
+import { createIssueEnrichmentAdmissionLedger } from "./issue-enrichment-admission-ledger.js";
 
 export interface IssueEnrichmentConfig {
   enabled: boolean;
@@ -329,7 +332,7 @@ export type IssueEnrichmentScanReason =
   | "repo_max_comments_per_cycle"
   | "global_max_issues_per_cycle"
   | "global_max_comments_per_cycle"
-  | "burst_threshold_exceeded";
+  | "burst_threshold_exceeded" | "persisted_defer_active" | "repository_blocked";
 
 export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
   return reason === "preservation_only_upstream_intake";
@@ -356,6 +359,7 @@ export interface IssueEnrichmentScanItem {
   state: string;
   action: IssueEnrichmentScanAction;
   reason: IssueEnrichmentScanReason;
+  intendedAction?: "would_enrich" | "would_comment";
   url?: string;
   nextEligibleAt?: string;
 }
@@ -925,21 +929,6 @@ export async function runIssueEnrichmentCycle(input: {
     if (shouldCollectModelEvidence) {
       if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
       if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
-      for (const repo of reposToScan) {
-        const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
-        if (!policy.allowed) continue;
-        const metadata = await input.github.getRepo(repo);
-        const defaultBranch = metadata.default_branch?.trim();
-        if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
-        sourceSnapshots.set(repo.toLowerCase(), await prepareBranchWorktree({
-          repo,
-          branch: defaultBranch,
-          ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
-          workRoot: input.config.workRoot,
-          protectedCheckoutRoots: getProtectedCheckoutRoots()
-        }));
-        defaultBranches.set(repo.toLowerCase(), defaultBranch);
-      }
     }
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
@@ -995,16 +984,6 @@ export async function runIssueEnrichmentCycle(input: {
       plannedAnalysisInputHashByIssue.set(key, analysisInputHash);
       return analysisInputHash;
     };
-    const shouldCountItem = (item: IssueEnrichmentScanItem) => {
-      if (input.force === true) return true;
-      const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
-      const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
-      const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const analysisInputHash = issue && shouldCompareIssueEnrichmentAnalysisInputHash(existing)
-        ? plannedAnalysisInputHashForItem(item)
-        : undefined;
-      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action));
-    };
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
           config: input.config,
@@ -1021,15 +1000,6 @@ export async function runIssueEnrichmentCycle(input: {
                 });
                 prepared.push(promotion.issue);
                 issuesByKey.set(issueKey(repo, issue.number), promotion.issue);
-                if (shouldCollectModelEvidence) {
-                  issueEvidenceContextByIssue.set(issueKey(repo, issue.number), await buildIssueEvidenceContext({
-                    repo,
-                    issue: promotion.issue,
-                    github: input.github,
-                    defaultBranch: defaultBranches.get(repo.toLowerCase()) ?? "unknown",
-                    headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
-                  }));
-                }
                 if (promotion.evidence) {
                   promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
                 }
@@ -1045,7 +1015,7 @@ export async function runIssueEnrichmentCycle(input: {
           canPostAsApp: input.github.canPostAsApp(),
           checkedAt,
           applyGlobalCaps: false,
-          shouldCountItem
+          shouldCountItem: () => false
         })
       : {
           ok: true,
@@ -1057,13 +1027,6 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
-    applyGlobalIssueEnrichmentCaps({
-      items: scanned.items,
-      repoScans: scanned.repos,
-      config,
-      checkedAt,
-      shouldCountItem
-    });
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
@@ -1072,6 +1035,23 @@ export async function runIssueEnrichmentCycle(input: {
       repos: combinedRepos,
       recommendedActions: buildScanRecommendedActions(status, combinedSummary)
     };
+    const admissionItems = scan.items.map((item) => ({ ...item, issueUpdatedAt: canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt) }));
+    const admissionSnapshot = snapshotIssueEnrichmentAdmission({
+      allowlist: reposToScan,
+      items: admissionItems,
+      records: input.force === true ? [] : admissionItems.flatMap((item) => {
+        const record = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber); return record ? [{ ...record }] : [];
+      }),
+      checkedAt,
+      limits: {
+        globalMaxIssuesPerCycle: config.globalMaxIssuesPerCycle, globalMaxCommentsPerCycle: config.globalMaxCommentsPerCycle,
+        repos: Object.fromEntries(reposToScan.map((repo) => {
+          const throttle = resolveIssueEnrichmentRepoPolicy(config, repo).throttle;
+          return [repo, { maxIssuesPerCycle: throttle.maxIssuesPerCycle, maxCommentsPerCycle: throttle.maxCommentsPerCycle, maxIssuesPerBurst: throttle.maxIssuesPerBurst }];
+        }))
+      }
+    });
+    const admissionLedger = createIssueEnrichmentAdmissionLedger(admissionSnapshot, classifyIssueEnrichmentAdmission(admissionSnapshot));
     const summary = {
       ...scan.summary,
       posted: 0,
@@ -1082,11 +1062,48 @@ export async function runIssueEnrichmentCycle(input: {
       failed: 0
     };
     const items: IssueEnrichmentCycleResult["items"] = [];
+    const settled = new Set<string>();
 
-    for (const item of scan.items) {
+    for (const item of scan.items.filter((candidate) => candidate.action === "skipped")) {
+      const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt);
+      if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "skipped", reason: item.reason, now: new Date(checkedAt) });
+      if (!input.dryRun) summary.skippedRecorded += 1;
+      items.push({ ...item, ...(!input.dryRun ? { recordStatus: "skipped" as const } : {}) });
+    }
+
+    while (true) {
+      const admitted = admissionLedger.next();
+      if (!admitted) break;
+      const item = scan.items.find((candidate) => candidate.repo.toLowerCase() === admitted.candidate.repo.toLowerCase() && candidate.issueNumber === admitted.candidate.issueNumber)!;
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+      if (shouldCollectModelEvidence && issue) {
+        const repoKey = item.repo.toLowerCase(), wasPrepared = sourceSnapshots.has(repoKey);
+        try {
+          if (!wasPrepared) {
+            const metadata = await input.github.getRepo!(item.repo), defaultBranch = metadata.default_branch?.trim();
+            if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${item.repo}`);
+            sourceSnapshots.set(repoKey, await prepareBranchWorktree({
+              repo: item.repo, branch: defaultBranch,
+              ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
+              workRoot: input.config.workRoot!, protectedCheckoutRoots: getProtectedCheckoutRoots()
+            }));
+            defaultBranches.set(repoKey, defaultBranch);
+          }
+          issueEvidenceContextByIssue.set(issueKey(item.repo, item.issueNumber), await buildIssueEvidenceContext({
+            repo: item.repo, issue, github: input.github, defaultBranch: defaultBranches.get(repoKey)!, headSha: sourceSnapshots.get(repoKey)!.headSha
+          }));
+        } catch (error) {
+          const message = redactSecrets(error instanceof Error ? error.message : String(error));
+          if (!wasPrepared && !sourceSnapshots.has(repoKey)) admissionLedger.blockRepo(item.repo);
+          else admissionLedger.release(admitted.candidate);
+          input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error: message, now: new Date(checkedAt) });
+          summary.failed += 1; settled.add(admitted.candidate.key);
+          items.push({ ...item, recordStatus: "failed", error: message });
+          continue;
+        }
+      }
       const analysisInputHash = shouldCompareIssueEnrichmentAnalysisInputHash(existing) ||
         shouldBackfillIssueEnrichmentAnalysisInputHash(existing, issueUpdatedAt, item.action)
         ? plannedAnalysisInputHashForItem(item)
@@ -1112,10 +1129,13 @@ export async function runIssueEnrichmentCycle(input: {
           });
         }
         summary.alreadyProcessed += 1;
+        admissionLedger.release(admitted.candidate);
+        settled.add(admitted.candidate.key);
         items.push({ ...item, skippedExisting: true, recordStatus: existing.status });
         continue;
       }
       if (input.dryRun) {
+        settled.add(admitted.candidate.key);
         items.push({ ...item });
         continue;
       }
@@ -1161,6 +1181,7 @@ export async function runIssueEnrichmentCycle(input: {
           now: new Date(checkedAt)
         });
         summary.dryRunRecorded += 1;
+        settled.add(admitted.candidate.key);
         items.push({ ...item, recordStatus: "dry_run" });
         continue;
       }
@@ -1259,6 +1280,8 @@ export async function runIssueEnrichmentCycle(input: {
             now: new Date(checkedAt)
           });
           summary.alreadyProcessed += 1;
+          admissionLedger.release(admitted.candidate);
+          settled.add(admitted.candidate.key);
           items.push({
             ...item,
             skippedExisting: true,
@@ -1288,6 +1311,7 @@ export async function runIssueEnrichmentCycle(input: {
           now: new Date(checkedAt)
         });
         summary.posted += 1;
+        settled.add(admitted.candidate.key);
         items.push({ ...item, recordStatus: "posted", ...(commentUrl ? { commentUrl } : {}) });
       } catch (error) {
         const message = redactSecrets(error instanceof Error ? error.message : String(error));
@@ -1302,9 +1326,42 @@ export async function runIssueEnrichmentCycle(input: {
           now: new Date(checkedAt)
         });
         summary.failed += 1;
+        admissionLedger.release(admitted.candidate);
+        settled.add(admitted.candidate.key);
         items.push({ ...item, recordStatus: "failed", error: message });
       }
     }
+
+    for (const decision of admissionLedger.snapshot()) {
+      if (settled.has(decision.candidate.key) || decision.reason === "released" || decision.reason === "eligible") continue;
+      const item = scan.items.find((candidate) => candidate.repo.toLowerCase() === decision.candidate.repo.toLowerCase() && candidate.issueNumber === decision.candidate.issueNumber)!;
+      const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt), existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
+      if (decision.reason === "already_recorded") {
+        summary.alreadyProcessed += 1; items.push({ ...item, skippedExisting: true, ...(existing ? { recordStatus: existing.status } : {}) }); continue;
+      }
+      if (decision.reason === "repository_blocked") {
+        const error = "issue_enrichment_repository_unavailable";
+        if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error, now: new Date(checkedAt) });
+        if (!input.dryRun) summary.failed += 1; items.push({ ...item, ...(!input.dryRun ? { recordStatus: "failed" as const, error } : {}) }); continue;
+      }
+      const policy = resolveIssueEnrichmentRepoPolicy(config, item.repo), deferredReason = decision.reason === "held" ? "persisted_defer_active" : decision.reason;
+      const deferredUntil = decision.candidate.record?.nextEligibleAt ?? decision.candidate.nextEligibleAt ??
+        (decision.reason.startsWith("global_") ? globalNextEligibleAt({ checkedAt, config, throttle: policy.throttle }) : nextEligibleAt({ checkedAt, throttle: policy.throttle }));
+      const deferredItem = { ...item, action: "deferred" as const, intendedAction: decision.intendedAction, reason: deferredReason as IssueEnrichmentScanReason, nextEligibleAt: deferredUntil };
+      if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "deferred", reason: deferredReason, nextEligibleAt: deferredUntil, now: new Date(checkedAt) });
+      if (!input.dryRun) summary.deferredRecorded += 1; items.push({ ...deferredItem, ...(!input.dryRun ? { recordStatus: "deferred" as const } : {}) });
+    }
+
+    for (const repo of scanned.repos) {
+      if (!repo.allowed || !repo.ok) continue;
+      const repoItems = items.filter((item) => item.repo === repo.repo);
+      repo.eligible = repoItems.filter((item) => item.action !== "skipped" && !item.skippedExisting).length;
+      repo.skipped = repoItems.filter((item) => item.action === "skipped").length;
+      repo.wouldEnrich = repoItems.filter((item) => (item.action === "would_enrich" || item.action === "would_comment") && !item.skippedExisting).length;
+      repo.wouldComment = repoItems.filter((item) => item.action === "would_comment" && !item.skippedExisting).length;
+      repo.deferred = repoItems.filter((item) => item.action === "deferred").length;
+    }
+    Object.assign(summary, summarizeScan(scan.repos));
 
     if (!input.dryRun && input.advanceWatermarks !== false) {
       for (const repo of scanned.repos) {
