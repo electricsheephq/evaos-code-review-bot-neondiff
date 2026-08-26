@@ -256,6 +256,13 @@ launch entitlement remain distinct evidence domains. Issue enrichment is
 reported separately from review execution and Desktop health. Codex runtime
 state is reported separately from customer outcome.
 
+Issue-enrichment policy aliases resolve through one deterministic casefolded
+view, while the casefolded repository key is the durable identity for records,
+watermarks, and sticky-comment markers. Existing mixed-case records and issue
+markers remain readable without rewriting the database. Adding or reordering a
+case alias therefore cannot create another state identity or another sticky
+comment for the same repository and issue.
+
 Distribution/updater evidence identifies the signed artifact, enclosure
 signature, exact feed/key identity, appcast digest, ring, entitlement, and
 rollback target. `beta` is rollback-capable. Before `stable`, the packet must

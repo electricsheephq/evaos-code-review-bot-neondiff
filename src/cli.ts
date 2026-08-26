@@ -59,6 +59,7 @@ import {
   type IssueEnrichmentConfig,
   type IssueEnrichmentRepoReadCheck
 } from "./issue-enrichment.js";
+import { canonicalIssueEnrichmentRepository } from "./issue-enrichment-repository-policy.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
 import { requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
@@ -1345,7 +1346,7 @@ async function main(): Promise<void> {
     });
     await withRuntimeGitHubCredentials(runtimeCredentials, async () => {
     if (!args.repo) throw new Error("--repo is required for issue-enrichment-run");
-    const repo = parseSingleArg(args.repo, "--repo");
+    const requestedRepo = parseSingleArg(args.repo, "--repo");
     const issueNumbers = parseIssueNumberArgs(args.issue);
     const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
     const confirm = args.confirm === undefined ? false : parseBooleanArg(args.confirm, "--confirm");
@@ -1363,6 +1364,7 @@ async function main(): Promise<void> {
     if (!dryRun && !issueConfig.postIssueComment) {
       throw new Error("issue-enrichment-run live posting requires issueEnrichment.postIssueComment true");
     }
+    const repo = canonicalIssueEnrichmentRepository(issueConfig, requestedRepo).repo;
     const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
     if (!policy.allowed) throw new Error(`Repo ${repo} is skipped by issue-enrichment policy: ${policy.reason}`);
     const licenseAdmission = await requireActiveProductionLicense({

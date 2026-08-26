@@ -1352,6 +1352,7 @@ export class ReviewStateStore {
   recordIssueEnrichment(input: RecordIssueEnrichmentInput): IssueEnrichmentRecord {
     validateIssueEnrichmentInput(input);
     const existing = this.getIssueEnrichmentRecord(input.repo, input.issueNumber);
+    const repo = existing?.repo ?? input.repo;
     const nowIso = (input.now ?? new Date()).toISOString();
     const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
     const bodyHash = input.bodyHash ? input.bodyHash.trim().toLowerCase() : undefined;
@@ -1377,7 +1378,7 @@ export class ReviewStateStore {
            updated_at = excluded.updated_at`
       )
       .run(
-        input.repo,
+        repo,
         input.issueNumber,
         input.issueUpdatedAt ?? null,
         bodyHash ?? null,
@@ -1400,7 +1401,7 @@ export class ReviewStateStore {
         `select repo, issue_number, issue_updated_at, body_hash, analysis_input_hash, status, reason, comment_url, error,
                 next_eligible_at, created_at, updated_at
          from issue_enrichment_records
-         where repo = ? and issue_number = ?
+         where repo = ? collate nocase and issue_number = ?
          limit 1`
       )
       .get(repo, issueNumber) as IssueEnrichmentRecordRow | undefined;
@@ -1422,7 +1423,7 @@ export class ReviewStateStore {
     const predicates: string[] = [];
     const params: Array<string | number> = [];
     if (input.repo) {
-      predicates.push("repo = ?");
+      predicates.push("repo = ? collate nocase");
       params.push(input.repo);
     }
     if (statuses?.length) {
@@ -1448,6 +1449,7 @@ export class ReviewStateStore {
   recordIssueEnrichmentRepoWatermark(input: RecordIssueEnrichmentRepoWatermarkInput): IssueEnrichmentRepoWatermark {
     validateIssueEnrichmentRepoWatermarkInput(input);
     const existing = this.getIssueEnrichmentRepoWatermark(input.repo);
+    const repo = existing?.repo ?? input.repo;
     const nowIso = (input.now ?? new Date()).toISOString();
     this.db
       .prepare(
@@ -1459,7 +1461,7 @@ export class ReviewStateStore {
            updated_at = excluded.updated_at`
       )
       .run(
-        input.repo,
+        repo,
         existing?.activatedAt ?? input.activatedAt,
         input.lastCheckedAt,
         existing?.createdAt ?? nowIso,
@@ -1474,7 +1476,7 @@ export class ReviewStateStore {
       .prepare(
         `select repo, activated_at, last_checked_at, created_at, updated_at
          from issue_enrichment_repo_watermarks
-         where repo = ?
+         where repo = ? collate nocase
          limit 1`
       )
       .get(repo) as IssueEnrichmentRepoWatermarkRow | undefined;

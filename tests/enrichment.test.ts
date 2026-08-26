@@ -863,7 +863,7 @@ describe("sticky enrichment comments", () => {
         issueEnrichment: {
           enabled: true,
           postIssueComment: true,
-          allowlist: ["electricsheephq/lcm-x"],
+          allowlist: ["Electricsheephq/lcm-x", "electricsheephq/lcm-x"],
           maxIssuesPerCycle: 1,
           maxCommentsPerCycle: 1,
           processExistingOpenIssuesOnActivation: true,
@@ -3039,6 +3039,95 @@ describe("sticky enrichment comments", () => {
         expect(changedRecord?.bodyHash).toBe(firstRecord?.bodyHash);
         expect(changedRecord?.analysisInputHash).not.toBe(firstRecord?.analysisInputHash);
         expect(posts[1]!.body).toContain(`hash=${changedRecord?.bodyHash}`);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves durable issue enrichment identity when an earlier-sorting case alias is added", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-cycle-alias-added-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      const writeConfig = (allowlist: string[]) => writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist,
+          maxIssuesPerCycle: 5,
+          maxCommentsPerCycle: 2,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 2,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            },
+            "Owner/Issue-Repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 2,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000
+            }
+          }
+        }
+      })}\n`);
+      writeConfig(["owner/issue-repo"]);
+
+      const state = new ReviewStateStore(statePath);
+      const posts: Array<{ issueNumber: number; marker: string; body: string }> = [];
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 42,
+          title: "Preserve repository identity",
+          state: "open",
+          updated_at: "2026-08-26T10:00:00.000Z",
+          html_url: "https://github.test/owner/issue-repo/issues/42",
+          body: "Acceptance criteria and owner present. Keep one sticky enrichment comment."
+        };
+        const github = {
+          listIssuesForEnrichment: async () => [issue],
+          canPostAsApp: () => true,
+          upsertIssueComment: async (input: { issueNumber: number; marker: string; body: string }) => {
+            posts.push(input);
+            return { action: "created" as const, id: 4200, html_url: `https://github.test/comment/${posts.length}` };
+          }
+        };
+
+        const first = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-08-26T10:05:00.000Z"
+        });
+
+        writeConfig(["Owner/Issue-Repo", "owner/issue-repo"]);
+        const replay = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-08-26T11:06:00.000Z"
+        });
+
+        expect(first.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+        expect(replay.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0, workerSkipped: 0 });
+        expect(posts).toHaveLength(1);
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 42)).toMatchObject({
+          status: "posted",
+          commentUrl: "https://github.test/comment/1"
+        });
+        expect(state.getIssueEnrichmentRecord("Owner/Issue-Repo", 42)?.repo).toBe("owner/issue-repo");
       } finally {
         state.close();
       }
