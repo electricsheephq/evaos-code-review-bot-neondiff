@@ -75,6 +75,12 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     expect(capture(left)).toEqual(capture(right)); expect(JSON.stringify(capture(left))).toBe(JSON.stringify(capture(right)));
   });
 
+  it("preserves each accepted status state exactly", () => {
+    for (const state of ["disabled", "blocked", "ready", "dry_run_only"] as const) {
+      expect(snap({ kind: "result", result: plainResult({ status: { state, blockers: [] } }) }).status.state).toBe(state);
+    }
+  });
+
   it("extracts only a bounded leading blocker token from thrown errors", () => {
     const token = "issue_enrichment_model_runtime_required";
     expect(snap({ kind: "thrown", error: new Error(`${token}:${"x".repeat(10_000)}`) })).toMatchObject({ reason: token });
