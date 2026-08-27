@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyIssueEnrichmentReceipt, classifyIssueEnrichmentSnapshot } from "../src/issue-enrichment-receipt.js";
 import { ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS, snapshotIssueEnrichmentReceipt } from "../src/issue-enrichment-receipt-snapshot.js";
+import { buildIssueEnrichmentStatus, DEFAULT_ISSUE_ENRICHMENT_CONFIG } from "../src/issue-enrichment.js";
 
 const counts = (overrides: Record<string, unknown> = {}) => Object.fromEntries(
   ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, overrides[key] ?? 0])
@@ -24,6 +25,11 @@ describe("issue-enrichment receipt classifier", () => {
     ["no candidates", { kind: "result", result: result() }, { ok: true, code: "no_candidates" }]
   ])("classifies %s", (_name, input, expected) => expect(classify(input)).toMatchObject(expected));
 
+  it("accepts the genuine default disabled producer status", () => {
+    const status = buildIssueEnrichmentStatus({ config: { issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG }, canPostAsApp: false });
+    expect(classify({ kind: "result", result: result({ status }) })).toMatchObject({ ok: true, code: "disabled" });
+  });
+
   it.each(["workerSkipped", "posted", "dryRunRecorded", "skippedRecorded", "deferredRecorded"])(
     "rejects dry-run %s", (key) => expect(classify({ kind: "result", result: result({ dryRun: true, summary: counts({ [key]: 1 }) }) })).toMatchObject(notOk)
   );
@@ -37,6 +43,7 @@ describe("issue-enrichment receipt classifier", () => {
     ["lease mixed", { summary: counts({ workerSkipped: 1, reposScanned: 1 }) }],
     ["blocked lease", { ok: false, status: { state: "blocked", blockers: ["github_app_issues_permission_required"] }, summary: counts({ workerSkipped: 1 }) }],
     ["disabled marker", { status: { state: "disabled", blockers: [] } }],
+    ["disabled duplicate", { status: { state: "disabled", blockers: ["issue_enrichment_disabled", "issue_enrichment_disabled"] } }],
     ["disabled work", { status: { state: "disabled", blockers: ["issue_enrichment_disabled"] }, summary: counts({ issuesSeen: 1 }) }],
     ["live ready dry-run record", { summary: counts({ issuesSeen: 1, dryRunRecorded: 1 }) }],
     ["live dry-run-only post", { status: { state: "dry_run_only", blockers: ["issue_enrichment_live_posting_disabled"] }, summary: counts({ issuesSeen: 1, posted: 1 }) }],

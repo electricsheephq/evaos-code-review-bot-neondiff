@@ -25,6 +25,9 @@ const BLOCKING_REASONS = new Set<IssueEnrichmentBlocker>([
   "issue_enrichment_allowlist_empty", "github_app_credentials_required_for_live_issue_comments", "github_app_issues_permission_required",
   "issue_enrichment_live_repo_thresholds_required", "issue_enrichment_model_runtime_required"
 ]);
+const DISABLED_REASONS = new Set<IssueEnrichmentBlocker>([
+  "issue_enrichment_disabled", "issue_enrichment_allowlist_empty", "issue_enrichment_live_posting_disabled"
+]);
 const emit = (ok: boolean, code: IssueEnrichmentLaneCode, counts: IssueEnrichmentReceiptCounts, reason?: IssueEnrichmentLaneReason): IssueEnrichmentLaneReceipt =>
   Object.freeze({ ok, stage: "issue_enrichment" as const, code, counts, ...(reason ? { reason } : {}) });
 const zeroExcept = (counts: IssueEnrichmentReceiptCounts, exception?: keyof IssueEnrichmentReceiptCounts): boolean =>
@@ -41,7 +44,9 @@ function matrixAccepts(snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind:
   if (state === "ready" && blockers.reasons.length !== 0) return false;
   if (state === "dry_run_only" && (blockers.reasons.length !== 1 || blockers.reasons[0] !== "issue_enrichment_live_posting_disabled")) return false;
   if (state === "blocked" && !blockers.reasons.some((reason) => BLOCKING_REASONS.has(reason))) return false;
-  if (state === "disabled") return blockers.reasons.length === 1 && blockers.reasons[0] === "issue_enrichment_disabled" && snapshot.ok === "true" && zeroExcept(counts);
+  if (state === "disabled") return blockers.reasons.includes("issue_enrichment_disabled") &&
+    blockers.reasons.length === new Set(blockers.reasons).size && blockers.reasons.every((reason) => DISABLED_REASONS.has(reason)) &&
+    snapshot.ok === "true" && zeroExcept(counts);
   if (counts.workerSkipped > 0) return snapshot.dryRun === "false" && snapshot.ok === "true" &&
     (state === "ready" || state === "dry_run_only") && zeroExcept(counts, "workerSkipped");
   if (snapshot.dryRun === "true" && any(counts, DRY_RUN_FORBIDDEN)) return false;
