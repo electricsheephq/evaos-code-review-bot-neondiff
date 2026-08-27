@@ -11,8 +11,11 @@ function comment(id: number, body: string) {
 function boundedComments(comments: ReturnType<typeof comment>[], rawCount: number, truncated: boolean): BoundedGithubList<ReturnType<typeof comment>> {
   return Object.assign(comments, { items: comments.slice(), rawCount, truncated, overflow: truncated });
 }
-async function buildEvidence(comments: ReturnType<typeof boundedComments>) {
-  const github = { listIssueCommentsForEnrichment: async () => comments } as unknown as IssueEnrichmentCycleGithub;
+async function buildEvidence(comments: ReturnType<typeof boundedComments>, timeline: unknown[] = []) {
+  const github = {
+    listIssueCommentsForEnrichment: async () => comments,
+    listIssueLabelEvents: async () => timeline
+  } as unknown as IssueEnrichmentCycleGithub;
   return buildIssueEvidenceContext({ repo: "owner/issue-repo", issue, github, defaultBranch: "main", headSha: "a".repeat(40) });
 }
 
@@ -28,5 +31,17 @@ describe("issue-enrichment evidence completeness", () => {
     const evidence = await buildEvidence(comments);
     expect(evidence.comments).toHaveLength(49);
     expect(evidence.truncation.comments).toBe(false);
+  });
+  it("preserves bounded-tail timeline truncation when heavy dedup leaves exactly 200 events", async () => {
+    const events = Array.from({ length: 200 }, (_unused, index) => ({ id: index + 1, event: "labeled", created_at: "2026-08-23T00:00:00Z" }));
+    const timeline = Object.assign(events, {
+      items: events.slice(),
+      rawCount: 500,
+      truncated: true,
+      overflow: false
+    });
+    const evidence = await buildEvidence(boundedComments([], 0, false), timeline);
+    expect(evidence.timeline).toHaveLength(200);
+    expect(evidence.truncation.timeline).toBe(true);
   });
 });
