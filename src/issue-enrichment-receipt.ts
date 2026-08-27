@@ -68,6 +68,9 @@ export function classifyIssueEnrichmentSnapshot(snapshot: IssueEnrichmentReceipt
       ? receipt(false, "result_not_ok", counts, "unknown_failure")
       : receipt(false, "blocked", counts, effectiveBlocker);
   }
+  if (snapshot.status.state === "blocked" && snapshot.status.blockers.reasons.length === 0) {
+    return receipt(false, "result_not_ok", counts, "unknown_failure");
+  }
   if (snapshot.ok !== "true") return receipt(false, "result_not_ok", counts, "unknown_failure");
   const completed = USEFUL_COUNT_KEYS.some((key) => counts[key] > 0);
   return receipt(true, completed ? "completed" : "no_candidates", counts);

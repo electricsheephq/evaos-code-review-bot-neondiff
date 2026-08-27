@@ -29,6 +29,7 @@ describe("issue-enrichment receipt classifier", () => {
     ["effective blocker contradicts ready state", { kind: "result", result: result({ status: { state: "ready", blockers: ["github_app_issues_permission_required"] } }) }, false, "blocked", "github_app_issues_permission_required"],
     ["live-posting blocker contradicts ready state", { kind: "result", result: result({ status: { state: "ready", blockers: ["issue_enrichment_live_posting_disabled"] } }) }, false, "blocked", "issue_enrichment_live_posting_disabled"],
     ["dry-run-only cycle", { kind: "result", result: result({ status: { state: "dry_run_only", blockers: ["issue_enrichment_live_posting_disabled"] }, summary: counts({ wouldEnrich: 1 }) }) }, true, "completed", undefined],
+    ["blocked state without blockers", { kind: "result", result: result({ status: { state: "blocked", blockers: [] } }) }, false, "result_not_ok", "unknown_failure"],
     ["blocker after scan", { kind: "result", result: result({ ok: false, summary: counts({ issuesSeen: 1 }), status: { state: "blocked", blockers: ["github_app_issues_permission_required"] } }) }, false, "result_not_ok", "unknown_failure"],
     ["completed", { kind: "result", result: result({ summary: counts({ wouldEnrich: 1 }) }) }, true, "completed", undefined],
     ["no candidates", { kind: "result", result: result() }, true, "no_candidates", undefined],
