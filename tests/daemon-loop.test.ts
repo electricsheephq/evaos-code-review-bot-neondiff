@@ -520,14 +520,25 @@ describe("daemon cycle resilience", () => {
         event: "daemon_issue_enrichment",
         phase: "complete",
         cycle: 9,
-        result: expect.objectContaining({
-          summary: expect.objectContaining({
-            reposScanned: 1,
-            dryRunRecorded: 1
-          })
+        receipt: expect.objectContaining({
+          ok: true,
+          code: "completed",
+          counts: expect.objectContaining({ reposScanned: 1, dryRunRecorded: 1 })
         })
       })
     ]));
+  });
+
+  it("logs only the sanitized receipt for a resolved issue-lane failure", async () => {
+    const stdout: string[] = [], sentinel = "raw-result-ghp_fake_token-https://customer.example";
+    const failed = successfulIssueEnrichmentCycleResult() as IssueEnrichmentCycleResult & { rawSentinel: string };
+    Object.assign(failed, { ok: false, dryRun: true, rawSentinel: sentinel, status: { ...failed.status, state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] }, summary: { ...failed.summary, readFailures: 1, dryRunRecorded: 0 } });
+    const result = await runDaemonCycle({ cycle: 14, dryRun: true, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false, reviewSchedulerEnabled: true, issueEnrichmentEnabled: true,
+      runOnceImpl: async () => successfulRunOnceResult(), issueEnrichmentCycleImpl: async () => failed, recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line), stderr: () => undefined });
+    expect(result.ok).toBe(true);
+    expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([expect.objectContaining({ event: "daemon_issue_enrichment", phase: "complete", receipt: expect.objectContaining({ ok: false, code: "result_not_ok", reason: "read_failure" }) })]));
+    expect(stdout.join("\n")).not.toContain(sentinel);
   });
 
   it("holds PR review work while preserving live issue enrichment", async () => {
@@ -730,10 +741,11 @@ describe("daemon cycle resilience", () => {
     expect(failure).toMatchObject({
       event: "daemon_issue_enrichment_failed",
       level: "error",
-      cycle: 10
+      cycle: 10,
+      receipt: { ok: false, stage: "issue_enrichment", code: "cycle_failed", reason: "unknown_failure" }
     });
-    expect(failure.error).toContain("issue enrichment failed");
-    expect(failure.error).not.toContain("ghp_fake_token");
+    expect(failure).not.toHaveProperty("error");
+    expect(stderr.join("\n")).not.toContain("ghp_fake_token");
   });
 });
 

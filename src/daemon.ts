@@ -4,6 +4,7 @@ import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
 import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
+import { classifyIssueEnrichmentReceipt } from "./issue-enrichment-receipt.js";
 import { runScheduledCycle } from "./scheduler.js";
 import {
   isAuthenticProductionLicenseAdmission,
@@ -353,17 +354,16 @@ async function runIssueEnrichmentLane(input: {
       phase: "complete",
       cycle: input.input.cycle,
       dryRun: input.input.dryRun,
-      result: issueEnrichment
+      receipt: classifyIssueEnrichmentReceipt({ kind: "result", result: issueEnrichment })
     }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     input.recordHeartbeat("daemon_cycle_progress", "issue_enrichment_failed", input.heartbeatRunId);
     input.stderr(formatDaemonLog({
       event: "daemon_issue_enrichment_failed",
       level: "error",
       cycle: input.input.cycle,
       dryRun: input.input.dryRun,
-      error: message
+      receipt: classifyIssueEnrichmentReceipt({ kind: "thrown", error })
     }));
   }
 }
