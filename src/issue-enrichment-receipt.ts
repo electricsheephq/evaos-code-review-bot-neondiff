@@ -30,6 +30,11 @@ const USEFUL_COUNT_KEYS: readonly (keyof IssueEnrichmentReceiptCounts)[] = Objec
   "eligible", "wouldEnrich", "wouldComment", "posted", "dryRunRecorded", "skippedRecorded",
   "deferredRecorded", "alreadyProcessed"
 ]);
+const BLOCKED_STATE_REASONS = new Set<IssueEnrichmentBlocker>([
+  "issue_enrichment_allowlist_empty", "github_app_credentials_required_for_live_issue_comments",
+  "github_app_issues_permission_required", "issue_enrichment_live_repo_thresholds_required",
+  "issue_enrichment_model_runtime_required"
+]);
 const receipt = (ok: boolean, code: IssueEnrichmentLaneCode, counts: IssueEnrichmentReceiptCounts,
   reason?: IssueEnrichmentLaneReason): IssueEnrichmentLaneReceipt => Object.freeze({
   ok, stage: "issue_enrichment" as const, code, counts, ...(reason ? { reason } : {})
@@ -45,7 +50,7 @@ const stateConsistent = (snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kin
   if (state === "dry_run_only") {
     return blockers.reasons.length === 1 && blockers.reasons[0] === "issue_enrichment_live_posting_disabled";
   }
-  if (state === "blocked") return blockers.reasons.length > 0;
+  if (state === "blocked") return blockers.reasons.some((reason) => BLOCKED_STATE_REASONS.has(reason));
   return state === "disabled";
 };
 
