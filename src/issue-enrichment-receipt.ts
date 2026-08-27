@@ -65,7 +65,7 @@ export function classifyIssueEnrichmentSnapshot(snapshot: IssueEnrichmentReceipt
       : receipt(false, "result_not_ok", counts, "unknown_failure");
   }
   if (snapshot.status.state === "disabled") {
-    return readable && snapshot.ok === "true"
+    return readable && snapshot.status.blockers.reasons.includes("issue_enrichment_disabled") && snapshot.ok === "true"
       ? receipt(true, "disabled", ZERO_COUNTS)
       : receipt(false, "result_not_ok", counts, "unknown_failure");
   }

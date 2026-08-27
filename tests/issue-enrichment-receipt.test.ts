@@ -20,6 +20,7 @@ describe("issue-enrichment receipt classifier", () => {
     ["thrown undefined", { kind: "thrown", error: undefined }, false, "cycle_failed", "unknown_failure"],
     ["lease before disabled", { kind: "result", result: result({ summary: counts({ workerSkipped: 1 }), status: { state: "disabled", blockers: ["issue_enrichment_disabled"] } }) }, true, "lease_skipped", "worker_lease_held"],
     ["disabled", { kind: "result", result: result({ summary: counts({ issuesSeen: 2 }), status: { state: "disabled", blockers: ["issue_enrichment_disabled"] } }) }, true, "disabled", undefined],
+    ["disabled without marker", { kind: "result", result: result({ status: { state: "disabled", blockers: [] } }) }, false, "result_not_ok", "unknown_failure"],
     ["ignored blocker with read failure", { kind: "result", result: result({ ok: false, dryRun: true, summary: counts({ readFailures: 1 }), status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] } }) }, false, "result_not_ok", "read_failure"],
     ["mixed blockers", { kind: "result", result: result({ ok: false, dryRun: true, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required", "github_app_issues_permission_required"] } }) }, false, "blocked", "github_app_issues_permission_required"],
     ["ready plus effective blocker", { kind: "result", result: result({ status: { state: "ready", blockers: ["github_app_issues_permission_required"] } }) }, false, "result_not_ok", "unknown_failure"],
