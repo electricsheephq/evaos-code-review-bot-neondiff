@@ -60,7 +60,8 @@ export function classifyIssueEnrichmentSnapshot(snapshot: IssueEnrichmentReceipt
   if (!readable) return receipt(false, "result_not_ok", counts, "unknown_failure");
 
   const effectiveBlocker = snapshot.status.blockers.reasons.find((reason) =>
-    snapshot.dryRun !== "true" || !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(reason));
+    (snapshot.dryRun !== "true" && snapshot.status.state !== "dry_run_only") ||
+    !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(reason));
   if (effectiveBlocker) {
     const hasScanEvidence = ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.some((key) => counts[key] > 0);
     return hasScanEvidence

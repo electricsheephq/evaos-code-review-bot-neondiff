@@ -17,7 +17,7 @@ export type IssueEnrichmentReceiptSnapshot = Readonly<{ kind: "thrown"; reason: 
 }>;
 export interface IssueEnrichmentStatusSnapshot {
   readonly readable: boolean;
-  readonly state: "disabled" | "blocked" | "other" | "unreadable";
+  readonly state: "disabled" | "blocked" | "dry_run_only" | "other" | "unreadable";
   readonly blockers: IssueEnrichmentBlockersSnapshot;
 }
 export interface IssueEnrichmentBlockersSnapshot {
@@ -99,7 +99,7 @@ function snapshotResult(result: unknown): IssueEnrichmentReceiptSnapshot {
   const state = read(statusValue, "state"), blockers = read(statusValue, "blockers");
   const readable = Boolean(statusValue && state.ok && (state.value === "disabled" || state.value === "blocked" || state.value === "ready" || state.value === "dry_run_only"));
   const statusSnapshot: IssueEnrichmentStatusSnapshot = frozen({
-    readable, state: !state.ok || typeof state.value !== "string" ? "unreadable" : state.value === "disabled" ? "disabled" : state.value === "blocked" ? "blocked" : state.value === "ready" || state.value === "dry_run_only" ? "other" : "unreadable",
+    readable, state: !state.ok || typeof state.value !== "string" ? "unreadable" : state.value === "disabled" ? "disabled" : state.value === "blocked" ? "blocked" : state.value === "dry_run_only" ? "dry_run_only" : state.value === "ready" ? "other" : "unreadable",
     blockers: snapshotBlockers(blockers.ok ? blockers.value : undefined)
   });
   const flag = (value: Read): IssueEnrichmentFlagSnapshot => value.ok && value.value === true ? "true" : value.ok && value.value === false ? "false" : "unreadable";
