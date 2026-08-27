@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS } from "../src/issue-enrichment-receipt-snapshot.js";
+import type { IssueEnrichmentLaneReceipt } from "../src/issue-enrichment-receipt.js";
 import { parseProviderCooldownError, ReviewStateStore } from "../src/state.js";
+
+const laneCounts = (overrides: Record<string, number> = {}) => Object.fromEntries(
+  ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, overrides[key] ?? 0])
+);
+const laneReceipt = (overrides: Partial<IssueEnrichmentLaneReceipt> = {}): IssueEnrichmentLaneReceipt => ({
+  ok: true, stage: "issue_enrichment", code: "no_candidates", counts: laneCounts(), ...overrides
+} as IssueEnrichmentLaneReceipt);
+const laneInput = (receipt: IssueEnrichmentLaneReceipt, runStartedAt = "2026-08-27T00:00:00.000Z", cycle = 1, recordedAt = "2026-08-27T00:00:01.000Z", runId = "123e4567-e89b-42d3-a456-426614174000") => ({ receipt, runId, runStartedAt, cycle, recordedAt });
 
 describe("review state store", () => {
   const roots: string[] = [];
@@ -13,6 +23,51 @@ describe("review state store", () => {
     vi.useRealTimers();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
+
+  it("EXPECTED_NEGATIVE: admits one whole lane receipt snapshot", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-state-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const record = (store as unknown as { recordIssueEnrichmentLaneReceipt?: (input: unknown) => unknown })
+      .recordIssueEnrichmentLaneReceipt;
+    expect(record).toBeTypeOf("function");
+    const receipt = laneReceipt();
+    expect(record?.call(store, {
+      receipt,
+      runId: "123e4567-e89b-42d3-a456-426614174000",
+      runStartedAt: "2026-08-27T00:00:00.000Z",
+      cycle: 1,
+      recordedAt: new Date("2026-08-27T00:00:01.000Z")
+    })).toMatchObject({ latest: { receipt } });
+    store.close();
+  });
+
+  it("keeps the latest success and most recent failure as independent slots", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-order-")); roots.push(root); const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const failure = laneReceipt({ ok: false, code: "result_not_ok", reason: "unknown_failure" });
+    store.recordIssueEnrichmentLaneReceipt(laneInput(failure));
+    const success = laneReceipt(); const state = store.recordIssueEnrichmentLaneReceipt(laneInput(success, "2026-08-27T00:01:00.000Z", 1, "2026-08-27T00:01:01.000Z", "223e4567-e89b-42d3-a456-426614174000")); const middleFailure = laneReceipt({ ok: false, code: "result_not_ok", reason: "item_failure", counts: laneCounts({ issuesSeen: 1, failed: 1 }) }); const after = store.recordIssueEnrichmentLaneReceipt(laneInput(middleFailure, "2026-08-27T00:00:30.000Z", 1, "2026-08-27T00:00:31.000Z", "323e4567-e89b-42d3-a456-426614174000"));
+    expect(state.latest).toMatchObject({ receipt: success }); expect(state.recentFailure).toMatchObject({ receipt: failure }); expect(after.latest).toMatchObject({ receipt: success }); expect(after.recentFailure).toMatchObject({ receipt: middleFailure }); expect(() => store.recordIssueEnrichmentLaneReceipt(laneInput(success))).toThrow("stale"); expect(() => store.recordIssueEnrichmentLaneReceipt(laneInput(success, "2026-08-27T00:01:00.000Z", 2, "2026-08-27T00:01:02.000Z", "323e4567-e89b-42d3-a456-426614174000"))).toThrow("ambiguous"); store.close();
+  });
+
+  it("accepts classifier cycle-failure reasons", () => { const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-cycle-reasons-")); roots.push(root); const store = new ReviewStateStore(join(root, "state.sqlite")); (["issue_enrichment_disabled", "issue_enrichment_allowlist_empty", "issue_enrichment_live_posting_disabled", "github_app_credentials_required_for_live_issue_comments", "github_app_issues_permission_required", "issue_enrichment_live_repo_thresholds_required", "issue_enrichment_model_runtime_required", "unknown_failure"] as const).forEach((reason, index) => expect(() => store.recordIssueEnrichmentLaneReceipt(laneInput(laneReceipt({ ok: false, code: "cycle_failed", reason }), `2026-08-27T00:${String(index + 3).padStart(2, "0")}:00.000Z`, 1, `2026-08-27T00:${String(index + 3).padStart(2, "0")}:01.000Z`, `123e4567-e89b-42d3-a4${String(index).padStart(2, "0")}-426614174000`))).not.toThrow()); store.close(); });
+
+  it("rejects impossible receipt count roles", () => { const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-roles-")); roots.push(root); const store = new ReviewStateStore(join(root, "state.sqlite")); const reject = (receipt: IssueEnrichmentLaneReceipt) => expect(() => store.recordIssueEnrichmentLaneReceipt(laneInput(receipt))).toThrow("unavailable"); reject(laneReceipt({ code: "disabled", counts: laneCounts({ issuesSeen: 1 }) })); reject(laneReceipt({ ok: false, code: "blocked", reason: "issue_enrichment_disabled" })); reject(laneReceipt({ ok: false, code: "cycle_failed", reason: "item_failure" })); reject(laneReceipt({ ok: true, code: "completed" })); reject(laneReceipt({ ok: true, code: "completed", counts: laneCounts({ issuesSeen: 1, eligible: 1, wouldEnrich: 1, wouldComment: 1, posted: 1, dryRunRecorded: 1 }) })); reject(laneReceipt({ ok: true, code: "completed", counts: laneCounts({ eligible: 1, reposScanned: 1, readFailures: 1 }) })); reject(laneReceipt({ ok: true, code: "completed", counts: laneCounts({ eligible: 1, issuesSeen: 1, failed: 1 }) })); reject(laneReceipt({ ok: true, code: "completed", counts: laneCounts({ eligible: 1, workerSkipped: 1 }) })); reject(laneReceipt({ ok: true, code: "no_candidates", counts: laneCounts({ readFailures: 1, reposScanned: 1 }) })); reject(laneReceipt({ ok: true, code: "no_candidates", counts: laneCounts({ failed: 1, issuesSeen: 1 }) })); reject(laneReceipt({ ok: true, code: "no_candidates", counts: laneCounts({ workerSkipped: 1 }) })); reject(laneReceipt({ ok: true, code: "no_candidates", counts: laneCounts({ issuesSeen: 1, skippedRecorded: 1 }) })); reject(laneReceipt({ ok: true, code: "completed", counts: laneCounts({ issuesSeen: 1, eligible: 1, wouldEnrich: 2 }) })); reject(laneReceipt({ ok: true, code: "no_candidates", counts: laneCounts({ eligible: 1 }) })); reject(laneReceipt({ ok: true, code: "lease_skipped", reason: "worker_lease_held", counts: laneCounts({ workerSkipped: 2 }) })); reject(laneReceipt({ ok: false, code: "result_not_ok", reason: "read_failure", counts: laneCounts({ reposScanned: 1, readFailures: 1, posted: 1, dryRunRecorded: 1 }) })); reject(laneReceipt({ ok: false, code: "result_not_ok", reason: "item_failure", counts: laneCounts({ issuesSeen: 1, failed: 1, posted: 1, dryRunRecorded: 1 }) })); reject(laneReceipt({ ok: false, code: "result_not_ok", reason: "item_failure", counts: laneCounts({ reposScanned: 1, readFailures: 1, issuesSeen: 1, failed: 1 }) })); store.close(); });
+
+  it("snapshots every binding, root, and count getter once", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-getters-")); roots.push(root); const store = new ReviewStateStore(join(root, "state.sqlite")); const reads = new Map<string, number>(); const once = (key: string, value: unknown) => ({ enumerable: true, get: () => { reads.set(key, (reads.get(key) ?? 0) + 1); return reads.get(key) === 1 ? value : "SYNTHETIC_SENTINEL"; } });
+    const source = laneReceipt(); const countSource = source.counts; for (const key of ["ok", "stage", "code", "counts"] as const) Object.defineProperty(source, key, once(`receipt.${key}`, source[key])); for (const key of ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS) Object.defineProperty(countSource, key, once(`count.${key}`, countSource[key]));
+    const input = laneInput(source) as Record<string, unknown>; for (const key of Object.keys(input)) Object.defineProperty(input, key, once(`binding.${key}`, input[key])); store.recordIssueEnrichmentLaneReceipt(input as never);
+    expect([...reads.values()].every((count) => count === 1)).toBe(true); const db = new DatabaseSync(join(root, "state.sqlite"), { readOnly: true }); expect(JSON.stringify(db.prepare("select * from issue_enrichment_receipt_state").all())).not.toContain("SYNTHETIC_SENTINEL"); db.close(); store.close();
+  });
+
+  it("projects malformed stored slots as unavailable and rolls back a failed second write", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-safety-")); roots.push(root); const dbPath = join(root, "state.sqlite"); const store = new ReviewStateStore(dbPath); const success = laneReceipt(); store.recordIssueEnrichmentLaneReceipt(laneInput(success)); store.close();
+    const db = new DatabaseSync(dbPath); db.prepare("update issue_enrichment_receipt_state set recent_failure_receipt_json = ?, recent_failure_run_id = ?, recent_failure_run_started_at = ?, recent_failure_cycle = 1, recent_failure_recorded_at = ?").run(JSON.stringify(success), "123e4567-e89b-42d3-a456-426614174000", "2026-08-27T00:00:00.000Z", "2026-08-27T00:00:01.000Z"); db.close(); const reopened = new ReviewStateStore(dbPath); expect(reopened.getIssueEnrichmentLaneReceiptState().recentFailure).toEqual({ unavailable: true }); reopened.close();
+    const active = new ReviewStateStore(dbPath); const trigger = new DatabaseSync(dbPath); trigger.exec("create trigger fail_recent before update of recent_failure_receipt_json on issue_enrichment_receipt_state begin select raise(abort, 'synthetic'); end"); expect(() => active.recordIssueEnrichmentLaneReceipt(laneInput(laneReceipt({ ok: false, code: "result_not_ok", reason: "unknown_failure" }), "2026-08-27T00:02:00.000Z", 1, "2026-08-27T00:02:01.000Z", "323e4567-e89b-42d3-a456-426614174000"))).toThrow(); trigger.close(); expect(active.getIssueEnrichmentLaneReceiptState().recentFailure).toEqual({ unavailable: true }); active.close();
+  });
+
+  it("orders canonical expanded-year timestamps chronologically", () => { const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-expanded-years-")); roots.push(root); const receipt = laneReceipt(); const store = new ReviewStateStore(join(root, "state.sqlite")); store.recordIssueEnrichmentLaneReceipt(laneInput(receipt, "9999-12-31T23:59:59.000Z", 1, "9999-12-31T23:59:59.000Z")); expect(store.recordIssueEnrichmentLaneReceipt(laneInput(receipt, "9999-12-31T23:59:59.000Z", 1, "+010000-01-01T00:00:00.000Z"))).toMatchObject({ latest: { recordedAt: "+010000-01-01T00:00:00.000Z" } }); store.close(); const next = new ReviewStateStore(join(root, "next.sqlite")); next.recordIssueEnrichmentLaneReceipt(laneInput(receipt, "9999-12-31T23:59:59.000Z", 1, "9999-12-31T23:59:59.000Z")); expect(next.recordIssueEnrichmentLaneReceipt(laneInput(receipt, "+010000-01-01T00:00:00.000Z", 1, "+010000-01-01T00:00:00.000Z"))).toMatchObject({ latest: { runStartedAt: "+010000-01-01T00:00:00.000Z" } }); next.close(); const negative = new ReviewStateStore(join(root, "negative.sqlite")); negative.recordIssueEnrichmentLaneReceipt(laneInput(receipt, "-000001-01-01T00:00:00.000Z", 1, "-000001-01-01T00:00:00.000Z")); expect(negative.recordIssueEnrichmentLaneReceipt(laneInput(receipt, "0000-01-01T00:00:00.000Z", 1, "0000-01-01T00:00:00.000Z"))).toMatchObject({ latest: { runStartedAt: "0000-01-01T00:00:00.000Z" } }); negative.close(); });
 
   it("deduplicates one review per repo, PR, and head SHA", () => {
     vi.useFakeTimers({ now: new Date("2026-08-23T00:00:00.900Z") });
@@ -43,7 +98,7 @@ describe("review state store", () => {
     legacyDb.exec("create table review_queue_jobs (job_id text primary key, attempt_id text, source text, lane text, repo, org text, pull_number integer, head_sha, base_sha text, provider_id text, priority integer, state text, next_eligible_at text, lease_id text, lease_expires_at text, session_id text, comment_id integer, review_url text, last_error text, created_at text, updated_at text, started_at text, finished_at text)");
     const insert = legacyDb.prepare("insert into review_queue_jobs (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at) values (?, ?, 'automatic', 'background', ?, 'Owner', ?, ?, 50, 'queued', ?, ?)");
     const at = "2026-08-24T00:00:00.000Z";
-    const add = (id: string, repo: unknown, pullNumber: number, headSha: unknown) => insert.run(id, id, repo, pullNumber, headSha, at, at);
+    const add = (id: string, repo: string | number | null | Uint8Array, pullNumber: number, headSha: string | number | null | Uint8Array) => insert.run(id, id, repo, pullNumber, headSha, at, at);
     const validRepo = "Owner/Configured-Repo";
     const validHead = "A".repeat(40);
     add("valid", validRepo, 1, validHead);
