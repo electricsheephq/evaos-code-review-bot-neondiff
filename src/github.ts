@@ -31,8 +31,7 @@ export type BoundedGithubList<T> = T[] & {
   overflow: boolean;
 };
 
-export type GitHubIssueLabelEvent = { id?: unknown; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null };
-export type BoundedIssueEventRead = GitHubIssueLabelEvent[] & IssueEventPaginationReceipt<GitHubIssueLabelEvent>;
+export type GitHubIssueLabelEvent = { id?: unknown; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null }; export type BoundedIssueEventRead = GitHubIssueLabelEvent[] & IssueEventPaginationReceipt<GitHubIssueLabelEvent>;
 
 function boundedIssueEventRead(receipt: IssueEventPaginationReceipt<GitHubIssueLabelEvent>): BoundedIssueEventRead {
   const result = receipt.items.slice() as BoundedIssueEventRead;
@@ -217,6 +216,7 @@ export class GitHubApi {
   private readonly requestTimeoutMs: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
+  private repositoryIds = new Map<string, Promise<number>>();
 
   constructor(options: GitHubApiOptions) {
     if (options.privateKey && options.privateKeyPath) {
@@ -451,8 +451,8 @@ export class GitHubApi {
 
   async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedIssueEventRead> {
     const token = await this.getReadToken(repo);
-    const repository = await this.request<RepositorySummary & { id?: unknown }>(`/repos/${repo}`, { token });
-    const endpoint = resolveGitHubIssueEventEndpointIdentity({ apiBaseUrl: this.apiBaseUrl.toString(), repository: repo, repositoryId: repository.id as number, issueNumber });
+    const repositoryId = await (this.repositoryIds.get(repo) ?? (() => { const pending = this.request<RepositorySummary & { id?: unknown }>(`/repos/${repo}`, { token }).then(({ id }) => typeof id === "number" ? id : Number.NaN).catch((error) => { this.repositoryIds.delete(repo); throw error; }); this.repositoryIds.set(repo, pending); return pending; })());
+    const endpoint = resolveGitHubIssueEventEndpointIdentity({ apiBaseUrl: this.apiBaseUrl.toString(), repository: repo, repositoryId, issueNumber });
     if (!endpoint.ok) return boundedIssueEventRead({ items: [], pagesRead: 0, rawCount: 0, uniqueCount: 0, duplicateCount: 0, terminal: "event_history_unbounded", truncated: true, overflow: true });
     const receipt = await readIssueEventHistory<GitHubIssueLabelEvent>({
       endpointIdentity: endpoint.identity,
