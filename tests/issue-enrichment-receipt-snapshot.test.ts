@@ -14,6 +14,10 @@ const plainResult = (overrides: Record<string, unknown> = {}) => ({
 const snap = (value: unknown): IssueEnrichmentReceiptSnapshot => snapshotIssueEnrichmentReceipt(value as never);
 
 describe("issue-enrichment hostile receipt snapshot", () => {
+  it.each(["disabled", "blocked", "ready", "dry_run_only"] as const)("preserves the exact accepted %s state", (state) => {
+    expect(snap({ kind: "result", result: plainResult({ status: { state, blockers: [] } }) }).status.state).toBe(state);
+  });
+
   it("accepts only ordinary roots and nested containers", () => {
     class Result { summary = counts(); status = { state: "ready", blockers: [] }; dryRun = false; ok = true; }
     for (const value of [new Map(), new Date(), new Result()]) {
