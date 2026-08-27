@@ -1010,8 +1010,8 @@ export async function runIssueEnrichmentCycle(input: {
                 try {
                   events = input.github.listIssueLabelEvents ? await input.github.listIssueLabelEvents(repo, issue.number) : undefined;
                 } catch (error) {
+                  issueEventReadFailures.set(key, redactSecrets(error instanceof Error ? error.message : String(error)));
                   if (existing && existing.status !== "failed" && existing.issueUpdatedAt === canonicalIssueUpdatedAt(issue, checkedAt)) preservedEventReadFailures.add(key);
-                  else issueEventReadFailures.set(key, redactSecrets(error instanceof Error ? error.message : String(error)));
                 }
                 if (events) issueEventHistoryByIssue.set(key, events);
                 if (issueEventPaginationTerminal(events) === "event_history_unbounded") {
@@ -1051,7 +1051,6 @@ export async function runIssueEnrichmentCycle(input: {
     scanned.items = scanned.items.map((item) => terminalEventHistoryIssues.has(issueKey(item.repo, item.issueNumber))
       ? { ...item, action: "skipped" as const, reason: "event_history_unbounded" as const }
       : item);
-    scanned.items = scanned.items.filter((item) => !preservedEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
     const eventReadFailureItems = scanned.items.filter((item) => issueEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
     scanned.items = scanned.items.filter((item) => !issueEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
     const combinedRepos = [...baselineRepos, ...scanned.repos];
@@ -1093,7 +1092,7 @@ export async function runIssueEnrichmentCycle(input: {
 
     for (const item of eventReadFailureItems) {
       const issueUpdatedAt = canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt), error = issueEventReadFailures.get(issueKey(item.repo, item.issueNumber))!;
-      if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error, now: new Date(checkedAt) });
+      if (!input.dryRun && !preservedEventReadFailures.has(issueKey(item.repo, item.issueNumber))) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error, now: new Date(checkedAt) });
       summary.failed += 1; items.push({ ...item, ...(!input.dryRun ? { recordStatus: "failed" as const } : {}), error });
     }
 
