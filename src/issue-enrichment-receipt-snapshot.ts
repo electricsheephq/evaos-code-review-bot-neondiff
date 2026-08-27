@@ -34,6 +34,7 @@ const BLOCKERS = new Set<IssueEnrichmentBlocker>([
   ...buildIssueEnrichmentStatus({ config: { issueEnrichment: enabledConfig }, canPostAsApp: true, modelAnalysisAvailable: true,
     issueReadChecks: [{ repo: "owner/repo", ok: false }] }).blockers
 ]);
+const BLOCKER_RANK = new Map([...BLOCKERS].map((blocker, index) => [blocker, index]));
 type RecordValue = Record<string, unknown>;
 type Read = { ok: boolean; value?: unknown };
 const isOrdinaryObject = (value: unknown): value is RecordValue => {
@@ -75,6 +76,7 @@ function snapshotBlockers(value: unknown): IssueEnrichmentBlockersSnapshot {
         else reasons.push(blocker as IssueEnrichmentBlocker);
       } catch { readable = false; complete = false; }
     }
+    reasons.sort((left, right) => (BLOCKER_RANK.get(left) ?? 0) - (BLOCKER_RANK.get(right) ?? 0));
     return frozen({ readable, complete: complete && value.length === length, reasons: frozen(reasons) });
   } catch { return frozen({ readable: false, complete: false, reasons: frozen([]) }); }
 }

@@ -69,6 +69,12 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     expect(snap({ kind: "result", result: plainResult({ status: { state: "blocked", blockers: ["future", 1] } }) }).status.blockers.complete).toBe(false);
   });
 
+  it("canonicalizes recognized blocker order without dropping duplicates", () => {
+    const left = ["issue_enrichment_model_runtime_required", "github_app_issues_permission_required", "github_app_issues_permission_required"], right = [...left].reverse();
+    const capture = (blockers: string[]) => snap({ kind: "result", result: plainResult({ status: { state: "blocked", blockers } }) }).status.blockers;
+    expect(capture(left)).toEqual(capture(right)); expect(JSON.stringify(capture(left))).toBe(JSON.stringify(capture(right)));
+  });
+
   it("extracts only a bounded leading blocker token from thrown errors", () => {
     const token = "issue_enrichment_model_runtime_required";
     expect(snap({ kind: "thrown", error: new Error(`${token}:${"x".repeat(10_000)}`) })).toMatchObject({ reason: token });
