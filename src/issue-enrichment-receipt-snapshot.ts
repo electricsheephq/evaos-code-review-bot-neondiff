@@ -75,7 +75,7 @@ function snapshotBlockers(value: unknown): IssueEnrichmentBlockersSnapshot {
         else reasons.push(blocker as IssueEnrichmentBlocker);
       } catch { readable = false; complete = false; }
     }
-    return frozen({ readable, complete, reasons: frozen(reasons) });
+    return frozen({ readable, complete: complete && value.length === length, reasons: frozen(reasons) });
   } catch { return frozen({ readable: false, complete: false, reasons: frozen([]) }); }
 }
 function snapshotThrown(error: unknown): IssueEnrichmentReceiptSnapshot {

@@ -65,6 +65,7 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     for (let i = 0; i < 40; i++) Object.defineProperty(blockers, String(i), { get: () => { reads++; return "github_app_issues_permission_required"; } });
     const value = snap({ kind: "result", result: plainResult({ status: { state: "blocked", blockers } }) });
     expect(reads).toBe(32); expect(value.status.blockers).toMatchObject({ readable: true, complete: false });
+    const growing = ["placeholder"]; Object.defineProperty(growing, "0", { get: () => { growing.push("github_app_issues_permission_required"); return "github_app_issues_permission_required"; } }); expect(snap({ kind: "result", result: plainResult({ status: { state: "blocked", blockers: growing } }) }).status.blockers.complete).toBe(false);
     expect(snap({ kind: "result", result: plainResult({ status: { state: "blocked", blockers: ["future", 1] } }) }).status.blockers.complete).toBe(false);
   });
 
