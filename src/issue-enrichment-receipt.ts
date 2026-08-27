@@ -43,6 +43,8 @@ const receipt = (ok: boolean, code: IssueEnrichmentLaneCode, counts: IssueEnrich
 const controlsReadable = (snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind: "result" }>): boolean =>
   snapshot.status.readable && snapshot.status.blockers.readable && snapshot.status.blockers.complete &&
   snapshot.dryRun !== "unreadable" && snapshot.ok !== "unreadable";
+const countsAreZeroExcept = (counts: IssueEnrichmentReceiptCounts, exception?: keyof IssueEnrichmentReceiptCounts): boolean =>
+  ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.every((key) => key === exception ? counts[key] > 0 : counts[key] === 0);
 
 const stateConsistent = (snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind: "result" }>): boolean => {
   const { state, blockers } = snapshot.status;
@@ -60,12 +62,13 @@ export function classifyIssueEnrichmentSnapshot(snapshot: IssueEnrichmentReceipt
   const counts = snapshot.summary.counts;
   const readable = controlsReadable(snapshot);
   if (counts.workerSkipped > 0) {
-    return readable && snapshot.ok === "true"
+    return readable && countsAreZeroExcept(counts, "workerSkipped") && snapshot.ok === "true"
       ? receipt(true, "lease_skipped", counts, "worker_lease_held")
       : receipt(false, "result_not_ok", counts, "unknown_failure");
   }
   if (snapshot.status.state === "disabled") {
-    return readable && snapshot.status.blockers.reasons.includes("issue_enrichment_disabled") && snapshot.ok === "true"
+    return readable && countsAreZeroExcept(counts) &&
+      snapshot.status.blockers.reasons.includes("issue_enrichment_disabled") && snapshot.ok === "true"
       ? receipt(true, "disabled", ZERO_COUNTS)
       : receipt(false, "result_not_ok", counts, "unknown_failure");
   }
