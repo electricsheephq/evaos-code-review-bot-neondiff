@@ -4109,14 +4109,16 @@ function normalizeIssueEnrichmentReceipt(value: unknown): NormalizedIssueEnrichm
         Object.keys(value).some((key) => !["ok", "stage", "code", "counts", "reason"].includes(key)) ||
         typeof value.ok !== "boolean" || typeof value.code !== "string" || !ISSUE_ENRICHMENT_RECEIPT_CODES.has(value.code) || (["completed", "no_candidates", "lease_skipped", "disabled"].includes(value.code) !== value.ok) || !isReceiptRecord(value.counts)) throw new Error();
     const counts = value.counts;
-    if (Object.keys(counts).length !== ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.length || ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.some((key) => {
+    if (Object.keys(counts).length !== ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.length) throw new Error();
+    const snapshot = Object.fromEntries(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => {
       const count = counts[key];
-      return !Object.prototype.hasOwnProperty.call(counts, key) || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP;
-    })) throw new Error();
+      if (!Object.prototype.hasOwnProperty.call(counts, key) || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP) throw new Error();
+      return [key, count];
+    }));
     const reason = value.reason;
     if (reason !== undefined && (typeof reason !== "string" || !ISSUE_ENRICHMENT_RECEIPT_REASONS.has(reason))) throw new Error();
     const receipt = { ok: value.ok, stage: "issue_enrichment" as const, code: value.code as IssueEnrichmentLaneReceipt["code"],
-      counts: Object.fromEntries(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, counts[key]])),
+      counts: snapshot,
       ...(reason !== undefined ? { reason: reason as IssueEnrichmentLaneReceipt["reason"] } : {}) } as IssueEnrichmentLaneReceipt;
     return { receipt, receiptJson: JSON.stringify(receipt) };
   } catch { throw new Error("invalid issue enrichment receipt"); }
