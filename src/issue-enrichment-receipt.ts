@@ -44,11 +44,11 @@ function effectiveBlocker(snapshot: Extract<IssueEnrichmentReceiptSnapshot, { ki
 function matrixAccepts(snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind: "result" }>, counts: IssueEnrichmentReceiptCounts): boolean {
   const { state, blockers } = snapshot.status;
   if (!snapshot.status.readable || !blockers.readable || !blockers.complete || snapshot.dryRun === "unreadable" || snapshot.ok === "unreadable") return false;
+  if (blockers.reasons.length !== new Set(blockers.reasons).size) return false;
   if (state === "ready" && blockers.reasons.length !== 0) return false;
   if (state === "dry_run_only" && (blockers.reasons.length !== 1 || blockers.reasons[0] !== "issue_enrichment_live_posting_disabled")) return false;
   if (state === "blocked" && !blockers.reasons.some((reason) => BLOCKING_REASONS.has(reason))) return false;
-  if (state === "disabled") return blockers.reasons.includes("issue_enrichment_disabled") &&
-    blockers.reasons.length === new Set(blockers.reasons).size && blockers.reasons.every((reason) => DISABLED_REASONS.has(reason)) &&
+  if (state === "disabled") return blockers.reasons.includes("issue_enrichment_disabled") && blockers.reasons.every((reason) => DISABLED_REASONS.has(reason)) &&
     snapshot.ok === "true" && zeroExcept(counts);
   if (counts.workerSkipped > 0) return snapshot.dryRun === "false" && snapshot.ok === "true" &&
     (state === "ready" || state === "dry_run_only") && zeroExcept(counts, "workerSkipped");
@@ -56,7 +56,7 @@ function matrixAccepts(snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind:
   if (snapshot.dryRun === "false" && state === "ready" && counts.dryRunRecorded > 0) return false;
   if (snapshot.dryRun === "false" && state === "dry_run_only" && counts.posted > 0) return false;
   if (counts.posted > 0 && counts.dryRunRecorded > 0) return false;
-  if (any(counts, ITEM_KEYS) && counts.issuesSeen === 0) return false;
+  if (ITEM_KEYS.some((key) => counts[key] > counts.issuesSeen)) return false;
   if (counts.readFailures > 0 && counts.reposScanned === 0) return false;
   if (snapshot.ok === "true" && (counts.readFailures > 0 || counts.failed > 0)) return false;
   const blocker = effectiveBlocker(snapshot);

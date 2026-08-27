@@ -52,6 +52,8 @@ describe("issue-enrichment receipt classifier", () => {
     ["read failure without repo", { ok: false, summary: counts({ readFailures: 1 }) }],
     ["successful read failure", { summary: counts({ reposScanned: 1, readFailures: 1 }) }],
     ["successful item failure", { summary: counts({ issuesSeen: 1, failed: 1 }) }],
+    ["item count above issues seen", { summary: counts({ issuesSeen: 1, posted: 2 }) }],
+    ["duplicate blocked reasons", { dryRun: true, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required", "issue_enrichment_model_runtime_required"] } }],
     ["blocked after work", { ok: false, status: { state: "blocked", blockers: ["github_app_issues_permission_required"] }, summary: counts({ issuesSeen: 1 }) }]
   ])("rejects contradictory %s evidence", (_name, overrides) => {
     expect(classify({ kind: "result", result: result(overrides) })).toMatchObject(notOk);
