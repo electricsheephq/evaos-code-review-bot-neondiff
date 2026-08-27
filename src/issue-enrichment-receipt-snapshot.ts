@@ -44,7 +44,7 @@ const isOrdinaryObject = (value: unknown): value is RecordValue => {
   } catch { return false; }
 };
 const read = (value: RecordValue | undefined, key: string): Read => {
-  if (!value) return { ok: false };
+  if (!value || !Object.prototype.hasOwnProperty.call(value, key)) return { ok: false };
   try { return { ok: true, value: value[key] }; } catch { return { ok: false }; }
 };
 const frozen = <T extends object>(value: T): Readonly<T> => Object.freeze(value);

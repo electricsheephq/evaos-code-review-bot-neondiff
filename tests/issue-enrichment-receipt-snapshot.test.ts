@@ -26,6 +26,8 @@ describe("issue-enrichment hostile receipt snapshot", () => {
       const nested = new Date(); Object.assign(nested, key === "summary" ? counts() : { state: "ready", blockers: [] });
       expect(snap({ kind: "result", result: plainResult({ [key]: nested }) }).summary.valid).toBe(key !== "summary");
     }
+    Object.assign(Object.prototype, { summary: counts(), status: { state: "ready", blockers: [] }, dryRun: false, ok: true });
+    try { expect(snap({ kind: "result", result: {} })).toMatchObject({ summary: { valid: false }, dryRun: "unreadable", ok: "unreadable" }); } finally { for (const key of ["summary", "status", "dryRun", "ok"]) delete (Object.prototype as Record<string, unknown>)[key]; }
   });
 
   it("fails closed for revoked and throwing/stateful surfaces", () => {
