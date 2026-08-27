@@ -4126,11 +4126,11 @@ function normalizeIssueEnrichmentReceipt(value: unknown): NormalizedIssueEnrichm
 type IssueEnrichmentReceiptTuple = { receipt: IssueEnrichmentLaneReceipt; receiptJson: string; runId: string; runStartedAt: string; cycle: number; recordedAt: string };
 function normalizeIssueEnrichmentLaneReceiptInput(input: RecordIssueEnrichmentLaneReceiptInput): IssueEnrichmentReceiptTuple {
   try {
-    if (!isReceiptRecord(input) || typeof input.runId !== "string" || !ISSUE_ENRICHMENT_RUN_ID_PATTERN.test(input.runId) ||
-        !isBoundedCanonicalIsoTimestamp(input.runStartedAt) || !isBoundedCanonicalIsoTimestamp(input.recordedAt) ||
-        !Number.isSafeInteger(input.cycle) || input.cycle < 0 || input.cycle > 1_000_000_000 || Date.parse(input.recordedAt) < Date.parse(input.runStartedAt)) throw new Error();
-    const normalized = normalizeIssueEnrichmentReceipt(input.receipt);
-    return { ...normalized, runId: input.runId, runStartedAt: input.runStartedAt, cycle: input.cycle, recordedAt: input.recordedAt };
+    if (!isReceiptRecord(input)) throw new Error();
+    const { receipt, runId, runStartedAt, cycle, recordedAt } = input;
+    if (typeof runId !== "string" || !ISSUE_ENRICHMENT_RUN_ID_PATTERN.test(runId) || !isBoundedCanonicalIsoTimestamp(runStartedAt) || !isBoundedCanonicalIsoTimestamp(recordedAt) || !Number.isSafeInteger(cycle) || cycle < 0 || cycle > 1_000_000_000 || Date.parse(recordedAt) < Date.parse(runStartedAt)) throw new Error();
+    const normalized = normalizeIssueEnrichmentReceipt(receipt);
+    return { ...normalized, runId, runStartedAt, cycle, recordedAt };
   } catch { throw new Error("invalid issue enrichment receipt binding"); }
 }
 function isBoundedCanonicalIsoTimestamp(value: unknown): value is string {
