@@ -39,6 +39,7 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     expect(snap({ kind: "result", result: hostile })).toMatchObject({ summary: { valid: false }, dryRun: "unreadable", ok: "unreadable" });
     const status = new Proxy({ state: "blocked", blockers: [] }, { get() { throw new Error("status"); } });
     expect(snap({ kind: "result", result: plainResult({ status }) }).status).toMatchObject({ readable: false, state: "unreadable" });
+    expect(snap({ kind: "result", result: new Proxy({}, { getOwnPropertyDescriptor() { throw new Error("descriptor"); } }) })).toMatchObject({ summary: { valid: false } });
     const blockers = Proxy.revocable([], {}); blockers.revoke();
     expect(snap({ kind: "result", result: plainResult({ status: { state: "blocked", blockers: blockers.proxy } }) }).status.blockers)
       .toMatchObject({ readable: false, complete: false, reasons: [] });
