@@ -1,4 +1,4 @@
-import { DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS, type IssueEnrichmentBlocker } from "./issue-enrichment.js";
+import type { IssueEnrichmentBlocker } from "./issue-enrichment.js";
 import {
   ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS, snapshotIssueEnrichmentReceipt,
   type IssueEnrichmentReceiptCounts, type IssueEnrichmentReceiptInput, type IssueEnrichmentReceiptSnapshot
@@ -28,6 +28,9 @@ const BLOCKING_REASONS = new Set<IssueEnrichmentBlocker>([
 const DISABLED_REASONS = new Set<IssueEnrichmentBlocker>([
   "issue_enrichment_disabled", "issue_enrichment_allowlist_empty", "issue_enrichment_live_posting_disabled"
 ]);
+const DRY_RUN_IGNORED_REASONS: readonly IssueEnrichmentBlocker[] = Object.freeze([
+  "github_app_credentials_required_for_live_issue_comments", "issue_enrichment_live_posting_disabled", "issue_enrichment_model_runtime_required"
+]);
 const emit = (ok: boolean, code: IssueEnrichmentLaneCode, counts: IssueEnrichmentReceiptCounts, reason?: IssueEnrichmentLaneReason): IssueEnrichmentLaneReceipt =>
   Object.freeze({ ok, stage: "issue_enrichment" as const, code, counts, ...(reason ? { reason } : {}) });
 const zeroExcept = (counts: IssueEnrichmentReceiptCounts, exception?: keyof IssueEnrichmentReceiptCounts): boolean =>
@@ -36,7 +39,7 @@ const any = (counts: IssueEnrichmentReceiptCounts, keys: readonly (keyof IssueEn
 
 function effectiveBlocker(snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind: "result" }>): IssueEnrichmentBlocker | undefined {
   const mayIgnore = snapshot.status.state === "dry_run_only" || (snapshot.dryRun === "true" && snapshot.status.state === "blocked");
-  return snapshot.status.blockers.reasons.find((reason) => !mayIgnore || !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(reason));
+  return snapshot.status.blockers.reasons.find((reason) => !mayIgnore || !DRY_RUN_IGNORED_REASONS.includes(reason));
 }
 function matrixAccepts(snapshot: Extract<IssueEnrichmentReceiptSnapshot, { kind: "result" }>, counts: IssueEnrichmentReceiptCounts): boolean {
   const { state, blockers } = snapshot.status;

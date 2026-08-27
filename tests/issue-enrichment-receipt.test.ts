@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyIssueEnrichmentReceipt, classifyIssueEnrichmentSnapshot } from "../src/issue-enrichment-receipt.js";
 import { ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS, snapshotIssueEnrichmentReceipt } from "../src/issue-enrichment-receipt-snapshot.js";
-import { buildIssueEnrichmentStatus, DEFAULT_ISSUE_ENRICHMENT_CONFIG } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus, DEFAULT_ISSUE_ENRICHMENT_CONFIG, DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS } from "../src/issue-enrichment.js";
 
 const counts = (overrides: Record<string, unknown> = {}) => Object.fromEntries(
   ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, overrides[key] ?? 0])
@@ -75,5 +75,12 @@ describe("issue-enrichment receipt classifier", () => {
     expect(classifyIssueEnrichmentSnapshot(snapshot)).toEqual(classifyIssueEnrichmentSnapshot(snapshot));
     expect(JSON.stringify(classify({ kind: "thrown", error: new Error("customer https://example.test ghp_secret") }))).not.toMatch(/customer|example|ghp_/);
     const hostile = Proxy.revocable({}, {}); hostile.revoke(); expect(classify({ kind: "result", result: hostile.proxy })).toMatchObject({ ok: false, code: "malformed_summary" });
+  });
+
+  it("classifies one accepted snapshot independently of mutable producer controls", () => {
+    const snapshot = snapshotIssueEnrichmentReceipt({ kind: "result", result: result({ dryRun: true, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] } }) });
+    const before = classifyIssueEnrichmentSnapshot(snapshot), removed = DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.delete("issue_enrichment_model_runtime_required");
+    try { expect(classifyIssueEnrichmentSnapshot(snapshot)).toEqual(before); }
+    finally { if (removed) DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.add("issue_enrichment_model_runtime_required"); }
   });
 });
