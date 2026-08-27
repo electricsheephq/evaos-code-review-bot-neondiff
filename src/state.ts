@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import { ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP, ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS } from "./issue-enrichment-receipt-snapshot.js";
+import type { IssueEnrichmentLaneReceipt } from "./issue-enrichment-receipt.js";
 import type { FinishingTouchAction } from "./finishing-touches.js";
 import type { ReviewEvent } from "./types.js";
 
@@ -515,6 +517,10 @@ export interface RecordIssueEnrichmentRepoWatermarkInput {
   now?: Date;
 }
 
+export interface RecordIssueEnrichmentLaneReceiptInput { receipt: IssueEnrichmentLaneReceipt; runId: string; runStartedAt: string; cycle: number; recordedAt: string; }
+export type IssueEnrichmentLaneReceiptStateSlot = { status: "available"; receipt: IssueEnrichmentLaneReceipt; runId: string; runStartedAt: string; cycle: number; recordedAt: string } | { status: "unavailable" };
+export interface IssueEnrichmentLaneReceiptState { latest?: IssueEnrichmentLaneReceiptStateSlot; recentFailure?: IssueEnrichmentLaneReceiptStateSlot; }
+
 export interface ListRepoMemoryNotesInput {
   repo: string;
   includeExpired?: boolean;
@@ -865,6 +871,13 @@ export class ReviewStateStore {
         started_at text not null,
         expires_at text not null,
         owner_pid integer
+      );
+
+      create table if not exists issue_enrichment_receipt_state (
+        id integer primary key check (id = 1), latest_receipt_json text, latest_run_id text,
+        latest_run_started_at text, latest_cycle integer, latest_recorded_at text,
+        recent_failure_receipt_json text, recent_failure_run_id text, recent_failure_run_started_at text,
+        recent_failure_cycle integer, recent_failure_recorded_at text
       );
     `);
     this.ensureProcessedReviewColumns();
@@ -1349,6 +1362,44 @@ export class ReviewStateStore {
     return rows.map(mapReviewReadinessRow);
   }
 
+  recordIssueEnrichmentLaneReceipt(input: RecordIssueEnrichmentLaneReceiptInput): boolean {
+    const candidate = normalizeIssueEnrichmentLaneReceiptInput(input);
+    this.db.exec("begin immediate");
+    try {
+      const row = this.db.prepare("select * from issue_enrichment_receipt_state where id = 1").get() as IssueEnrichmentReceiptStateRow | undefined;
+      const latestOrder = row && readIssueEnrichmentReceiptSlot(row, "latest") ? compareIssueEnrichmentReceiptTuple(candidate, readIssueEnrichmentReceiptSlot(row, "latest")!) : "newer";
+      const failureOrder = row && readIssueEnrichmentReceiptSlot(row, "recent_failure") ? compareIssueEnrichmentReceiptTuple(candidate, readIssueEnrichmentReceiptSlot(row, "recent_failure")!) : "newer";
+      if (latestOrder === "ambiguous" || failureOrder === "ambiguous") throw new Error("issue enrichment receipt has an ambiguous run identity");
+      const advanceLatest = latestOrder === "newer";
+      const advanceFailure = candidate.receipt.ok === false && failureOrder === "newer";
+      if (!advanceLatest && !advanceFailure) { this.db.exec("commit"); return false; }
+      const values = [candidate.receiptJson, candidate.runId, candidate.runStartedAt, candidate.cycle, candidate.recordedAt];
+      if (!row) {
+        this.db.prepare(`insert into issue_enrichment_receipt_state (id, latest_receipt_json, latest_run_id, latest_run_started_at, latest_cycle, latest_recorded_at, recent_failure_receipt_json, recent_failure_run_id, recent_failure_run_started_at, recent_failure_cycle, recent_failure_recorded_at) values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...values, ...(candidate.receipt.ok === false ? values : [null, null, null, null, null]));
+      } else {
+        if (advanceLatest) this.db.prepare("update issue_enrichment_receipt_state set latest_receipt_json = ?, latest_run_id = ?, latest_run_started_at = ?, latest_cycle = ?, latest_recorded_at = ? where id = 1").run(...values);
+        if (advanceFailure) this.db.prepare("update issue_enrichment_receipt_state set recent_failure_receipt_json = ?, recent_failure_run_id = ?, recent_failure_run_started_at = ?, recent_failure_cycle = ?, recent_failure_recorded_at = ? where id = 1").run(...values);
+      }
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+  getIssueEnrichmentLaneReceiptState(): IssueEnrichmentLaneReceiptState {
+    const row = this.db.prepare("select * from issue_enrichment_receipt_state where id = 1").get() as IssueEnrichmentReceiptStateRow | undefined;
+    if (!row) return {};
+    const project = (slot: IssueEnrichmentReceiptTuple | undefined): IssueEnrichmentLaneReceiptStateSlot => slot
+      ? { status: "available", receipt: slot.receipt, runId: slot.runId, runStartedAt: slot.runStartedAt, cycle: slot.cycle, recordedAt: slot.recordedAt }
+      : { status: "unavailable" };
+    return {
+      ...(row.latest_receipt_json !== null || row.latest_run_id !== null || row.latest_run_started_at !== null || row.latest_cycle !== null || row.latest_recorded_at !== null
+        ? { latest: project(readIssueEnrichmentReceiptSlot(row, "latest")) } : {}),
+      ...(row.recent_failure_receipt_json !== null || row.recent_failure_run_id !== null || row.recent_failure_run_started_at !== null || row.recent_failure_cycle !== null || row.recent_failure_recorded_at !== null
+        ? { recentFailure: project(readIssueEnrichmentReceiptSlot(row, "recent_failure")) } : {})
+    };
+  }
   recordIssueEnrichment(input: RecordIssueEnrichmentInput): IssueEnrichmentRecord {
     validateIssueEnrichmentInput(input);
     const existing = this.getIssueEnrichmentRecord(input.repo, input.issueNumber);
@@ -4041,6 +4092,71 @@ function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
   }
 }
 
+const ISSUE_ENRICHMENT_RECEIPT_CODES = new Set(["completed", "no_candidates", "lease_skipped", "disabled", "blocked", "result_not_ok", "cycle_failed", "malformed_summary"]), ISSUE_ENRICHMENT_RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ISSUE_ENRICHMENT_RECEIPT_REASONS = new Set([
+  "issue_enrichment_disabled", "issue_enrichment_allowlist_empty", "issue_enrichment_live_posting_disabled",
+  "github_app_credentials_required_for_live_issue_comments", "github_app_issues_permission_required",
+  "issue_enrichment_live_repo_thresholds_required", "issue_enrichment_model_runtime_required",
+  "worker_lease_held", "read_failure", "item_failure", "unknown_failure", "malformed_summary"
+]);
+const isReceiptRecord = (value: unknown): value is Record<string, unknown> => {
+  try { return typeof value === "object" && value !== null && !Array.isArray(value); } catch { return false; }
+};
+type NormalizedIssueEnrichmentReceipt = { receipt: IssueEnrichmentLaneReceipt; receiptJson: string };
+function normalizeIssueEnrichmentReceipt(value: unknown): NormalizedIssueEnrichmentReceipt {
+  try {
+    if (!isReceiptRecord(value) || !Object.prototype.hasOwnProperty.call(value, "ok") || !Object.prototype.hasOwnProperty.call(value, "stage") || !Object.prototype.hasOwnProperty.call(value, "code") || !Object.prototype.hasOwnProperty.call(value, "counts") || value.stage !== "issue_enrichment" ||
+        Object.keys(value).some((key) => !["ok", "stage", "code", "counts", "reason"].includes(key)) ||
+        typeof value.ok !== "boolean" || typeof value.code !== "string" || !ISSUE_ENRICHMENT_RECEIPT_CODES.has(value.code) || (["completed", "no_candidates", "lease_skipped", "disabled"].includes(value.code) !== value.ok) || !isReceiptRecord(value.counts)) throw new Error();
+    const counts = value.counts;
+    if (Object.keys(counts).length !== ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.length || ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.some((key) => {
+      const count = counts[key];
+      return !Object.prototype.hasOwnProperty.call(counts, key) || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP;
+    })) throw new Error();
+    const reason = value.reason;
+    if (reason !== undefined && (typeof reason !== "string" || !ISSUE_ENRICHMENT_RECEIPT_REASONS.has(reason))) throw new Error();
+    const receipt = { ok: value.ok, stage: "issue_enrichment" as const, code: value.code as IssueEnrichmentLaneReceipt["code"],
+      counts: Object.fromEntries(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, counts[key]])),
+      ...(reason !== undefined ? { reason: reason as IssueEnrichmentLaneReceipt["reason"] } : {}) } as IssueEnrichmentLaneReceipt;
+    return { receipt, receiptJson: JSON.stringify(receipt) };
+  } catch { throw new Error("invalid issue enrichment receipt"); }
+}
+type IssueEnrichmentReceiptTuple = { receipt: IssueEnrichmentLaneReceipt; receiptJson: string; runId: string; runStartedAt: string; cycle: number; recordedAt: string };
+function normalizeIssueEnrichmentLaneReceiptInput(input: RecordIssueEnrichmentLaneReceiptInput): IssueEnrichmentReceiptTuple {
+  try {
+    if (!isReceiptRecord(input) || typeof input.runId !== "string" || !ISSUE_ENRICHMENT_RUN_ID_PATTERN.test(input.runId) ||
+        !isBoundedCanonicalIsoTimestamp(input.runStartedAt) || !isBoundedCanonicalIsoTimestamp(input.recordedAt) ||
+        !Number.isSafeInteger(input.cycle) || input.cycle < 0 || input.cycle > 1_000_000_000 || Date.parse(input.recordedAt) < Date.parse(input.runStartedAt)) throw new Error();
+    const normalized = normalizeIssueEnrichmentReceipt(input.receipt);
+    return { ...normalized, runId: input.runId, runStartedAt: input.runStartedAt, cycle: input.cycle, recordedAt: input.recordedAt };
+  } catch { throw new Error("invalid issue enrichment receipt binding"); }
+}
+function isBoundedCanonicalIsoTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length === 24 && isCanonicalIsoTimestamp(value);
+}
+function compareIssueEnrichmentReceiptTuple(candidate: IssueEnrichmentReceiptTuple, current: IssueEnrichmentReceiptTuple): "newer" | "stale" | "same" | "ambiguous" {
+  if (candidate.runStartedAt !== current.runStartedAt) return candidate.runStartedAt > current.runStartedAt ? "newer" : "stale";
+  if (candidate.runId !== current.runId) return "ambiguous";
+  if (candidate.cycle !== current.cycle) return candidate.cycle > current.cycle ? "newer" : "stale";
+  if (candidate.recordedAt !== current.recordedAt) return candidate.recordedAt > current.recordedAt ? "newer" : "stale";
+  return "same";
+}
+function readIssueEnrichmentReceiptSlot(row: IssueEnrichmentReceiptStateRow, prefix: "latest" | "recent_failure"): IssueEnrichmentReceiptTuple | undefined {
+  const fields = prefix === "latest"
+    ? [row.latest_receipt_json, row.latest_run_id, row.latest_run_started_at, row.latest_cycle, row.latest_recorded_at]
+    : [row.recent_failure_receipt_json, row.recent_failure_run_id, row.recent_failure_run_started_at, row.recent_failure_cycle, row.recent_failure_recorded_at];
+  if (fields.some((field) => field === null) || typeof fields[0] !== "string" || fields[0].length > 4096) return undefined;
+  try {
+    const normalized = normalizeIssueEnrichmentReceipt(JSON.parse(fields[0] as string));
+    if (prefix === "recent_failure" && normalized.receipt.ok) return undefined;
+    const tuple = { ...normalized, runId: fields[1] as string, runStartedAt: fields[2] as string, cycle: fields[3] as number, recordedAt: fields[4] as string };
+    if (!ISSUE_ENRICHMENT_RUN_ID_PATTERN.test(tuple.runId) || !isBoundedCanonicalIsoTimestamp(tuple.runStartedAt) ||
+        !isBoundedCanonicalIsoTimestamp(tuple.recordedAt) || !Number.isSafeInteger(tuple.cycle) || tuple.cycle < 0 || tuple.cycle > 1_000_000_000 ||
+        Date.parse(tuple.recordedAt) < Date.parse(tuple.runStartedAt)) return undefined;
+    return tuple;
+  } catch { return undefined; }
+}
+
 function validateIssueEnrichmentRepoWatermarkInput(input: RecordIssueEnrichmentRepoWatermarkInput): void {
   validateRepoName(input.repo, "repo");
   if (!isCanonicalIsoTimestamp(input.activatedAt)) {
@@ -4460,6 +4576,20 @@ interface IssueEnrichmentRepoWatermarkRow {
   last_checked_at: string;
   created_at: string;
   updated_at: string;
+}
+
+interface IssueEnrichmentReceiptStateRow {
+  id: number;
+  latest_receipt_json: string | null;
+  latest_run_id: string | null;
+  latest_run_started_at: string | null;
+  latest_cycle: number | null;
+  latest_recorded_at: string | null;
+  recent_failure_receipt_json: string | null;
+  recent_failure_run_id: string | null;
+  recent_failure_run_started_at: string | null;
+  recent_failure_cycle: number | null;
+  recent_failure_recorded_at: string | null;
 }
 
 interface FinishingTouchDraftRow {

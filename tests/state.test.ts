@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseProviderCooldownError, ReviewStateStore } from "../src/state.js";
+import { ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS } from "../src/issue-enrichment-receipt-snapshot.js";
+
+const laneReceipt = (ok = true, code = ok ? "completed" : "result_not_ok", reason?: string) => ({ ok, stage: "issue_enrichment", code,
+  counts: Object.fromEntries(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, 0])), ...(reason ? { reason } : {}) });
 
 describe("review state store", () => {
   const roots: string[] = [];
@@ -32,6 +36,67 @@ describe("review state store", () => {
     expect(store.hasProcessed("electricsheephq/WorldOS", 1205, "abc123")).toBe(true);
     expect(store.getProcessedReview("electricsheephq/WorldOS", 1205, "abc123")?.createdAt).toBe("2026-08-23T00:00:00.900Z");
     expect(store.hasProcessed("electricsheephq/WorldOS", 1205, "def456")).toBe(false);
+    store.close();
+  });
+
+  it("EXPECTED_NEGATIVE: durable issue-enrichment receipt state is absent before implementation", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-issue-enrichment-receipt-state-negative-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const receipt = laneReceipt(true, "no_candidates");
+    const api = store as unknown as {
+      recordIssueEnrichmentLaneReceipt(input: unknown): void;
+      getIssueEnrichmentLaneReceiptState(): unknown;
+    };
+    api.recordIssueEnrichmentLaneReceipt({
+      receipt,
+      runId: "11111111-1111-4111-8111-111111111111",
+      runStartedAt: "2026-08-27T00:00:00.000Z",
+      cycle: 1,
+      recordedAt: "2026-08-27T00:00:01.000Z"
+    });
+    expect(api.getIssueEnrichmentLaneReceiptState()).toMatchObject({ latest: { receipt } });
+    store.close();
+  });
+
+  it("stores ordered latest and independent recent-failure receipts", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-issue-enrichment-receipt-state-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const write = (receipt: unknown, runId: string, runStartedAt: string, cycle: number, recordedAt: string) =>
+      store.recordIssueEnrichmentLaneReceipt({ receipt: receipt as never, runId, runStartedAt, cycle, recordedAt });
+    const failure = laneReceipt(false, "result_not_ok", "item_failure");
+    const success = laneReceipt(true, "completed");
+    expect(write(failure, "22222222-2222-4222-8222-222222222222", "2026-08-27T00:00:00.000Z", 2, "2026-08-27T00:00:01.000Z")).toBe(true);
+    expect(write(success, "22222222-2222-4222-8222-222222222222", "2026-08-27T00:00:00.000Z", 3, "2026-08-27T00:00:02.000Z")).toBe(true);
+    expect(write(success, "22222222-2222-4222-8222-222222222222", "2026-08-27T00:00:00.000Z", 1, "2026-08-27T00:00:03.000Z")).toBe(false);
+    expect(() => write({ ...success, ok: false, code: "completed" }, "22222222-2222-4222-8222-222222222222", "2026-08-27T00:00:00.000Z", 4, "2026-08-27T00:00:04.000Z")).toThrow(/invalid/); expect(() => write({ ...failure, ok: true, code: "result_not_ok" }, "22222222-2222-4222-8222-222222222222", "2026-08-27T00:00:00.000Z", 4, "2026-08-27T00:00:04.000Z")).toThrow(/invalid/); expect(() => write(success, "33333333-3333-4333-8333-333333333333", "2026-08-27T00:00:00.000Z", 4, "2026-08-27T00:00:04.000Z")).toThrow(/ambiguous/);
+    const state = store.getIssueEnrichmentLaneReceiptState();
+    expect(state.latest).toMatchObject({ status: "available", receipt: success, runId: "22222222-2222-4222-8222-222222222222", cycle: 3 });
+    expect(state.recentFailure).toMatchObject({ status: "available", receipt: failure, runId: "22222222-2222-4222-8222-222222222222", cycle: 2 });
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    expect(db.prepare("select count(*) as count from issue_enrichment_receipt_state").get()).toEqual({ count: 1 });
+    db.close();
+    store.close();
+    const reopened = new ReviewStateStore(dbPath);
+    expect(reopened.getIssueEnrichmentLaneReceiptState()).toEqual(state);
+    reopened.close();
+  });
+
+  it("rolls back a failed second-slot write and sanitizes malformed storage", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-issue-enrichment-receipt-state-atomic-")); roots.push(root);
+    const dbPath = join(root, "state.sqlite"), store = new ReviewStateStore(dbPath);
+    const write = (receipt: unknown, cycle: number) => store.recordIssueEnrichmentLaneReceipt({ receipt: receipt as never, runId: "44444444-4444-4444-8444-444444444444", runStartedAt: "2026-08-27T00:00:00.000Z", cycle, recordedAt: `2026-08-27T00:00:0${cycle}.000Z` });
+    const success = laneReceipt(true, "completed"), failure = laneReceipt(false, "result_not_ok", "item_failure");
+    expect(write(success, 1)).toBe(true);
+    const db = new DatabaseSync(dbPath); db.exec("create trigger fail_recent before update of recent_failure_receipt_json on issue_enrichment_receipt_state when new.recent_failure_receipt_json is not null begin select raise(abort, 'forced'); end"); db.close();
+    expect(() => write(failure, 2)).toThrow();
+    expect(store.getIssueEnrichmentLaneReceiptState()).toMatchObject({ latest: { cycle: 1 } });
+    const corrupt = new DatabaseSync(dbPath); corrupt.prepare("update issue_enrichment_receipt_state set latest_run_id = ?").run(42); corrupt.close(); expect(store.getIssueEnrichmentLaneReceiptState()).toEqual({ latest: { status: "unavailable" } }); const repair = new DatabaseSync(dbPath); repair.prepare("update issue_enrichment_receipt_state set latest_receipt_json = ?").run("RAW_SENTINEL"); repair.close();
+    const state = store.getIssueEnrichmentLaneReceiptState();
+    expect(state.latest).toEqual({ status: "unavailable" }); expect(JSON.stringify(state)).not.toContain("RAW_SENTINEL");
     store.close();
   });
 
