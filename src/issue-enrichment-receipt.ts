@@ -59,10 +59,8 @@ export function classifyIssueEnrichmentSnapshot(snapshot: IssueEnrichmentReceipt
   if (counts.failed > 0) return receipt(false, "result_not_ok", counts, "item_failure");
   if (!readable) return receipt(false, "result_not_ok", counts, "unknown_failure");
 
-  const effectiveBlocker = snapshot.status.state === "blocked"
-    ? snapshot.status.blockers.reasons.find((reason) =>
-      snapshot.dryRun !== "true" || !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(reason))
-    : undefined;
+  const effectiveBlocker = snapshot.status.blockers.reasons.find((reason) =>
+    snapshot.dryRun !== "true" || !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(reason));
   if (effectiveBlocker) {
     const hasScanEvidence = ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.some((key) => counts[key] > 0);
     return hasScanEvidence

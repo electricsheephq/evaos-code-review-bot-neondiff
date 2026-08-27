@@ -26,6 +26,7 @@ describe("issue-enrichment receipt classifier", () => {
     ["disabled", { kind: "result", result: result({ summary: counts({ issuesSeen: 2 }), status: { state: "disabled", blockers: ["issue_enrichment_disabled"] } }) }, true, "disabled", undefined],
     ["ignored blocker with read failure", { kind: "result", result: result({ ok: false, dryRun: true, summary: counts({ readFailures: 1 }), status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] } }) }, false, "result_not_ok", "read_failure"],
     ["mixed blockers", { kind: "result", result: result({ ok: false, dryRun: true, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required", "github_app_issues_permission_required"] } }) }, false, "blocked", "github_app_issues_permission_required"],
+    ["effective blocker contradicts ready state", { kind: "result", result: result({ status: { state: "ready", blockers: ["github_app_issues_permission_required"] } }) }, false, "blocked", "github_app_issues_permission_required"],
     ["blocker after scan", { kind: "result", result: result({ ok: false, summary: counts({ issuesSeen: 1 }), status: { state: "blocked", blockers: ["github_app_issues_permission_required"] } }) }, false, "result_not_ok", "unknown_failure"],
     ["completed", { kind: "result", result: result({ summary: counts({ wouldEnrich: 1 }) }) }, true, "completed", undefined],
     ["no candidates", { kind: "result", result: result() }, true, "no_candidates", undefined],
