@@ -19,10 +19,11 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
   App broker (#614); the current CLI still requires activation for every
   repository.
 
-The v1.0.5 package-allowlisted schema uses the explicit `requires-license` label
-for the current CLI. The older v1.0.4 package retained the compatibility label
-`free-source-available-beta`, but that label never authorized free review or
-bypassed production activation.
+The v1.0.5 package-allowlisted schema defaults to the explicit
+`requires-license` label for the current CLI. It still accepts the historical
+v1.0.4 `free-source-available-beta` value so existing configs remain loadable,
+but that compatibility label never authorizes free review or bypasses
+production activation.
 
 ## Top-Level Fields
 

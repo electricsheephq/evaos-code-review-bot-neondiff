@@ -53,6 +53,7 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(script).toContain('rollback-current.json');
     expect(script).toContain('rollback-predecessor.json');
     expect(script).not.toContain('"rollback-$VERSION.json"');
+    expect(script).toContain("rollback-pre-mutation-channel.json");
     expect(script).toContain("bounded");
   });
 });
