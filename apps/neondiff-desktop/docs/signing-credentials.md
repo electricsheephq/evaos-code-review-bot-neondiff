@@ -1,8 +1,10 @@
-# NeonDiff Desktop — signing & notarization credential policy
+# NeonDiff Desktop 1.1.0 — signing & notarization credential policy
 
-Canonical names, custody, and CI-injection rules for every credential the desktop
-signing/notarization/auto-update chain needs. **This file contains no secret
-values and no real fingerprints — only names and policy.**
+Canonical names, custody, and CI-injection rules for every credential in the
+Desktop signing/notarization/auto-update chain. **This file contains no secret
+values and no real fingerprints — only names and policy.** The accepted Desktop
+declaration/index and content-addressed accepted packet remain authoritative for
+release identity; credential state never replaces either one.
 
 Two invariants govern everything below:
 
@@ -11,9 +13,9 @@ Two invariants govern everything below:
    committed/published freely. Every *private* key, certificate, password, and API
    key is owner-custody or CI-injected — it is never committed, printed, or logged.
 2. **Presence is checked, values are not disclosed.** `script/preflight-credentials.sh`
-   reports each credential as `present` / `missing` / `invalid` and never prints a
-   secret value (fingerprint tails only where useful). It signs and notarizes
-   nothing — that is issue #322.
+   reports each credential as `present` / `missing` / `invalid` and never prints
+   a secret value. It signs and notarizes nothing; those remain owner-authorized
+   release actions.
 
 Run the doctor anytime (it mutates nothing):
 
@@ -23,6 +25,33 @@ apps/neondiff-desktop/script/preflight-credentials.sh --json   # machine-readabl
 ```
 
 Exit `0` = all required credentials present; non-zero lists exactly what is missing.
+
+## Release identity and package gate
+
+Before an RC or stable signing action, resolve the fixed Desktop declaration and
+accepted packet. RC and stable require a distinct annotated tag object whose
+annotation contains exactly one line:
+
+```text
+NeonDiff-Release-Class: desktop-only
+```
+
+The RC product channel remains `rc`, even though its retained Sparkle enclosure
+and enclosure proof use the observed `beta` feed ring. Stable uses the `stable`
+feed ring. The tag, peeled source, artifact, tree, feed, and packet identities
+must agree.
+
+Issue #559 must first publish and provenance-bind immutable `neondiff@1.0.5`.
+The release manager must read back its exact manifest, tarball, CLI, worker,
+integrity, provenance, and source identity before declaring, signing, or
+notarizing a Desktop candidate. Credential presence cannot bypass this gate.
+The Desktop-only npm no-op is valid only after that package identity is
+reconciled; the tag marker alone does not prove unchanged CLI/worker bytes.
+
+Executable update, rollback, identical-byte re-update, feed/publication, and
+local-adoption commands remain blocked until #895 reaches `source-accepted`.
+Manual copy, source reset, rebuild, LaunchAgent restart, or ad hoc feed mutation
+is not a supported substitute.
 
 ---
 
@@ -93,7 +122,7 @@ against the `SUPublicEDKey` baked into the app.
   gate, the public-key check is advisory/non-required).
 - **Appcast generation:** channel fixtures, rollback behavior, and dry-run XML
   generation are documented in `appcast-channels.md`. Real signing and hosting
-  remain a separate owner/Codex release step.
+  remain a separate owner-authorized release step.
 
 ---
 
@@ -118,5 +147,6 @@ confirm the new credential resolves before relying on it.
 
 This doc and the doctor **report credential presence only**. They do not sign,
 notarize, upload, or fetch anything, print no secret values, and touch no
-review-pipeline surface. Actual signing/notarization wiring is tracked separately
-(#322); the auto-update parent is #116.
+review-pipeline surface. Actual signing/notarization remains part of the #610
+release path; the signed updater outcome is owned by #116 and the sole
+transition implementation by #895.

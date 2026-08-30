@@ -60,7 +60,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("1.0.4");
+    expect(pkg.version).toBe("1.0.5");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -94,10 +94,10 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("1.0.4");
+    expect(lock.version).toBe("1.0.5");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "1.0.4",
+      version: "1.0.5",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
@@ -174,17 +174,17 @@ describe("NeonDiff public release readiness", () => {
       "signed or notarized Mac distribution, Sparkle/appcast, browser/native parity, or v1.1 readiness"
     ]);
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
-    expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.4\}"/);
+    expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.5\}"/);
     for (const path of ["README.md", "docs/SETUP.md"]) {
       const releaseNotice = read(path);
       const normalizedReleaseNotice = releaseNotice.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
-      expect(normalizedReleaseNotice).toContain("v1.0.4 verification notice:");
-      expect(normalizedReleaseNotice).not.toContain("v1.0.4 release notice:");
+      expect(normalizedReleaseNotice).toContain("v1.0.5 verification notice:");
+      expect(normalizedReleaseNotice).not.toContain("v1.0.5 release notice:");
       expect(normalizedReleaseNotice).toContain(
-        "v1.0.4 is the first package intended to enforce mandatory API-backed activation."
+        "Before relying on v1.0.5, verify `npm view neondiff@1.0.5`"
       );
       expect(normalizedReleaseNotice).toContain(
-        "Verify `npm view neondiff version` and the matching non-prerelease GitHub Release before relying on it"
+        "If those identities do not agree, keep using the verified v1.0.4 package"
       );
       expect(normalizedReleaseNotice).toContain("v1.0.3 and earlier do not enforce this boundary.");
       expect(releaseNotice).not.toContain("this source branch");
@@ -773,7 +773,7 @@ describe("NeonDiff public release readiness", () => {
     expect(existsSync("scripts/install.sh")).toBe(true);
     const script = read("scripts/install.sh");
 
-    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.4\}"/);
+    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.5\}"/);
     expect(script).toMatch(/npm[^\n]+install[^\n]+-g[^\n]+neondiff@\$\{NEONDIFF_VERSION\}/);
     expect(script).toMatch(/--dry-run/);
     expect(script).toMatch(/Node\.js 26 or newer/);
@@ -866,6 +866,7 @@ describe("NeonDiff public release readiness", () => {
     const publish = read(".github/workflows/publish-npm.yml");
     const lifecycle = read(".github/workflows/license-lifecycle-proof.yml");
     const releasePolicy = read("scripts/npm-release-policy.mjs");
+    const readiness = read("scripts/check-public-release-ready.mjs");
 
     expect(ci).toMatch(/node-version:\s*26/);
     expect(ci).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
@@ -893,6 +894,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/Verify npm publish token is configured/);
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
     expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance/);
+    expect(readiness).toContain("--prepublication");
+    expect(publish).toContain('--prepublication "$PREPUBLICATION_MODE"');
     expect(releasePolicy).toMatch(/npmTag = packageVersion\.includes\("-"\) \? "beta" : "latest"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);
     expect(publish).toMatch(/environment:\s*npm-publish/);
@@ -964,7 +967,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish.indexOf('node "$POLICY_SCRIPT" verify-pack')).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
     );
-    expect(publish).toMatch(/default:\s*v1\.0\.4/);
+    expect(publish).toMatch(/default:\s*v1\.0\.5/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
     expect(publish).toMatch(/npm install --global npm@11\.17\.0/);
     expect(publish).toContain('test "$(npm --version)" = "11.17.0"');

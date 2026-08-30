@@ -1,0 +1,35 @@
+{
+  "version": "v1.0.5",
+  "packageVersion": "1.0.5",
+  "publishedVersionAtCandidateCut": "v1.0.4",
+  "state": "candidate_pending_publication",
+  "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+  "candidateSourceSha": "30062613be1a4ebd1fe66ae86533181838da6c3e",
+  "publicationProofPath": "docs/evidence/v1.0.5-publication-proof.json",
+  "packageArtifact": {
+    "name": "neondiff",
+    "version": "1.0.5",
+    "requiredForThisRelease": true,
+    "state": "candidate",
+    "previousReleasedPackageVersion": "1.0.4"
+  },
+  "registry": {
+    "state": "pending_publication",
+    "latest": "1.0.4",
+    "predecessor": "1.0.4",
+    "releaseCandidatePresent": false
+  },
+  "proofBoundary": {
+    "allowed": [
+      "package and lock identity are 1.0.5",
+      "sealed-worker and Desktop checks derive version from package identity",
+      "publication proof is required before declaring 1.0.5 published"
+    ],
+    "forbidden": [
+      "neondiff@1.0.5 is published",
+      "npm latest points to 1.0.5",
+      "signed or notarized Desktop distribution is ready",
+      "immutable v1.0.4 package, tag, release, or evidence is rewritten"
+    ]
+  }
+}

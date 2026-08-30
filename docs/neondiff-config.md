@@ -19,10 +19,11 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
   App broker (#614); the current CLI still requires activation for every
   repository.
 
-The v1.0.4 package-allowlisted schema retains the compatibility label
-`free-source-available-beta` so the published tarball remains reproducible. That
-label does not authorize free review or bypass production activation. [#559](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559)
-tracks the typed rename in the next immutable package.
+The v1.0.5 package-allowlisted schema defaults to the explicit
+`requires-license` label for the current CLI. It still accepts the historical
+v1.0.4 `free-source-available-beta` value so existing configs remain loadable,
+but that compatibility label never authorizes free review or bypasses
+production activation.
 
 ## Top-Level Fields
 
@@ -93,7 +94,7 @@ confidence:
 repo:
   visibility: public
   reviewDraftPullRequests: false
-  publicRepoMode: free-source-available-beta
+  publicRepoMode: requires-license
   privateRepoMode: requires-license
 ```
 

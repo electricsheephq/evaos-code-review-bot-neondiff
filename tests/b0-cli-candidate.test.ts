@@ -35,6 +35,7 @@ describe("B0 access-controlled CLI candidate", () => {
     ], { encoding: "utf8" });
     expect(invalidVersion.status).not.toBe(0);
     expect(invalidVersion.stderr).toContain("package version must match 1.1.0-beta.N");
+    expect(read(scriptPath)).toContain('basePackageVersion !== "1.0.5"');
   });
 
   it("records exact package identity, installed capabilities, and the proof boundary", () => {
