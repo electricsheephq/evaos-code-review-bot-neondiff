@@ -12,6 +12,7 @@ import {
   collectReleaseStatus,
   parseLaunchdPrintStatus,
   readPublicReleaseManifestStatus,
+  validateNpmPublicationProof,
   validatePublicReleaseManifestInputs
 } from "../src/release-status.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
@@ -151,6 +152,113 @@ describe("beta release status", () => {
       ""
     ].join("\n"));
   }
+
+  const npmTagCommit = "a".repeat(40);
+  const npmArtifact = { name: "neondiff", version: "1.0.5", integrity: `sha512-${Buffer.alloc(64, 0xab).toString("base64")}`, shasum: "b".repeat(40) };
+  const npmProofPath = "docs/evidence/npm-publication-proof.json";
+
+  function npmProof(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: 1,
+      evidenceKind: "neondiff.npm-publication-proof.v1",
+      observedAt: "2026-08-31T00:00:00.000Z",
+      package: "neondiff",
+      version: "1.0.5",
+      tag: "v1.0.5",
+      tagCommit: npmTagCommit,
+      workflowRun: { id: 123, url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123", workflow: ".github/workflows/publish-npm.yml" },
+      githubRelease: { url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.5", tag: "v1.0.5", draft: false, prerelease: false, publishedAt: "2026-08-31T00:00:00.000Z" },
+      packageArtifact: npmArtifact,
+      registry: { latest: "1.0.5", predecessor: "1.0.4", releaseCandidatePresent: false },
+      sourceIdentity: { mode: "gitHead", gitHead: npmTagCommit },
+      proofBoundary: "npm-registry-publication-only",
+      ...overrides
+    };
+  }
+
+  function writeNpmProof(root: string, proof: unknown, path = npmProofPath): string {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), JSON.stringify(proof));
+    return path;
+  }
+
+  it("accepts each publication identity mode and rejects hostile proof mutations", () => {
+    const root = mkdtempSync(join(tmpdir(), "npm-publication-proof-"));
+    roots.push(root);
+    const validate = (proofPath: string, expectedTagCommit = npmTagCommit) => validateNpmPublicationProof({
+      cwd: root, proofPath, expectedVersion: "v1.0.5", expectedPredecessor: "1.0.4", expectedLatest: "1.0.5",
+      expectedTagCommit, expectedArtifact: npmArtifact, expectedReleaseCandidatePresent: false, now: new Date("2026-08-31T00:00:00.000Z")
+    });
+    const provenance = { verified: true, package: "neondiff", version: "1.0.5", repository: "electricsheephq/evaos-code-review-bot-neondiff", workflow: ".github/workflows/publish-npm.yml", tag: "v1.0.5", commit: npmTagCommit, integrity: npmArtifact.integrity, shasum: npmArtifact.shasum };
+    for (const [name, sourceIdentity] of [["git-head", { mode: "gitHead", gitHead: npmTagCommit }], ["provenance", { mode: "verified_provenance", provenance }]] as const) {
+      expect(validate(writeNpmProof(root, npmProof({ sourceIdentity }), `docs/evidence/${name}.json`)).ok).toBe(true);
+    }
+    const hostile: Array<[string, Record<string, unknown>]> = [
+      ["package", { package: "other" }], ["version", { version: "1.0.4" }],
+      ["latest", { registry: { latest: "1.0.4", predecessor: "1.0.4", releaseCandidatePresent: false } }],
+      ["tag", { tag: "v1.0.4" }], ["source", { sourceIdentity: { mode: "gitHead", gitHead: "c".repeat(40) } }],
+      ["workflow", { workflowRun: { id: 123, url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123", workflow: "other.yml" } }],
+      ["workflow-missing", { workflowRun: { id: 123, url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123" } }],
+      ["workflow-run-mismatch", { workflowRun: { id: 124, url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123" } }],
+      ["workflow-run-alias", { workflowRunId: 124 }],
+      ["integrity", { packageArtifact: { ...npmArtifact, integrity: "sha512-too-short" } }],
+      ["github-release", { githubRelease: { url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.5", tag: "v1.0.5", draft: true, prerelease: false, publishedAt: "2026-08-31T00:00:00.000Z" } }],
+      ["timestamp", { observedAt: undefined }],
+      ["contradictory", { sourceIdentity: { mode: "gitHead", gitHead: npmTagCommit, provenance } }],
+      ["secret-like", { proofBoundary: "sk-fixture-only" }]
+    ];
+    for (const [name, overrides] of hostile) {
+      expect(validate(writeNpmProof(root, npmProof(overrides), `docs/evidence/hostile-${name}.json`)).ok, name).toBe(false);
+    }
+    expect(validate("../outside.json").ok).toBe(false);
+    expect(validate(writeNpmProof(root, "not-json", "docs/evidence/malformed.json")).ok).toBe(false);
+    expect(validate("docs/evidence/missing.json").ok).toBe(false);
+    expect(validate(writeNpmProof(root, npmProof(), "docs/evidence/missing-expected-tag.json"), "").ok).toBe(false);
+  });
+
+  it("keeps a pending candidate non-published and requires proof for published status", () => {
+    const pending = readPublicReleaseManifestStatus({ cwd: repoRoot, manifestPath: "docs/public-release-manifest.json", expectedVersion: "v1.0.5" });
+    expect(pending.npmPublication).toMatchObject({ ok: false, requiredForThisRelease: true, state: "candidate_pending_publication", candidateReadyForPublication: true });
+    const root = mkdtempSync(join(tmpdir(), "npm-publication-status-"));
+    roots.push(root);
+    mkdirSync(join(root, "docs", "releases"), { recursive: true });
+    mkdirSync(join(root, "docs", "release-candidates"), { recursive: true });
+    writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
+    writeFileSync(join(root, "docs", "releases", "v1.0.5.md"), "# v1.0.5\n");
+    writeChangelogHead(root, "1.0.5");
+    const proofPath = writeNpmProof(root, npmProof());
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.5.json"), JSON.stringify({
+      version: "v1.0.5", packageVersion: "1.0.5", state: "published", publishedVersionAtCandidateCut: "v1.0.4", tagCommit: npmTagCommit,
+      publicationProofPath: proofPath, packageArtifact: npmArtifact,
+      registry: { state: "published_latest", latest: "1.0.5", predecessor: "1.0.4", releaseCandidatePresent: false }
+    }));
+    writeFileSync(join(root, "public-release.json"), JSON.stringify({
+      version: "v1.0.5", releaseLevel: "source-beta", packageArtifact: npmArtifact,
+      docs: { version: "v1.0.5", setupPath: "docs/SETUP.md", releaseNotesPath: "docs/releases/v1.0.5.md" },
+      licenseApi: { requiredForThisRelease: false, state: "pending", checkoutIssuanceRequiredForThisRelease: false, checkoutIssuanceState: "deferred", checkoutIssuanceTrackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559" },
+      updateChannels: Object.fromEntries(["cli", "daemon"].map((name) => [name, { requiredForThisRelease: true, state: "source_checkout", version: "v1.0.5", rollback: "git reset --hard refs/tags/v1.0.4" }]))
+    }));
+    const published = readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5", now: new Date("2026-08-31T00:00:00.000Z") });
+    expect(published).toMatchObject({ ok: true, npmPublication: { ok: true, requiredForThisRelease: true, state: "published" } });
+    const manifestPath = join(root, "public-release.json");
+    const manifestFixture = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifestFixture.packageArtifact.shasum = "c".repeat(40);
+    writeFileSync(manifestPath, JSON.stringify(manifestFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication.ok).toBe(false);
+    manifestFixture.packageArtifact.shasum = "b".repeat(40);
+    writeFileSync(manifestPath, JSON.stringify(manifestFixture));
+    const candidatePath = join(root, "docs", "release-candidates", "v1.0.5.json");
+    const candidateFixture = JSON.parse(readFileSync(candidatePath, "utf8"));
+    candidateFixture.state = "published";
+    candidateFixture.registry.releaseCandidatePresent = true;
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5", now: new Date("2026-08-31T00:00:00.000Z") }).npmPublication.ok).toBe(false);
+    candidateFixture.state = "candidate_pending_publication";
+    candidateFixture.registry.state = "pending_publication";
+    candidateFixture.registry.latest = "1.0.5";
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication).toMatchObject({ ok: false, candidateReadyForPublication: false });
+  });
 
   it("fails closed when the live checkout is dirty or not at the expected head", () => {
     const status = buildReleaseStatus({
@@ -4672,6 +4780,7 @@ describe("beta release status", () => {
       ok: false,
       detail: "cli=pending [BLOCKED]; daemon=launchd_prerelease [BLOCKED]"
     });
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "public_npm_publication" }));
     expect(status.recommendedActions).toContain("inspect public release manifest public-release.json");
   });
 

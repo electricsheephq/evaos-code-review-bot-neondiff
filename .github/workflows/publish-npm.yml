@@ -9,9 +9,14 @@ on:
       tag:
         description: Release tag to publish
         required: true
-        default: v1.0.4
+        default: v1.0.5
       provenance_recovery:
         description: Recover the already-published v1.0.4 package through exact npm provenance
+        required: true
+        type: boolean
+        default: false
+      predecessor_rollback:
+        description: Roll back npm latest from immutable 1.0.5 to immutable 1.0.4 after guarded verification
         required: true
         type: boolean
         default: false
@@ -26,16 +31,144 @@ permissions:
   attestations: read
 
 jobs:
+  rollback_predecessor:
+    name: Roll back npm latest to immutable predecessor
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.predecessor_rollback == true }}
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify rollback dispatch and policy identity
+        env:
+          PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "::error::Predecessor rollback must run from protected main"
+            exit 1
+          }
+          test "$PROVENANCE_RECOVERY" != "true" || {
+            echo "::error::Predecessor rollback cannot run with provenance recovery"
+            exit 1
+          }
+          test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/publish-npm.yml@refs/heads/main" || {
+            echo "::error::Predecessor rollback workflow ref must be publish-npm.yml on protected main"
+            exit 1
+          }
+          test "$WORKFLOW_SHA" = "$GITHUB_SHA" || {
+            echo "::error::Predecessor rollback workflow SHA must equal protected-main dispatch SHA"
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || {
+            echo "::error::Predecessor rollback checkout is not the protected-main dispatch SHA"
+            exit 1
+          }
+
+      - name: Setup rollback Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify immutable packages and rollback precondition
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN Actions secret is not configured; rollback cannot continue"
+            exit 1
+          fi
+          npm view neondiff dist-tags --json --prefer-online > rollback-channel.json
+          LATEST_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags.latest ?? "")' rollback-channel.json)"
+          QUARANTINE_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags["release-candidate"] ?? "")' rollback-channel.json)"
+          test "$LATEST_VERSION" = "1.0.5" || {
+            echo "::error::Rollback requires npm latest=1.0.5 before the guarded mutation"
+            exit 1
+          }
+          npm view neondiff@1.0.5 name version dist --json --prefer-online > rollback-current.json
+          npm view neondiff@1.0.4 name version dist --json --prefer-online > rollback-predecessor.json
+          CURRENT_TAG_COMMIT="$(git rev-list -n 1 v1.0.5)"
+          PREDECESSOR_TAG_COMMIT="$(git rev-list -n 1 v1.0.4)"
+          for VERSION in 1.0.5 1.0.4; do
+            npm view "neondiff@$VERSION" dist.attestations.url --json --prefer-online > "rollback-$VERSION-attestation-url.json"
+            ATTESTATION_URL="$(node -e 'const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(typeof value === "string" ? value : "")' "rollback-$VERSION-attestation-url.json")"
+            test "$ATTESTATION_URL" = "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@$VERSION" || {
+              echo "::error::Registry provenance URL is missing or untrusted"
+              exit 1
+            }
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 3 --retry-all-errors --retry-max-time 120 "$ATTESTATION_URL" > "rollback-$VERSION-attestations.json"
+            METADATA_PATH="rollback-current.json"
+            if [ "$VERSION" = "1.0.4" ]; then METADATA_PATH="rollback-predecessor.json"; fi
+            INTEGRITY="$(node -e 'const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(value.dist?.integrity ?? "")' "$METADATA_PATH")"
+            node scripts/verify-npm-provenance.mjs \
+              --attestations "rollback-$VERSION-attestations.json" \
+              --expected-package neondiff \
+              --expected-version "$VERSION" \
+              --expected-integrity "$INTEGRITY" \
+              --expected-repository "$GITHUB_REPOSITORY" \
+              --expected-workflow .github/workflows/publish-npm.yml \
+              --expected-tag "v$VERSION" \
+              --expected-commit "$([ "$VERSION" = "1.0.5" ] && printf '%s' "$CURRENT_TAG_COMMIT" || printf '%s' "$PREDECESSOR_TAG_COMMIT")" \
+              > "rollback-$VERSION-provenance.json"
+          done
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            for (const version of ["1.0.5", "1.0.4"]) {
+              const metadataPath = `rollback-${version === "1.0.5" ? "current" : "predecessor"}.json`;
+              const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+              const provenance = JSON.parse(readFileSync(`rollback-${version}-provenance.json`, "utf8"));
+              writeFileSync(`rollback-${version}-verified.json`, `${JSON.stringify({ name: metadata.name, version: metadata.version, dist: metadata.dist, provenance: { ...provenance, verified: true, shasum: metadata.dist?.shasum } })}\n`);
+            }
+          '
+          node scripts/npm-release-policy.mjs verify-predecessor-rollback \
+            --event-name workflow_dispatch \
+            --github-ref "$GITHUB_REF" \
+            --predecessor-rollback true \
+            --latest-version "$LATEST_VERSION" \
+            --quarantine-version "$QUARANTINE_VERSION" \
+            --target-version 1.0.4 \
+            --expected-predecessor 1.0.4 \
+            --current-metadata rollback-1.0.5-verified.json \
+            --predecessor-metadata rollback-1.0.4-verified.json \
+            --current-tag-commit "$CURRENT_TAG_COMMIT" \
+            --predecessor-tag-commit "$PREDECESSOR_TAG_COMMIT"
+
+      - name: Guarded predecessor dist-tag rollback
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main && test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" && npm view neondiff dist-tags --json --prefer-online > rollback-pre-mutation-channel.json && node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== "1.0.5" || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json || { echo "::error::Rollback precondition changed immediately before mutation"; exit 1; }
+          # The policy and precondition checks above authorize this one bounded mutation only.
+          npm dist-tag add "neondiff@1.0.4" latest
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            OBSERVED_LATEST="$(npm view neondiff dist-tags.latest --json --prefer-online 2>/dev/null || true)"
+            if [ "$OBSERVED_LATEST" = '"1.0.4"' ] || [ "$OBSERVED_LATEST" = "1.0.4" ]; then
+              echo "bounded predecessor rollback converged at latest=1.0.4"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Bounded predecessor rollback did not converge to latest=1.0.4"
+          exit 1
+
   publish:
     name: Publish neondiff
     runs-on: ubuntu-latest
     environment: npm-publish
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'release' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'release') && inputs.predecessor_rollback != true }}
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
       RELEASE_EVENT_NAME: ${{ github.event_name }}
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease || false }}
       PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+      PREDECESSOR_ROLLBACK: ${{ inputs.predecessor_rollback || false }}
       WORKFLOW_REF: ${{ github.workflow_ref }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
@@ -175,6 +308,8 @@ jobs:
 
       - name: Verify package
         if: steps.package_release.outputs.should_publish == 'true'
+        env:
+          PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
         run: |
           npx vitest run tests/public-release-readiness.test.ts --pool=forks --maxWorkers=1
           PACK_DIR="$RUNNER_TEMP/neondiff-reviewed-pack"
@@ -190,6 +325,8 @@ jobs:
           if npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true
           fi
+          PREPUBLICATION_MODE=false
+          if [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then PREPUBLICATION_MODE=true; fi
           node scripts/check-public-release-ready.mjs \
             --manifest docs/public-release-manifest.json \
             --expected-version "v$PACKAGE_VERSION" \
@@ -197,7 +334,8 @@ jobs:
             --release-head "$RELEASE_HEAD" \
             --pack pack.json \
             --tarball "$PACK_TARBALL" \
-            --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
+            --existing-package-recovery "$PACKAGE_ALREADY_EXISTS" \
+            --prepublication "$PREPUBLICATION_MODE"
 
       - name: Checkout protected-main recovery policy
         if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
@@ -304,6 +442,8 @@ jobs:
             echo "::error::Protected-main npm execution must remain in provenance recovery mode"
             exit 1
           fi
+          PREPUBLICATION_MODE=false
+          if [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then PREPUBLICATION_MODE=true; fi
           RECOVERY_PROOF_PATH=""
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -347,7 +487,8 @@ jobs:
             --release-head "$EXPECTED_GIT_HEAD" \
             --pack pack.json \
             --tarball "$PACK_TARBALL" \
-            --existing-package-recovery "$PACKAGE_ALREADY_EXISTS"
+            --existing-package-recovery "$PACKAGE_ALREADY_EXISTS" \
+            --prepublication "$PREPUBLICATION_MODE"
           # BEGIN V104_PROVENANCE_RECOVERY_PUBLISH_GUARD
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
             test "$PACKAGE_ALREADY_EXISTS" = "true" || {

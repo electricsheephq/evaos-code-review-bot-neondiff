@@ -38,6 +38,7 @@ const releaseHead = args.get("release-head");
 const packPath = args.get("pack");
 const tarballPath = args.get("tarball");
 const existingPackageRecovery = args.get("existing-package-recovery") ?? "false";
+const prepublication = args.get("prepublication") ?? "false";
 if (!manifestPath || !expectedVersion || !candidateHead || !releaseHead || !packPath || !tarballPath) {
   fail("required arguments: --manifest --expected-version --candidate-head --release-head --pack --tarball");
 }
@@ -46,6 +47,8 @@ if (!/^[a-f0-9]{40}$/.test(releaseHead)) fail("release head must be a full lower
 if (existingPackageRecovery !== "true" && existingPackageRecovery !== "false") {
   fail("--existing-package-recovery must be true or false");
 }
+if (prepublication !== "true" && prepublication !== "false") fail("--prepublication must be true or false");
+if (prepublication === "true" && existingPackageRecovery === "true") fail("prepublication cannot be combined with existing-package recovery");
 
 const cwd = process.cwd();
 const status = readPublicReleaseManifestStatus({
@@ -54,7 +57,8 @@ const status = readPublicReleaseManifestStatus({
   expectedVersion,
   allowStaleActivationProof: existingPackageRecovery === "true"
 });
-if (!status.ok) fail("public release manifest is blocked; run release-status locally for redacted gate details");
+const prepublicationReady = prepublication === "true" && status.npmPublication.ok === false && status.npmPublication.requiredForThisRelease === true && status.npmPublication.state === "candidate_pending_publication" && status.npmPublication.candidateReadyForPublication === true && status.releaseLevelGate.ok && status.docs.ok && status.licenseApi.ok && status.updateChannels.ok;
+if ((!status.ok && !prepublicationReady) || (prepublication === "true" && !prepublicationReady)) fail("public release manifest is blocked; run release-status locally for redacted gate details");
 const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
 if (actualHead !== releaseHead) fail("release head does not match the checked-out commit");
 
@@ -106,6 +110,8 @@ process.stdout.write(`${JSON.stringify({
   candidateHead,
   releaseHead,
   existingPackageRecovery: existingPackageRecovery === "true",
+  prepublication: prepublication === "true",
+  publicReady: prepublication !== "true",
   packShasum: pack.shasum,
   packIntegrity: pack.integrity,
   activationProofPath

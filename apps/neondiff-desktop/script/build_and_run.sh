@@ -344,7 +344,8 @@ case "$MODE" in
     if [ "$BUILD_CONFIGURATION" = "release" ]; then
       "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
       test -x "$APP_HELPERS/NeonDiffWorker"
-      test "$("$APP_HELPERS/NeonDiffWorker" --version)" = "1.0.4"
+      EXPECTED_WORKER_VERSION="$(node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(pkg.version);' "$REPO_ROOT/package.json")"
+      test "$("$APP_HELPERS/NeonDiffWorker" --version)" = "$EXPECTED_WORKER_VERSION"
       test "$(/usr/libexec/PlistBuddy -c 'Print :NeonDiffSourceSHA' "$INFO_PLIST")" = "$RELEASE_SOURCE_SHA"
     fi
     INVALID_BUNDLE_ROOT_ENTRIES="$(find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents -print)"

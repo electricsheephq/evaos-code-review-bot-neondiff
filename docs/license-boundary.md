@@ -45,7 +45,7 @@ provider tokens.
 
 The supported distribution pins the canonical production license API, requires
 live activation for public/private/internal/unknown repository work, and grants
-zero offline cache authority in v1.0.4. User or legacy config cannot disable
+zero offline cache authority in v1.0.5. User or legacy config cannot disable
 enforcement, restore a public-free path, redirect the API, or enable grace: a
 local visibility flag would trust the client's own claim, so the managed
 public-free path is deferred to the native app and the server-side GitHub App

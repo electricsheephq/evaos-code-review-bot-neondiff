@@ -1,17 +1,42 @@
-# NeonDiff Desktop Appcast Channels
+# NeonDiff Desktop 1.1.0 Appcast Channels
 
-This document covers the buildable appcast generation lane for NeonDiff Desktop.
-It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
+This document covers the repository-owned appcast generation and evidence lane
+for NeonDiff Desktop `1.1.0`. The Desktop declaration/index and content-addressed
+accepted packet own release identity; this document does not prove hosted feeds,
+notarized artifacts, or real EdDSA signing.
 
 ## Channels
 
-- `beta`: early or signed candidate builds for opted-in testers; fixture output
-  is not a public or GA release.
-- `stable`: future signed release builds only after #116 and #610 signed-feed,
-  immutable-artifact, install, and rollback proof has passed.
+- `beta`: early or signed candidate builds for opted-in testers, using the beta
+  product channel and beta feed ring; fixture output is not a public or GA
+  release.
+- `rc`: the RC product channel for `v1.1.0-rc.N`. Its retained Sparkle
+  enclosure and enclosure-proof channel remain the observed `beta` feed ring;
+  `rc` must not be relabeled as a beta product declaration.
+- `stable`: final signed release builds using the stable product channel and
+  stable feed ring, only after #116/#610 signed-feed, immutable-artifact,
+  install, and rollback proof has passed.
 - Rollback is represented by a stable feed whose newest marker pins the channel
   latest to an earlier stable version via `rollback_to`; the generated appcast
   excludes the superseded newer build so Sparkle cannot select it.
+
+RC and stable declarations require a distinct annotated tag object whose
+annotation contains exactly one line:
+
+```text
+NeonDiff-Release-Class: desktop-only
+```
+
+Issue #559 must first publish and provenance-bind immutable `neondiff@1.0.5`.
+The Desktop-only npm no-op is not valid until the exact package manifest,
+tarball, CLI, worker, integrity, provenance, and source identity are read back.
+The marker does not bypass that package gate.
+
+Executable update, rollback, identical-byte re-update, feed/publication, and
+local-adoption commands remain blocked until #895 reaches `source-accepted`.
+Use only the exact tested repository-owned transition command after that gate;
+manual copy, source reset, rebuild, LaunchAgent restart, or ad hoc feed mutation
+is not a supported substitute.
 
 ## Dry-Run Generator
 
@@ -49,9 +74,10 @@ Dry-run mode never signs, uploads, notarizes, or fabricates a real signature.
 The `sparkle:edSignature` attribute appears only when the manifest explicitly
 contains an `ed_signature`, such as the signature-failure fixture.
 
-The generated XML follows Sparkle 2's appcast publishing model: beta releases
-use the item-level `sparkle:channel` element, and EdDSA signatures live on the
-download enclosure as `sparkle:edSignature`.
+The generated XML follows Sparkle 2's appcast publishing model: beta and RC
+enclosures use the item-level `sparkle:channel` element with `beta`, while
+stable uses `stable`; EdDSA signatures live on the download enclosure as
+`sparkle:edSignature`.
 
 ## Dry-Run Status Taxonomy
 
@@ -102,7 +128,7 @@ manifest metadata.
 
 ## Proof Boundary
 
-This lane proves channel modeling, rollback ordering, fixtures, and local
-appcast XML generation only. It does not prove Sparkle client update success,
-signature verification, hosting, notarization, public download readiness, or GA
-readiness.
+This lane proves channel modeling, RC-versus-beta feed-ring mapping, rollback
+ordering, fixtures, and local appcast XML generation only. It does not prove
+Sparkle client update success, signature verification, hosting, notarization,
+public download readiness, transition execution, or GA readiness.

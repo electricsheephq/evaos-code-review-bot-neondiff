@@ -180,6 +180,14 @@ describe("NeonDiff config schema draft", () => {
     expect(errorPaths(invalidErrors)).toContain("/reviewGate/reviewEventPolicy/mode");
   });
 
+  it("loads the immutable v1.0.4 public mode compatibility label without changing the safe default", () => {
+    const schema = readJson(schemaPath);
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+    expect(get("properties.repo.properties.publicRepoMode.default", schema)).toBe("requires-license");
+    expectValidFixture(validate, "legacy v1.0.4 public mode", { ...baseConfig, repo: { ...asRecord(baseConfig.repo), publicRepoMode: "free-source-available-beta" } });
+  });
+
   it("publishes the safe runtime review-event mode in committed JSON examples", () => {
     for (const path of ["config.example.json", "config.active-profiles.example.json"]) {
       expect(get("reviewGate.reviewEventPolicy.mode", readJson(path)), path).toBe("trusted_command_only");
