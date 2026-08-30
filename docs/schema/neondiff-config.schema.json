@@ -458,8 +458,8 @@
         },
         "publicRepoMode": {
           "type": "string",
-          "enum": ["free-source-available-beta", "disabled"],
-          "default": "free-source-available-beta"
+          "enum": ["requires-license", "disabled"],
+          "default": "requires-license"
         },
         "privateRepoMode": {
           "type": "string",

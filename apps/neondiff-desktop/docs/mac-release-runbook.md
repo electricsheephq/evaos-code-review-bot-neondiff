@@ -1,17 +1,26 @@
-# NeonDiff Desktop Mac Release Runbook
+# NeonDiff Desktop 1.1.0 Mac Release Runbook
 
-This is the handoff-grade runbook for building, signing, notarizing, stapling,
-validating, and recording evidence for a NeonDiff Desktop macOS artifact. It is
-a release-execution checklist for the owner and a Codex agent once the missing
-Apple/Sparkle inputs are available.
+This is the repository-owned checklist for the NeonDiff Desktop `1.1.0` GA
+release path: accepted declaration and packet resolution, private candidate
+construction, signing/notarization evidence, appcast evidence, and redacted
+handoff. The authoritative release identity is the append-only Desktop
+declaration history at `docs/releases/desktop/index.json` and its referenced
+declarations. The accepted packet and artifact-source attestation are the
+authorities for the exact bytes; a checkout, current Actions artifact, mutable
+feed, or installed app is not a substitute.
 
-Proof boundary: this document closes the #322 documentation lane only. It does
-not prove a signed artifact exists, does not submit anything to Apple, does not
-publish an appcast, and does not make the desktop update channel GA-ready.
-Parent issue #116 owns the signed auto-update channel, #323 owns appcast
-fixtures/dry-run generation, #324 owns credential naming/custody, #325 owns the
-desktop onboarding wizard, #327 owns production license-service deployment, and
-the roadmap handoff index is #374.
+The release owner must preserve the ordered `#610` path: #559 first publishes
+and provenance-binds immutable `neondiff@1.0.5`, #116 owns the signed updater
+outcome, and #895 is the sole repository-owned update/rollback implementation.
+This document does not itself prove a signed artifact, notarization, feed
+publication, installed update, runtime adoption, customer readiness, or GA.
+
+**TRANSITION GATE:** executable update, rollback, identical-byte re-update,
+feed/publication, and local-adoption commands remain blocked until #895 reaches
+`source-accepted` with its exact-head CI, review, and acceptance evidence. Until
+then, use only declaration/packet resolution, credential presence checks, and
+non-mutating dry-plan evidence. Manual copy, source reset, rebuild, LaunchAgent
+restart, database edit, or ad hoc feed mutation is not a supported substitute.
 
 ## Release State Gates
 
@@ -25,7 +34,30 @@ state is complete.
 | Signed/notarized proof | Developer ID signing, notarization acceptance, stapling, post-staple `codesign`, and `spctl` all pass on the same artifact. | Stop on any signing, notarization, stapling, or Gatekeeper failure. |
 | Updater/feed proof | The appcast references the exact hosted artifact, includes the EdDSA signature, and has rollback/signature-failure evidence. | Stop if hosting is undecided, feed URL does not match the app, signature is missing, or rollback is unresolved. |
 | TCC proof | A final signed/notarized artifact is used for any Accessibility, Screen Recording, microphone, or other TCC acceptance proof. | Stop if proof comes from an unsigned/ad-hoc app or a different signing identity. |
-| Customer readiness | Owner-approved release notes, license/update policy, hosting, rollback, and support handoff are recorded. | Stop if #327 or any customer-facing entitlement/update policy is unresolved for the chosen channel. |
+| Customer readiness | Owner-approved release notes, license/update policy, hosting, rollback, and support handoff are recorded. | Stop if the customer-facing entitlement/update policy is unresolved for the chosen channel. |
+
+## Release identity and package gate
+
+For every RC or stable candidate, resolve the fixed Desktop tag from the
+accepted declaration and require a distinct annotated tag object. Its annotation
+must contain exactly one line:
+
+```text
+NeonDiff-Release-Class: desktop-only
+```
+
+The RC product channel is `rc`; its retained Sparkle enclosure and enclosure
+proof remain on the observed `beta` feed ring. Stable uses product channel and
+feed ring `stable`. The exact channel, tag object, peeled source commit,
+artifact, tree, feed, and packet identities must agree before any candidate
+bytes are staged.
+
+Before an RC declaration, signing, or notarization, #559 must have published
+immutable `neondiff@1.0.5` and a fresh registry readback must prove its exact
+manifest, tarball, CLI, worker, integrity, provenance, and source identity.
+The Desktop-only npm classification is a no-op for the Desktop release only
+after this package identity gate is satisfied; the marker never proves
+unchanged CLI/worker bytes and never bypasses #559.
 
 ## Fast Desktop Iteration Before Release
 
@@ -155,20 +187,21 @@ The doctor reports presence only. It does not sign, notarize, upload, fetch
 artifacts, or print secret values. Canonical credential names and custody rules
 live in `apps/neondiff-desktop/docs/signing-credentials.md`.
 
-Known handoff gap recorded on #322: this machine was reported to have a Developer ID
-Application certificate and Sparkle private key available, but to be missing
-notarization credentials and the Sparkle public key. Treat that state as a
-release blocker until the owner provides the notarization input and
-`NEONDIFF_SPARKLE_PUBLIC_ED_KEY`.
+Credential presence never bypasses the immutable package gate above. Do not
+declare, tag, sign, notarize, or stage a candidate while #559's `1.0.5`
+manifest, tarball, CLI, worker, integrity, provenance, and source readback is
+missing or disagrees with the accepted source.
 
 Required owner/Codex inputs for a real signing run:
 
-- Exact release source SHA, version, build number, and channel.
+- Exact accepted declaration, source SHA, annotated tag and tag-object SHA,
+  version, build, product channel, and accepted packet digest.
+- Fresh #559 registry readback for immutable `neondiff@1.0.5`.
 - Unique portable `RUN_ID` for this immutable evidence packet.
 - Developer ID Application identity name, for example
   `Developer ID Application: <Team Name> (<TEAMID>)`.
-- Notarization path: either `NEONDIFF_NOTARY_KEYCHAIN_PROFILE` or the App Store
-  Connect API-key environment described in #324.
+- Notarization path: either `NEONDIFF_NOTARY_KEYCHAIN_PROFILE` or the approved
+  App Store Connect API-key environment described in `signing-credentials.md`.
 - Sparkle public key as `NEONDIFF_SPARKLE_PUBLIC_ED_KEY`.
 - Sparkle feed URL as `NEONDIFF_SPARKLE_FEED_URL`.
 - Appcast hosting destination and rollback destination.
@@ -176,7 +209,8 @@ Required owner/Codex inputs for a real signing run:
 
 ## Build The Release App
 
-Set the exact bundle version and build number before creating the app bundle.
+After the declaration and package gates pass, set the exact bundle version and
+build number before creating the private candidate bundle.
 The bundle id is `com.electricsheephq.NeonDiffDesktop`; the minimum supported
 macOS version is 14.0.
 
@@ -257,7 +291,7 @@ failure. Do not continue to notarization with a failed signing check.
 ## Notarize And Staple
 
 Create a zip for Apple notarization with `ditto`, then submit it through one of
-the notarization paths documented in #324.
+the notarization paths documented in `signing-credentials.md`.
 
 ```sh
 cd "$REPO_ROOT/apps/neondiff-desktop"
@@ -308,9 +342,10 @@ states are accepted.
 
 ## Appcast, Signature, Hosting, And Rollback
 
-Use the #323 appcast generator and committed fixtures as the local appcast
-model. The generator creates local XML only; it does not sign, upload, or
-fabricate a real Sparkle signature.
+Use the committed appcast fixtures and generator as the local appcast model.
+The generator creates local XML only; it does not sign, upload, or fabricate a
+real Sparkle signature. See `appcast-channels.md` for the product-channel and
+feed-ring contract.
 
 ```sh
 "$REPO_ROOT/apps/neondiff-desktop/script/generate-appcast.sh" \
@@ -325,30 +360,36 @@ and Sparkle EdDSA signature. The EdDSA signature must come from Sparkle's
 `sign_update` using owner-custodied private key material. Never commit, log, or
 write the Sparkle private key to evidence.
 
-Owner decision still required: choose and document the appcast hosting URL and
-artifact hosting URL before publishing any feed. The feed URL must match the
+The owner must choose and document the appcast hosting URL and artifact hosting
+URL before publishing any feed. The feed URL must match the
 `NEONDIFF_SPARKLE_FEED_URL` baked into the signed app.
+
+Do not publish an RC or stable feed, product release, or public artifact from
+this documentation lane before #895 is `source-accepted` and the relevant
+release authority has been recorded. After that gate, use only the exact tested
+repository-owned command supplied by #895; never assemble a transition from
+these snippets or from a mutable live feed.
 
 Rollback proof:
 
-- Generate or reference the #323 rollback fixture/appcast.
+- Generate or reference the committed rollback fixture/appcast.
 - Record the rollback target version, build, channel, artifact URL, checksum,
   release-note URL, and reason.
 - Confirm the rollback appcast excludes the superseded newer build.
 
 Signature-failure proof:
 
-- Reference the #323 signature-failure fixture and evidence.
+- Reference the committed signature-failure fixture and evidence.
 - Confirm the expected client-side status is `signature_error`.
 - Do not treat the dry-run fixture as real Sparkle client proof; real client
   signature failure requires a signed/notarized app and hosted appcast.
 
 License boundary:
 
-- Private/gated update behavior depends on #327 production license-service
-  deployment.
-- Until #327 is live and enabled for the channel, release notes must say whether
-  updates are public, gated, or intentionally deferred.
+- Private/gated update behavior depends on the approved production entitlement
+  service and channel declaration. Until that service is live and enabled for
+  the channel, release notes must say whether updates are public, gated, or
+  intentionally deferred.
 
 ## Evidence Packet
 
@@ -360,9 +401,11 @@ $RUN_DIR/
 
 Minimum files:
 
-- `source.txt`: repo, branch, source SHA, tag or intended tag, version, build,
-  bundle id, channel, operator, UTC timestamp, and, when CI-built, workflow run
-  URL plus artifact ID/name.
+- `source.txt`: repo, branch, source SHA, annotated tag and tag-object SHA,
+  version, build, product channel, feed ring, operator, UTC timestamp, and,
+  when CI-built, workflow run URL plus artifact ID/name.
+- `declaration.json`: exact accepted Desktop declaration and index readback.
+- `accepted-packet.json`: content-addressed accepted packet and its digest.
 - `credential-preflight.json`: output from `preflight-credentials.sh --json`.
 - `build.txt`: build commands, bundle metadata, and checksums.
 - `codesign.txt`: signing command shapes and verification output.
@@ -406,7 +449,11 @@ without re-triaging the same failure:
 - `appcast_signature_missing`: release feed lacks a real EdDSA signature.
 - `signature_error`: client/appcast fixture rejects invalid signature metadata.
 - `hosting_undecided`: appcast or artifact hosting URL is not owner-approved.
-- `license_blocked`: gated release depends on #327 or entitlement state.
+- `license_blocked`: gated release depends on an unresolved entitlement state.
+- `package_identity_blocked`: #559 registry/provenance readback is missing or
+  differs from the candidate package bytes.
+- `transition_blocked`: #895 is not yet `source-accepted`, or its exact tested
+  command and live acceptance evidence are absent.
 
 ## Owner/Codex Handoff
 
@@ -414,12 +461,15 @@ When the owner is ready to execute this runbook, hand the Codex agent this
 minimal packet:
 
 ```text
+Accepted declaration:
+Accepted packet digest:
 Source SHA:
-Version:
-Build:
-Channel:
+Annotated tag / tag-object SHA:
+Version / build:
+Product channel / feed ring:
+Registry package: neondiff@1.0.5 readback
 Developer ID identity:
-Notary path: keychain profile name OR App Store Connect API-key env injection
+Notary path: keychain profile name OR approved App Store Connect API-key env injection
 Sparkle public key env:
 Sparkle feed URL:
 Artifact hosting URL:
@@ -435,12 +485,14 @@ license/update policy is undecided.
 
 ## Validation For This Document
 
-The #322 PR is valid when:
+This document is complete for the release lane when:
 
-- This runbook names the real command shapes without executing signing or
-  notarization.
-- Credential names match #324, but no credential values appear.
-- The appcast lane points to #323 fixtures/dry-run generator and keeps signing
-  and hosting owner-gated.
-- The proof boundary says this is documentation only.
+- The declaration and accepted packet are the named release authorities.
+- RC/stable tags, the exact `NeonDiff-Release-Class: desktop-only` marker, and
+  the #559 package identity gate are explicit.
+- Credential checks are presence-only and never contain values.
+- The appcast lane distinguishes RC product channel `rc` from the `beta` feed
+  ring and keeps signing/hosting owner-gated.
+- Transition commands are explicitly blocked until #895 `source-accepted`.
+- The proof boundary says this is documentation and handoff guidance only.
 - Local doc validation and repo secret scan pass.
