@@ -310,9 +310,15 @@ describe("beta release status", () => {
     expect(candidate.docs.ok).toBe(true);
     expect(candidate.licenseApi.ok).toBe(true);
     expect(candidate.updateChannels.ok).toBe(true);
-    expect(candidate.licenseApi.activationProofPath).toBeUndefined();
-    expect(candidate.npmPublication.requiredForThisRelease).toBe(true);
-    expect(["candidate_pending_publication", "published"]).toContain(candidate.npmPublication.state);
+    expect(candidate.licenseApi.activationProofPath).toBe(
+      "docs/evidence/v1.0.5/mandatory-activation-348b99da43fd7282f6b88a0ce5b407528433cd1d.json"
+    );
+    expect(candidate.npmPublication).toMatchObject({
+      ok: false,
+      requiredForThisRelease: true,
+      state: "candidate_pending_publication",
+      candidateReadyForPublication: true
+    });
   });
 
   it("fails closed when the live checkout is dirty or not at the expected head", () => {

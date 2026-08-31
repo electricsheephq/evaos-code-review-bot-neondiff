@@ -4,10 +4,13 @@
   "publishedVersionAtCandidateCut": "v1.0.4",
   "state": "candidate_pending_publication",
   "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+  "candidateSourceSha": "348b99da43fd7282f6b88a0ce5b407528433cd1d",
+  "proofRunUrl": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/33348308615",
   "publicationProofPath": "docs/evidence/v1.0.5-publication-proof.json",
   "releaseLevel": "source-beta",
   "source": {
-    "shaState": "pending_source_merge"
+    "shaState": "merged_protected_main",
+    "candidateHeadBeforeReleaseMetadata": "348b99da43fd7282f6b88a0ce5b407528433cd1d"
   },
   "docs": {
     "version": "v1.0.5",
@@ -19,7 +22,8 @@
     "state": "pending",
     "checkoutIssuanceRequiredForThisRelease": false,
     "checkoutIssuanceState": "deferred",
-    "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+    "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
+    "activationProofPath": "docs/evidence/v1.0.5/mandatory-activation-348b99da43fd7282f6b88a0ce5b407528433cd1d.json"
   },
   "updateChannels": {
     "cli": {
@@ -42,7 +46,9 @@
     "version": "1.0.5",
     "requiredForThisRelease": true,
     "state": "candidate",
-    "previousReleasedPackageVersion": "1.0.4"
+    "previousReleasedPackageVersion": "1.0.4",
+    "shasum": "b6e95cc85e12b51aa40b57d42fe2e42f282ba937",
+    "integrity": "sha512-5RcDO46fAWuVSyS9TUJc5YtObisRO0nLLPBdXLWD3JWooVIWlwywAoP0CeUMFNdy+6PhgpuPWhmSgbA2jz0RQg=="
   },
   "registry": {
     "state": "pending_publication",

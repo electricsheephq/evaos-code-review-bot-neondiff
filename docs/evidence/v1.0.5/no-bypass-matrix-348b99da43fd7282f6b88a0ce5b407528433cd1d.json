@@ -1,0 +1,162 @@
+{
+  "evidenceKind": "no-bypass-matrix",
+  "releaseVersion": "v1.0.5",
+  "candidateHead": "348b99da43fd7282f6b88a0ce5b407528433cd1d",
+  "packShasum": "b6e95cc85e12b51aa40b57d42fe2e42f282ba937",
+  "packIntegrity": "sha512-5RcDO46fAWuVSyS9TUJc5YtObisRO0nLLPBdXLWD3JWooVIWlwywAoP0CeUMFNdy+6PhgpuPWhmSgbA2jz0RQg==",
+  "harnessRunId": "3ae5bd0f5dbd08e73610da9a57ddd8b2c5d6c5c96848cd5546bf31f6acce98a8",
+  "records": [
+    {
+      "id": "public_active",
+      "visibility": "public",
+      "expected": "allowed",
+      "actual": "allowed",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "private_active",
+      "visibility": "private",
+      "expected": "allowed",
+      "actual": "allowed",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "unknown_repo",
+      "visibility": "unknown",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "public_denied",
+      "visibility": "public",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "private_denied",
+      "visibility": "private",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "missing_key",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 0,
+      "licenseApiCalls": 0
+    },
+    {
+      "id": "missing_api_url",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "offline",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "timeout",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "forged_cache",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 0,
+      "licenseApiCalls": 0
+    },
+    {
+      "id": "mismatched_cache",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "disabled_policy_attempt",
+      "visibility": "public",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 0,
+      "licenseApiCalls": 0
+    },
+    {
+      "id": "fake_api",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "rate_limited",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "server_error",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "malformed_response",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "revoked",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "expired",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 1,
+      "licenseApiCalls": 1
+    },
+    {
+      "id": "dashboard_provider_pre_activation",
+      "visibility": "not_applicable",
+      "expected": "denied",
+      "actual": "denied",
+      "expectedLicenseApiCalls": 0,
+      "licenseApiCalls": 0
+    }
+  ]
+}

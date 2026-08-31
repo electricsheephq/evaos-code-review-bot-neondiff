@@ -1,0 +1,21 @@
+{
+  "evidenceKind": "useful-work-boundaries",
+  "releaseVersion": "v1.0.5",
+  "candidateHead": "348b99da43fd7282f6b88a0ce5b407528433cd1d",
+  "packShasum": "b6e95cc85e12b51aa40b57d42fe2e42f282ba937",
+  "packIntegrity": "sha512-5RcDO46fAWuVSyS9TUJc5YtObisRO0nLLPBdXLWD3JWooVIWlwywAoP0CeUMFNdy+6PhgpuPWhmSgbA2jz0RQg==",
+  "harnessRunId": "3ae5bd0f5dbd08e73610da9a57ddd8b2c5d6c5c96848cd5546bf31f6acce98a8",
+  "records": [
+    {
+      "reportPassed": true,
+      "totalTests": 256,
+      "requiredPassingTests": [
+        "providers verify license admission denies before provider-key stdin or provider network",
+        "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
+        "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
+        "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
+        "local HTML dashboard serves HTML status but blocks provider verification before activation"
+      ]
+    }
+  ]
+}
