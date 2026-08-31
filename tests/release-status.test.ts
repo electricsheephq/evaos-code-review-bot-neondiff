@@ -193,6 +193,8 @@ describe("beta release status", () => {
     for (const [name, sourceIdentity] of [["git-head", { mode: "gitHead", gitHead: npmTagCommit }], ["provenance", { mode: "verified_provenance", provenance }]] as const) {
       expect(validate(writeNpmProof(root, npmProof({ sourceIdentity }), `docs/evidence/${name}.json`)).ok).toBe(true);
     }
+    expect(validate(writeNpmProof(root, npmProof({ observedAt: "2026-01-01T00:00:00.000Z" }), "docs/evidence/immutable-old.json")).ok).toBe(true);
+    expect(validate(writeNpmProof(root, npmProof({ observedAt: "2026-08-31T00:05:01.000Z" }), "docs/evidence/future.json")).detail).toContain("observedAt must not be more than 5 minutes in the future");
     const hostile: Array<[string, Record<string, unknown>]> = [
       ["package", { package: "other" }], ["version", { version: "1.0.4" }],
       ["latest", { registry: { latest: "1.0.4", predecessor: "1.0.4", releaseCandidatePresent: false } }],
@@ -218,7 +220,8 @@ describe("beta release status", () => {
 
   it("keeps a pending candidate non-published and requires proof for published status", () => {
     const pending = readPublicReleaseManifestStatus({ cwd: repoRoot, manifestPath: "docs/public-release-manifest.json", expectedVersion: "v1.0.5" });
-    expect(pending.npmPublication).toMatchObject({ ok: false, requiredForThisRelease: true, state: "candidate_pending_publication", candidateReadyForPublication: true });
+    expect(pending.npmPublication).toMatchObject({ ok: false, requiredForThisRelease: true, state: "candidate_pending_publication", candidateReadyForPublication: false });
+    expect(pending.npmPublication.detail).toContain("packageArtifact.shasum");
     const root = mkdtempSync(join(tmpdir(), "npm-publication-status-"));
     roots.push(root);
     mkdirSync(join(root, "docs", "releases"), { recursive: true });
@@ -240,6 +243,13 @@ describe("beta release status", () => {
     }));
     const published = readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5", now: new Date("2026-08-31T00:00:00.000Z") });
     expect(published).toMatchObject({ ok: true, npmPublication: { ok: true, requiredForThisRelease: true, state: "published" } });
+    const candidatePath = join(root, "docs", "release-candidates", "v1.0.5.json");
+    const candidateFixture = JSON.parse(readFileSync(candidatePath, "utf8"));
+    delete candidateFixture.registry.predecessor;
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5", now: new Date("2026-08-31T00:00:00.000Z") }).npmPublication.detail).toContain("published candidate must declare registry.predecessor");
+    candidateFixture.registry.predecessor = "1.0.4";
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
     const manifestPath = join(root, "public-release.json");
     const manifestFixture = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifestFixture.packageArtifact.shasum = "c".repeat(40);
@@ -247,8 +257,6 @@ describe("beta release status", () => {
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication.ok).toBe(false);
     manifestFixture.packageArtifact.shasum = "b".repeat(40);
     writeFileSync(manifestPath, JSON.stringify(manifestFixture));
-    const candidatePath = join(root, "docs", "release-candidates", "v1.0.5.json");
-    const candidateFixture = JSON.parse(readFileSync(candidatePath, "utf8"));
     candidateFixture.state = "published";
     candidateFixture.registry.releaseCandidatePresent = true;
     writeFileSync(candidatePath, JSON.stringify(candidateFixture));
@@ -258,6 +266,21 @@ describe("beta release status", () => {
     candidateFixture.registry.latest = "1.0.5";
     writeFileSync(candidatePath, JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication).toMatchObject({ ok: false, candidateReadyForPublication: false });
+    candidateFixture.candidateSourceSha = npmTagCommit;
+    candidateFixture.source = { candidateHeadBeforeReleaseMetadata: npmTagCommit };
+    candidateFixture.packageArtifact = { ...npmArtifact, requiredForThisRelease: true, state: "candidate" };
+    candidateFixture.registry.latest = "1.0.4";
+    candidateFixture.registry.predecessor = "1.0.4";
+    candidateFixture.registry.releaseCandidatePresent = false;
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication).toMatchObject({ ok: false, candidateReadyForPublication: true });
+    delete candidateFixture.registry.predecessor;
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication.detail).toContain("registry.predecessor must be 1.0.4");
+    candidateFixture.registry.predecessor = "1.0.4";
+    candidateFixture.source.candidateHeadBeforeReleaseMetadata = "c".repeat(40);
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication.detail).toContain("source identity must match candidateSourceSha");
   });
 
   it("uses the v1.0.5 candidate ledger for first-publication readiness", () => {
@@ -285,8 +308,9 @@ describe("beta release status", () => {
       ok: false,
       requiredForThisRelease: true,
       state: "candidate_pending_publication",
-      candidateReadyForPublication: true
+      candidateReadyForPublication: false
     });
+    expect(candidate.npmPublication.detail).toContain("packageArtifact.shasum");
   });
 
   it("fails closed when the live checkout is dirty or not at the expected head", () => {

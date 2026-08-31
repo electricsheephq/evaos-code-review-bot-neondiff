@@ -1034,8 +1034,22 @@ function readNpmPublicationStatus(input: {
   const declared = registryState === "published_latest" && state === "published";
   if (!pending && !declared) identityFailures.push("candidate registry state must be pending_publication or published_latest");
   if (pending) {
+    const candidateSourceSha = readString(candidate.candidateSourceSha);
+    const source = asRecord(candidate.source);
+    const immutablePredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
+    if (!/^[a-f0-9]{40}$/.test(candidateSourceSha ?? "")) identityFailures.push("pending candidateSourceSha must be a full lowercase Git SHA");
+    if (readString(source.candidateHeadBeforeReleaseMetadata) !== candidateSourceSha) identityFailures.push("pending candidate source identity must match candidateSourceSha");
+    if (immutablePredecessor !== "1.0.4") identityFailures.push("pending candidate predecessor must be immutable v1.0.4");
     if (readString(registry.latest) !== "1.0.4") identityFailures.push("pending candidate registry.latest must retain 1.0.4");
-    if (publicationProofPath !== undefined) {
+    if (readString(registry.predecessor) !== "1.0.4") identityFailures.push("pending candidate registry.predecessor must be 1.0.4");
+    if (registry.releaseCandidatePresent !== false) identityFailures.push("pending candidate releaseCandidatePresent must be false");
+    if (candidateArtifact.requiredForThisRelease !== true) identityFailures.push("pending candidate packageArtifact must be required for this release");
+    if (readString(candidateArtifact.state) !== "candidate") identityFailures.push("pending candidate packageArtifact.state must be candidate");
+    if (!/^[a-f0-9]{40}$/.test(artifact.shasum ?? "")) identityFailures.push("pending candidate packageArtifact.shasum must be a full lowercase SHA-1 digest");
+    if (!NPM_SHA512_INTEGRITY_PATTERN.test(artifact.integrity ?? "")) identityFailures.push("pending candidate packageArtifact.integrity must be a SHA-512 npm integrity value");
+    if (!publicationProofPath) {
+      identityFailures.push("pending candidate must declare publicationProofPath");
+    } else {
       const confined = resolveConfinedEvidenceProofPath(input.cwd, publicationProofPath, "publicationProofPath");
       if (!confined.ok) identityFailures.push(`invalid publicationProofPath: ${confined.detail}`);
     }
@@ -1057,7 +1071,9 @@ function readNpmPublicationStatus(input: {
   if (declared && registry.releaseCandidatePresent !== false) identityFailures.push("candidate releaseCandidatePresent must be false");
   if (declared && JSON.stringify(legacyArtifact) !== JSON.stringify(artifact)) identityFailures.push("candidate packageArtifact must match manifest packageArtifact");
   const declaredPredecessor = readString(registry.predecessor);
-  if (declaredPredecessor && declaredPredecessor !== stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4")) {
+  if (!declaredPredecessor) {
+    identityFailures.push("published candidate must declare registry.predecessor");
+  } else if (declaredPredecessor !== stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4")) {
     identityFailures.push("published candidate registry.predecessor must match the immutable predecessor");
   }
   if (!publicationProofPath) identityFailures.push("published candidate must declare publicationProofPath");
@@ -1188,7 +1204,13 @@ export function validateNpmPublicationProof(input: {
       failures.push("verified provenance must bind package, version, tag, workflow, source, and artifact");
     }
   }
-  failures.push(...validateLicenseProofObservedAt(readString(proof.observedAt), input.now));
+  const observedAt = readString(proof.observedAt);
+  const observedAtMs = observedAt ? Date.parse(observedAt) : Number.NaN;
+  if (Number.isNaN(observedAtMs)) {
+    failures.push("observedAt must be a valid ISO timestamp");
+  } else if (observedAtMs > (input.now ?? new Date()).getTime() + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("observedAt must not be more than 5 minutes in the future");
+  }
   return { ok: failures.length === 0, detail: failures.join("; ") };
 }
 
