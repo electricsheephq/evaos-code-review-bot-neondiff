@@ -1149,6 +1149,9 @@ export function validateNpmPublicationProof(input: {
   if (proof.schemaVersion !== 1) failures.push("schemaVersion must be 1");
   if (readString(proof.evidenceKind) !== NPM_PUBLICATION_PROOF_KIND) failures.push(`evidenceKind must be ${NPM_PUBLICATION_PROOF_KIND}`);
   const packageName = readString(proof.package) ?? readString(proof.packageName);
+  if (readString(proof.package) && readString(proof.packageName) && readString(proof.package) !== readString(proof.packageName)) {
+    failures.push("package and packageName must agree");
+  }
   if (packageName !== "neondiff") failures.push("package must be neondiff");
   const packageVersion = readString(proof.version) ?? readString(proof.packageVersion);
   if (readString(proof.version) && readString(proof.packageVersion) && readString(proof.version) !== readString(proof.packageVersion)) {
@@ -1169,8 +1172,13 @@ export function validateNpmPublicationProof(input: {
   if (!workflowRunUrl || !isSafeWorkflowRunUrl(workflowRunUrl)) failures.push("workflowRun must be a public GitHub Actions run URL");
   if (workflowRunUrlId && Number(workflowRunId) !== Number(workflowRunUrlId)) failures.push("workflowRun id must match the run ID in workflowRun URL");
   if (workflowRun.workflow !== ".github/workflows/publish-npm.yml") failures.push("workflowRun.workflow must be publish-npm.yml");
-  if (githubRelease.url !== "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/" + input.expectedVersion || githubRelease.tag !== input.expectedVersion || githubRelease.draft !== false || githubRelease.prerelease !== false || typeof githubRelease.publishedAt !== "string" || Number.isNaN(Date.parse(githubRelease.publishedAt))) failures.push("githubRelease must identify a published non-prerelease release");
+  const githubReleasePublishedAt = readString(githubRelease.publishedAt);
+  const githubReleasePublishedAtMs = githubReleasePublishedAt ? Date.parse(githubReleasePublishedAt) : Number.NaN;
+  if (githubRelease.url !== "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/" + input.expectedVersion || githubRelease.tag !== input.expectedVersion || githubRelease.draft !== false || githubRelease.prerelease !== false || Number.isNaN(githubReleasePublishedAtMs)) failures.push("githubRelease must identify a published non-prerelease release");
   const artifactName = readString(packageArtifact.name) ?? readString(packageArtifact.package);
+  if (readString(packageArtifact.name) && readString(packageArtifact.package) && readString(packageArtifact.name) !== readString(packageArtifact.package)) {
+    failures.push("packageArtifact.name and packageArtifact.package must agree");
+  }
   const artifactVersion = readString(packageArtifact.version);
   const artifactIntegrity = readString(packageArtifact.integrity);
   const artifactShasum = readString(packageArtifact.shasum);
@@ -1210,6 +1218,13 @@ export function validateNpmPublicationProof(input: {
     failures.push("observedAt must be a valid ISO timestamp");
   } else if (observedAtMs > (input.now ?? new Date()).getTime() + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
     failures.push("observedAt must not be more than 5 minutes in the future");
+  }
+  const validationClockMs = (input.now ?? new Date()).getTime();
+  if (!Number.isNaN(githubReleasePublishedAtMs) && !Number.isNaN(observedAtMs) && githubReleasePublishedAtMs > observedAtMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("githubRelease.publishedAt must not be later than observedAt by more than 5 minutes");
+  }
+  if (!Number.isNaN(githubReleasePublishedAtMs) && githubReleasePublishedAtMs > validationClockMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("githubRelease.publishedAt must not be more than 5 minutes in the future");
   }
   return { ok: failures.length === 0, detail: failures.join("; ") };
 }

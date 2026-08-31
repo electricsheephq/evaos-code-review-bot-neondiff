@@ -482,6 +482,7 @@ function verifyPredecessorRollback(args) {
   const eventName = required(args, "event-name");
   const githubRef = required(args, "github-ref");
   const rollback = parseBoolean(required(args, "predecessor-rollback"), "predecessor-rollback");
+  const confirmationOnly = parseBoolean(args.get("confirmation-only") ?? "false", "confirmation-only");
   const provenanceRecovery = args.get("provenance-recovery") ?? "false";
   const latestVersion = required(args, "latest-version");
   const quarantineVersion = args.get("quarantine-version") ?? "";
@@ -491,8 +492,13 @@ function verifyPredecessorRollback(args) {
   if (eventName !== "workflow_dispatch" || githubRef !== "refs/heads/main" || !rollback || provenanceRecovery === "true") {
     fail("predecessor rollback requires an explicit protected-main workflow dispatch");
   }
-  if (latestVersion !== "1.0.5" || targetVersion !== "1.0.4" || expectedPredecessor !== "1.0.4") {
-    fail("predecessor rollback requires latest=1.0.5 and immutable predecessor 1.0.4");
+  if (targetVersion !== "1.0.4" || expectedPredecessor !== "1.0.4") {
+    fail("predecessor rollback requires immutable predecessor 1.0.4");
+  }
+  if (confirmationOnly ? latestVersion !== "1.0.4" : latestVersion !== "1.0.5") {
+    fail(confirmationOnly
+      ? "predecessor rollback confirmation requires latest=1.0.4"
+      : "predecessor rollback requires latest=1.0.5 before mutation");
   }
   if (quarantineVersion !== "") fail("predecessor rollback requires the release-candidate tag to be absent");
   const current = validateRollbackPackage(readJsonFile(required(args, "current-metadata"), "current package metadata"), "1.0.5", "current package");
@@ -511,16 +517,18 @@ function verifyPredecessorRollback(args) {
   if (predecessor.sourceIdentity !== "matching_gitHead" && predecessor.sourceIdentity !== "verified_provenance") {
     fail("predecessor package source identity is not verified");
   }
-  const command = 'npm dist-tag add "neondiff@1.0.4" latest';
+  const mutationRequired = !confirmationOnly;
+  const command = mutationRequired ? 'npm dist-tag add "neondiff@1.0.4" latest' : undefined;
   console.log(JSON.stringify({
     bounded: true,
-    action: "predecessor_dist_tag_rollback",
+    action: mutationRequired ? "predecessor_dist_tag_rollback" : "confirm_predecessor_dist_tag_rollback",
     latestVersion,
     targetVersion,
     expectedPredecessor,
+    mutationRequired,
     currentPackage: current,
     predecessorPackage: predecessor,
-    command
+    ...(command ? { command } : {})
   }));
 }
 

@@ -72,6 +72,28 @@ describe("predecessor rollback release policy", () => {
     }
   });
 
+  it("accepts a confirmation-only rerun after the predecessor already owns latest", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-rollback-confirmation-"));
+    try {
+      const currentPath = join(root, "current.json");
+      const predecessorPath = join(root, "predecessor.json");
+      writeFileSync(currentPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
+      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.4", "b".repeat(40))));
+      const args = baseArgs(currentPath, predecessorPath);
+      args.splice(args.indexOf("--latest-version") + 1, 1, "1.0.4");
+      args.push("--confirmation-only", "true");
+      const result = run(root, ...args);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        action: "confirm_predecessor_dist_tag_rollback",
+        latestVersion: "1.0.4",
+        mutationRequired: false
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["wrong latest", ["--latest-version", "1.0.4"], "latest=1.0.5"],
     ["simultaneous provenance recovery", ["--provenance-recovery", "true"], "protected-main workflow dispatch"],

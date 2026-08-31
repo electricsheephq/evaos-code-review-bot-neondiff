@@ -81,6 +81,7 @@ jobs:
         run: npm ci --ignore-scripts --omit=dev
 
       - name: Verify immutable packages and rollback precondition
+        id: rollback_plan
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -91,10 +92,12 @@ jobs:
           npm view neondiff dist-tags --json --prefer-online > rollback-channel.json
           LATEST_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags.latest ?? "")' rollback-channel.json)"
           QUARANTINE_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags["release-candidate"] ?? "")' rollback-channel.json)"
-          test "$LATEST_VERSION" = "1.0.5" || {
-            echo "::error::Rollback requires npm latest=1.0.5 before the guarded mutation"
+          { [ "$LATEST_VERSION" = "1.0.5" ] || [ "$LATEST_VERSION" = "1.0.4" ]; } || {
+            echo "::error::Rollback requires npm latest to be 1.0.5 or the already-converged predecessor 1.0.4"
             exit 1
           }
+          CONFIRMATION_ONLY=false
+          if [ "$LATEST_VERSION" = "1.0.4" ]; then CONFIRMATION_ONLY=true; fi
           npm view neondiff@1.0.5 name version dist --json --prefer-online > rollback-current.json
           npm view neondiff@1.0.4 name version dist --json --prefer-online > rollback-predecessor.json
           CURRENT_TAG_COMMIT="$(git rev-list -n 1 v1.0.5)"
@@ -130,10 +133,11 @@ jobs:
               writeFileSync(`rollback-${version}-verified.json`, `${JSON.stringify({ name: metadata.name, version: metadata.version, dist: metadata.dist, provenance: { ...provenance, verified: true, shasum: metadata.dist?.shasum } })}\n`);
             }
           '
-          node scripts/npm-release-policy.mjs verify-predecessor-rollback \
+          ROLLBACK_POLICY_JSON="$(node scripts/npm-release-policy.mjs verify-predecessor-rollback \
             --event-name workflow_dispatch \
             --github-ref "$GITHUB_REF" \
             --predecessor-rollback true \
+            --confirmation-only "$CONFIRMATION_ONLY" \
             --latest-version "$LATEST_VERSION" \
             --quarantine-version "$QUARANTINE_VERSION" \
             --target-version 1.0.4 \
@@ -141,13 +145,26 @@ jobs:
             --current-metadata rollback-1.0.5-verified.json \
             --predecessor-metadata rollback-1.0.4-verified.json \
             --current-tag-commit "$CURRENT_TAG_COMMIT" \
-            --predecessor-tag-commit "$PREDECESSOR_TAG_COMMIT"
+            --predecessor-tag-commit "$PREDECESSOR_TAG_COMMIT")"
+          printf '%s\n' "$ROLLBACK_POLICY_JSON"
+          MUTATION_REQUIRED="$(node -e 'const value = JSON.parse(process.argv[1]); process.stdout.write(value.mutationRequired === true ? "true" : "false")' "$ROLLBACK_POLICY_JSON")"
+          echo "mutation_required=$MUTATION_REQUIRED" >> "$GITHUB_OUTPUT"
 
       - name: Guarded predecessor dist-tag rollback
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          MUTATION_REQUIRED: ${{ steps.rollback_plan.outputs.mutation_required }}
         run: |
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main && test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" && npm view neondiff dist-tags --json --prefer-online > rollback-pre-mutation-channel.json && node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== "1.0.5" || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json || { echo "::error::Rollback precondition changed immediately before mutation"; exit 1; }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" || { echo "::error::Protected main changed before rollback confirmation"; exit 1; }
+          npm view neondiff dist-tags --json --prefer-online > rollback-pre-mutation-channel.json
+          if [ "$MUTATION_REQUIRED" = "false" ]; then
+            node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== "1.0.4" || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json || { echo "::error::Rollback confirmation state changed"; exit 1; }
+            echo "previous predecessor rollback confirmed at latest=1.0.4"
+            exit 0
+          fi
+          test "$MUTATION_REQUIRED" = "true" || { echo "::error::Rollback mutation plan is invalid"; exit 1; }
+          node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== "1.0.5" || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json || { echo "::error::Rollback precondition changed immediately before mutation"; exit 1; }
           # The policy and precondition checks above authorize this one bounded mutation only.
           npm dist-tag add "neondiff@1.0.4" latest
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do

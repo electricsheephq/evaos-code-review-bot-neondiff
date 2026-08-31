@@ -193,7 +193,10 @@ describe("beta release status", () => {
     for (const [name, sourceIdentity] of [["git-head", { mode: "gitHead", gitHead: npmTagCommit }], ["provenance", { mode: "verified_provenance", provenance }]] as const) {
       expect(validate(writeNpmProof(root, npmProof({ sourceIdentity }), `docs/evidence/${name}.json`)).ok).toBe(true);
     }
-    expect(validate(writeNpmProof(root, npmProof({ observedAt: "2026-01-01T00:00:00.000Z" }), "docs/evidence/immutable-old.json")).ok).toBe(true);
+    expect(validate(writeNpmProof(root, npmProof({
+      observedAt: "2026-01-01T00:00:00.000Z",
+      githubRelease: { url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.5", tag: "v1.0.5", draft: false, prerelease: false, publishedAt: "2026-01-01T00:00:00.000Z" }
+    }), "docs/evidence/immutable-old.json")).ok).toBe(true);
     expect(validate(writeNpmProof(root, npmProof({ observedAt: "2026-08-31T00:05:01.000Z" }), "docs/evidence/future.json")).detail).toContain("observedAt must not be more than 5 minutes in the future");
     const hostile: Array<[string, Record<string, unknown>]> = [
       ["package", { package: "other" }], ["version", { version: "1.0.4" }],
@@ -203,8 +206,11 @@ describe("beta release status", () => {
       ["workflow-missing", { workflowRun: { id: 123, url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123" } }],
       ["workflow-run-mismatch", { workflowRun: { id: 124, url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/123" } }],
       ["workflow-run-alias", { workflowRunId: 124 }],
+      ["package-name-alias", { packageName: "other" }],
       ["integrity", { packageArtifact: { ...npmArtifact, integrity: "sha512-too-short" } }],
+      ["artifact-name-alias", { packageArtifact: { ...npmArtifact, package: "other" } }],
       ["github-release", { githubRelease: { url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.5", tag: "v1.0.5", draft: true, prerelease: false, publishedAt: "2026-08-31T00:00:00.000Z" } }],
+      ["future-release", { githubRelease: { url: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.5", tag: "v1.0.5", draft: false, prerelease: false, publishedAt: "2026-08-31T00:05:01.000Z" } }],
       ["timestamp", { observedAt: undefined }],
       ["contradictory", { sourceIdentity: { mode: "gitHead", gitHead: npmTagCommit, provenance } }],
       ["secret-like", { proofBoundary: "sk-fixture-only" }]

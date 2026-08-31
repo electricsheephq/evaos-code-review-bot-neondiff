@@ -55,6 +55,9 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(script).toContain('rollback-predecessor.json');
     expect(script).not.toContain('"rollback-$VERSION.json"');
     expect(script).toContain("rollback-pre-mutation-channel.json");
+    expect(script).toContain("confirmation-only");
+    expect(script).toContain("mutation_required");
+    expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.mutation_required");
     expect(script).toContain("bounded");
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeGreaterThan(stepNames.indexOf("Setup rollback Node.js"));
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeLessThan(stepNames.indexOf("Verify immutable packages and rollback precondition"));
