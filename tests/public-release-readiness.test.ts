@@ -902,8 +902,9 @@ describe("NeonDiff public release readiness", () => {
     expect(readiness).toContain("candidateSourceSha");
     expect(readiness).toContain("candidate ledger path must stay within docs/release-candidates");
     expect(readiness).toContain("candidate activation proof path must stay within docs/evidence");
-    expect(readiness).toContain("candidate activation proof evidenceKind is invalid");
-    expect(readiness).toContain("candidate activation proof releaseVersion does not match expected version");
+    expect(readiness).toContain("validateMandatoryActivationProofPath");
+    expect(readiness).toContain("expectedReleaseVersion: expectedVersion");
+    expect(readiness).toContain("expectedCandidateHead: candidateHead");
     expect(readiness).toContain('const proofLabel = candidateMode ? "candidate activation proof" : "activation proof"');
     expect(readiness).not.toContain("if (candidateMode || installedCandidate)");
     expect(publish).toContain("EXPECTED_ACTIVATION_PROOF_PATH");

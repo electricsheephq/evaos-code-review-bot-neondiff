@@ -1028,17 +1028,17 @@ function readNpmPublicationStatus(input: {
   const identityFailures: string[] = [];
   if (readString(candidate.version) !== expectedVersion) identityFailures.push(`candidate version must match ${expectedVersion}`);
   if (readString(candidate.packageVersion) !== packageVersion) identityFailures.push(`candidate packageVersion must match ${packageVersion}`);
+  const candidateSourceSha = readString(candidate.candidateSourceSha);
+  const source = asRecord(candidate.source);
+  if (!/^[a-f0-9]{40}$/.test(candidateSourceSha ?? "")) identityFailures.push("candidateSourceSha must be a full lowercase Git SHA");
+  if (readString(source.candidateHeadBeforeReleaseMetadata) !== candidateSourceSha) identityFailures.push("candidate source identity must match candidateSourceSha");
   if (artifact.name !== "neondiff") identityFailures.push("candidate packageArtifact.name must be neondiff");
   if (artifact.version !== packageVersion) identityFailures.push(`candidate packageArtifact.version must match ${packageVersion}`);
   const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
   const declared = registryState === "published_latest" && state === "published";
   if (!pending && !declared) identityFailures.push("candidate registry state must be pending_publication or published_latest");
   if (pending) {
-    const candidateSourceSha = readString(candidate.candidateSourceSha);
-    const source = asRecord(candidate.source);
     const immutablePredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
-    if (!/^[a-f0-9]{40}$/.test(candidateSourceSha ?? "")) identityFailures.push("pending candidateSourceSha must be a full lowercase Git SHA");
-    if (readString(source.candidateHeadBeforeReleaseMetadata) !== candidateSourceSha) identityFailures.push("pending candidate source identity must match candidateSourceSha");
     if (immutablePredecessor !== "1.0.4") identityFailures.push("pending candidate predecessor must be immutable v1.0.4");
     if (readString(registry.latest) !== "1.0.4") identityFailures.push("pending candidate registry.latest must retain 1.0.4");
     if (readString(registry.predecessor) !== "1.0.4") identityFailures.push("pending candidate registry.predecessor must be 1.0.4");
@@ -1482,7 +1482,7 @@ function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Da
   return failures;
 }
 
-function validateMandatoryActivationProofPath(input: {
+export function validateMandatoryActivationProofPath(input: {
   cwd: string;
   proofPath?: string;
   expectedReleaseVersion?: string;

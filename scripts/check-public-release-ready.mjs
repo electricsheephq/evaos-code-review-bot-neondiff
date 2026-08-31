@@ -4,7 +4,10 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { readPublicReleaseManifestStatus } from "../dist/src/release-status.js";
+import {
+  readPublicReleaseManifestStatus,
+  validateMandatoryActivationProofPath
+} from "../dist/src/release-status.js";
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -80,9 +83,14 @@ if (candidateMode) {
   activationProofPath = manifest?.licenseApi?.activationProofPath;
   if (typeof activationProofPath !== "string") fail("candidate ledger activationProofPath is missing");
   const resolvedCandidateProofPath = resolveCandidateActivationProofPath(cwd, activationProofPath, expectedVersion, candidateHead);
+  const activationProofStatus = validateMandatoryActivationProofPath({
+    cwd,
+    proofPath: activationProofPath,
+    expectedReleaseVersion: expectedVersion,
+    expectedCandidateHead: candidateHead
+  });
+  if (!activationProofStatus.ok) fail(activationProofStatus.detail);
   const activationProof = readJson(resolvedCandidateProofPath, "candidate activation proof");
-  if (activationProof?.evidenceKind !== "mandatory_activation_no_bypass") fail("candidate activation proof evidenceKind is invalid");
-  if (activationProof?.releaseVersion !== expectedVersion) fail("candidate activation proof releaseVersion does not match expected version");
   installedCandidate = activationProof?.installedCandidate;
 } else {
   activationProofPath = manifest?.licenseApi?.activationProofPath;

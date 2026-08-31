@@ -238,6 +238,7 @@ describe("beta release status", () => {
     const proofPath = writeNpmProof(root, npmProof());
     writeFileSync(join(root, "docs", "release-candidates", "v1.0.5.json"), JSON.stringify({
       version: "v1.0.5", packageVersion: "1.0.5", state: "published", publishedVersionAtCandidateCut: "v1.0.4", tagCommit: npmTagCommit,
+      candidateSourceSha: npmTagCommit, source: { candidateHeadBeforeReleaseMetadata: npmTagCommit },
       publicationProofPath: proofPath, packageArtifact: npmArtifact,
       registry: { state: "published_latest", latest: "1.0.5", predecessor: "1.0.4", releaseCandidatePresent: false }
     }));
@@ -251,6 +252,10 @@ describe("beta release status", () => {
     expect(published).toMatchObject({ ok: true, npmPublication: { ok: true, requiredForThisRelease: true, state: "published" } });
     const candidatePath = join(root, "docs", "release-candidates", "v1.0.5.json");
     const candidateFixture = JSON.parse(readFileSync(candidatePath, "utf8"));
+    candidateFixture.source.candidateHeadBeforeReleaseMetadata = "c".repeat(40);
+    writeFileSync(candidatePath, JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5", now: new Date("2026-08-31T00:00:00.000Z") }).npmPublication.detail).toContain("source identity must match candidateSourceSha");
+    candidateFixture.source.candidateHeadBeforeReleaseMetadata = npmTagCommit;
     delete candidateFixture.registry.predecessor;
     writeFileSync(candidatePath, JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5", now: new Date("2026-08-31T00:00:00.000Z") }).npmPublication.detail).toContain("published candidate must declare registry.predecessor");

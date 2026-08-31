@@ -37,6 +37,8 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(readiness).toContain("status.npmPublication.packageArtifact");
     expect(readiness).toContain("candidate ledger shasum does not match npm pack");
     expect(readiness).toContain("candidate ledger integrity does not match npm pack");
+    expect(readiness).toContain("validateMandatoryActivationProofPath");
+    expect(readiness).toContain("expectedCandidateHead: candidateHead");
     expect(readiness).not.toContain('(prepublication === "true" && !prepublicationReady)');
     expect(releaseRunbook).toContain("Before any RC or stable declaration, signing, or notarization");
     for (const installGuide of [readme, setup]) {
