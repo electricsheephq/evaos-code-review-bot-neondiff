@@ -6,6 +6,40 @@
   "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
   "candidateSourceSha": "30062613be1a4ebd1fe66ae86533181838da6c3e",
   "publicationProofPath": "docs/evidence/v1.0.5-publication-proof.json",
+  "releaseLevel": "source-beta",
+  "source": {
+    "shaState": "candidate",
+    "candidateHeadBeforeReleaseMetadata": "30062613be1a4ebd1fe66ae86533181838da6c3e"
+  },
+  "docs": {
+    "version": "v1.0.5",
+    "setupPath": "docs/SETUP.md",
+    "releaseNotesPath": "docs/releases/v1.0.5.md"
+  },
+  "licenseApi": {
+    "requiredForThisRelease": false,
+    "state": "pending",
+    "activationProofPath": "docs/evidence/v1.0.5/mandatory-activation-30062613be1a4ebd1fe66ae86533181838da6c3e.json",
+    "checkoutIssuanceRequiredForThisRelease": false,
+    "checkoutIssuanceState": "deferred",
+    "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+  },
+  "updateChannels": {
+    "cli": {
+      "requiredForThisRelease": true,
+      "state": "source_checkout",
+      "version": "v1.0.5",
+      "rollback": "git reset --hard refs/tags/v1.0.4",
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+    },
+    "daemon": {
+      "requiredForThisRelease": true,
+      "state": "source_checkout",
+      "version": "v1.0.5",
+      "rollback": "git reset --hard refs/tags/v1.0.4",
+      "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"
+    }
+  },
   "packageArtifact": {
     "name": "neondiff",
     "version": "1.0.5",

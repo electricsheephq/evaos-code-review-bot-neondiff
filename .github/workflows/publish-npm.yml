@@ -234,7 +234,13 @@ jobs:
             echo "::error::Release tag commit must be an ancestor of protected main"
             exit 1
           }
-          CANDIDATE_HEAD="$(node -e 'const manifest = require("./docs/public-release-manifest.json"); process.stdout.write(manifest.source?.candidateHeadBeforeReleaseMetadata ?? "");')"
+          CANDIDATE_LEDGER=""
+          if [ "$RELEASE_TAG" = "v1.0.5" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then CANDIDATE_LEDGER="docs/release-candidates/v1.0.5.json"; fi
+          if [ -n "$CANDIDATE_LEDGER" ]; then
+            CANDIDATE_HEAD="$(node -e 'const candidate = require(`./${process.argv[1]}`); process.stdout.write(candidate.candidateSourceSha ?? "");' "$CANDIDATE_LEDGER")"
+          else
+            CANDIDATE_HEAD="$(node -e 'const manifest = require("./docs/public-release-manifest.json"); process.stdout.write(manifest.source?.candidateHeadBeforeReleaseMetadata ?? "");')"
+          fi
           test "$(printf '%s' "$CANDIDATE_HEAD" | wc -c | tr -d ' ')" = "40" || {
             echo "::error::Release candidate head must be a full Git SHA"
             exit 1
@@ -256,8 +262,10 @@ jobs:
           # The policy reads the exact desktop-only marker from the checked-out
           # annotated tag before applying package/release compatibility gates.
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          RELEASE_LEVEL="$(node -p "require('./docs/public-release-manifest.json').releaseLevel")"
-          SKIPPED_VERSIONS="$(node -p "JSON.stringify(require('./docs/public-release-manifest.json').packageArtifact?.skippedPublicPackageVersions ?? [])")"
+          RELEASE_METADATA_PATH="docs/public-release-manifest.json"
+          if [ "$RELEASE_TAG" = "v1.0.5" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then RELEASE_METADATA_PATH="docs/release-candidates/v1.0.5.json"; fi
+          RELEASE_LEVEL="$(node -p "require('./' + process.argv[1]).releaseLevel" "$RELEASE_METADATA_PATH")"
+          SKIPPED_VERSIONS="$(node -p "JSON.stringify(require('./' + process.argv[1]).packageArtifact?.skippedPublicPackageVersions ?? [])" "$RELEASE_METADATA_PATH")"
           RELEASE_METADATA_ARGS=()
           if [ "$RELEASE_EVENT_NAME" = "workflow_dispatch" ]; then
             gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-metadata.json"
@@ -318,7 +326,13 @@ jobs:
           npm pack --json --pack-destination "$PACK_DIR" > pack.json
           node scripts/check-packlist.mjs pack.json
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
+          CANDIDATE_LEDGER=""
+          if [ "$PACKAGE_VERSION" = "1.0.5" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then CANDIDATE_LEDGER="docs/release-candidates/v1.0.5.json"; fi
+          if [ -n "$CANDIDATE_LEDGER" ]; then
+            CANDIDATE_HEAD="$(node -e 'const candidate = require(`./${process.argv[1]}`); process.stdout.write(candidate.candidateSourceSha ?? "");' "$CANDIDATE_LEDGER")"
+          else
+            CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
+          fi
           RELEASE_HEAD="$(git rev-parse HEAD)"
           PACK_TARBALL="$PACK_DIR/neondiff-$PACKAGE_VERSION.tgz"
           PACKAGE_ALREADY_EXISTS=false
@@ -335,6 +349,7 @@ jobs:
             --pack pack.json \
             --tarball "$PACK_TARBALL" \
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS" \
+            --candidate-ledger "$CANDIDATE_LEDGER" \
             --prepublication "$PREPUBLICATION_MODE"
 
       - name: Checkout protected-main recovery policy
@@ -371,7 +386,13 @@ jobs:
           # BEGIN V104_PROVENANCE_RECOVERY_MUTATION_GATE
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           EXPECTED_GIT_HEAD="$(git rev-list -n 1 "$RELEASE_TAG")"
-          CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
+          CANDIDATE_LEDGER=""
+          if [ "$PACKAGE_VERSION" = "1.0.5" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then CANDIDATE_LEDGER="docs/release-candidates/v1.0.5.json"; fi
+          if [ -n "$CANDIDATE_LEDGER" ]; then
+            CANDIDATE_HEAD="$(node -e 'const candidate = require(`./${process.argv[1]}`); process.stdout.write(candidate.candidateSourceSha ?? "");' "$CANDIDATE_LEDGER")"
+          else
+            CANDIDATE_HEAD="$(node -p "require('./docs/public-release-manifest.json').source.candidateHeadBeforeReleaseMetadata")"
+          fi
           PACK_TARBALL="$RUNNER_TEMP/neondiff-reviewed-pack/neondiff-$PACKAGE_VERSION.tgz"
           POLICY_SCRIPT="scripts/npm-release-policy.mjs"
           PROVENANCE_VERIFIER="scripts/verify-npm-provenance.mjs"
@@ -387,7 +408,47 @@ jobs:
             echo "::error::reviewed npm tarball is missing"
             exit 1
           }
-          ACTIVATION_PROOF_PATH="$(node -p "require('./docs/public-release-manifest.json').licenseApi.activationProofPath")"
+          PACKAGE_ALREADY_EXISTS=false
+          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              OBSERVED_PACKAGE_VERSION="$(npm view "neondiff@$PACKAGE_VERSION" version --prefer-online 2>/dev/null || true)"
+              if [ "$OBSERVED_PACKAGE_VERSION" = "$PACKAGE_VERSION" ]; then
+                PACKAGE_ALREADY_EXISTS=true
+                break
+              fi
+              sleep 5
+            done
+          elif npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+            PACKAGE_ALREADY_EXISTS=true
+          fi
+          if { [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]; } && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+            echo "::error::Protected-main npm execution must remain in provenance recovery mode"
+            exit 1
+          fi
+          PREPUBLICATION_MODE=false
+          if [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then PREPUBLICATION_MODE=true; fi
+          if [ -n "$CANDIDATE_LEDGER" ]; then
+            ACTIVATION_PROOF_PATH="$(node -e '
+              const candidate = require(`./${process.argv[1]}`);
+              const proofPath = candidate?.licenseApi?.activationProofPath;
+              if (typeof proofPath !== "string") process.exit(1);
+              process.stdout.write(proofPath);
+            ' "$CANDIDATE_LEDGER")" || {
+              echo "::error::v1.0.5 candidate activation proof path is missing"
+              exit 1
+            }
+            EXPECTED_ACTIVATION_PROOF_PATH="docs/evidence/v1.0.5/mandatory-activation-${CANDIDATE_HEAD}.json"
+            test "$ACTIVATION_PROOF_PATH" = "$EXPECTED_ACTIVATION_PROOF_PATH" || {
+              echo "::error::v1.0.5 candidate activation proof path is not the exact candidate evidence path"
+              exit 1
+            }
+            test -f "$ACTIVATION_PROOF_PATH" || {
+              echo "::error::v1.0.5 candidate activation proof is missing"
+              exit 1
+            }
+          else
+            ACTIVATION_PROOF_PATH="$(node -p "require('./docs/public-release-manifest.json').licenseApi.activationProofPath")"
+          fi
           REQUIRED_EVIDENCE_KINDS='["production-lifecycle","no-bypass-matrix","useful-work-boundaries","dashboard","desktop","install-upgrade"]'
           # shellcheck disable=SC2016
           mapfile -t EVIDENCE_ARTIFACTS < <(node -e '
@@ -425,25 +486,6 @@ jobs:
               --source-ref refs/heads/main \
               --deny-self-hosted-runners
           done
-          PACKAGE_ALREADY_EXISTS=false
-          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
-            for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-              OBSERVED_PACKAGE_VERSION="$(npm view "neondiff@$PACKAGE_VERSION" version --prefer-online 2>/dev/null || true)"
-              if [ "$OBSERVED_PACKAGE_VERSION" = "$PACKAGE_VERSION" ]; then
-                PACKAGE_ALREADY_EXISTS=true
-                break
-              fi
-              sleep 5
-            done
-          elif npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
-            PACKAGE_ALREADY_EXISTS=true
-          fi
-          if { [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]; } && [ "$PROVENANCE_RECOVERY" != "true" ]; then
-            echo "::error::Protected-main npm execution must remain in provenance recovery mode"
-            exit 1
-          fi
-          PREPUBLICATION_MODE=false
-          if [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then PREPUBLICATION_MODE=true; fi
           RECOVERY_PROOF_PATH=""
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -488,6 +530,7 @@ jobs:
             --pack pack.json \
             --tarball "$PACK_TARBALL" \
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS" \
+            --candidate-ledger "$CANDIDATE_LEDGER" \
             --prepublication "$PREPUBLICATION_MODE"
           # BEGIN V104_PROVENANCE_RECOVERY_PUBLISH_GUARD
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
