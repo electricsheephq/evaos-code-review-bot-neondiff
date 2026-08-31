@@ -46,6 +46,7 @@ describe("neondiff@1.0.5 release plumbing", () => {
     });
     expect(workflow.jobs).toHaveProperty("rollback_predecessor");
     const rollback = workflow.jobs?.rollback_predecessor;
+    const stepNames = rollback?.steps?.map((step) => (step as { name?: string }).name ?? "") ?? [];
     const script = rollback?.steps?.map((step) => step.run ?? "").join("\n") ?? "";
     expect(rollback?.if).toContain("predecessor_rollback");
     expect(script).toContain("verify-predecessor-rollback");
@@ -55,5 +56,8 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(script).not.toContain('"rollback-$VERSION.json"');
     expect(script).toContain("rollback-pre-mutation-channel.json");
     expect(script).toContain("bounded");
+    expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeGreaterThan(stepNames.indexOf("Setup rollback Node.js"));
+    expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeLessThan(stepNames.indexOf("Verify immutable packages and rollback precondition"));
+    expect(read(".github/workflows/publish-npm.yml")).toContain("npm ci --ignore-scripts --omit=dev");
   });
 });

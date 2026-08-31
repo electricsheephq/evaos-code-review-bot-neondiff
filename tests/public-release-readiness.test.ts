@@ -174,7 +174,7 @@ describe("NeonDiff public release readiness", () => {
       "signed or notarized Mac distribution, Sparkle/appcast, browser/native parity, or v1.1 readiness"
     ]);
     expect(candidateLedger.proofBoundary?.forbidden).not.toContain("v1.0.4 activation proof exists");
-    expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.5\}"/);
+    expect(read("scripts/install.sh")).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.4\}"/);
     for (const path of ["README.md", "docs/SETUP.md"]) {
       const releaseNotice = read(path);
       const normalizedReleaseNotice = releaseNotice.replace(/^>\s?/gm, "").replace(/\s+/g, " ");
@@ -775,7 +775,7 @@ describe("NeonDiff public release readiness", () => {
     expect(existsSync("scripts/install.sh")).toBe(true);
     const script = read("scripts/install.sh");
 
-    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.5\}"/);
+    expect(script).toMatch(/NEONDIFF_VERSION="\$\{NEONDIFF_VERSION:-1\.0\.4\}"/);
     expect(script).toMatch(/npm[^\n]+install[^\n]+-g[^\n]+neondiff@\$\{NEONDIFF_VERSION\}/);
     expect(script).toMatch(/--dry-run/);
     expect(script).toMatch(/Node\.js 26 or newer/);
@@ -909,6 +909,8 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toContain('v1.0.5 candidate activation proof is missing');
     expect(publish).toContain("candidate activation proof path is not the exact candidate evidence path");
     expect(publish).toContain('--candidate-ledger "$CANDIDATE_LEDGER"');
+    expect(publish).toContain('if [ -n "$CANDIDATE_LEDGER" ] && [ "$PROVENANCE_RECOVERY" != "true" ]');
+    expect(publish).toContain('if [ -n "$CANDIDATE_LEDGER" ]; then RELEASE_METADATA_PATH="$CANDIDATE_LEDGER"; fi');
     expect(publish).toContain('--prepublication "$PREPUBLICATION_MODE"');
     expect(releasePolicy).toMatch(/npmTag = packageVersion\.includes\("-"\) \? "beta" : "latest"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);
