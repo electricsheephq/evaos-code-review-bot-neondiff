@@ -49,7 +49,7 @@ if (existingPackageRecovery !== "true" && existingPackageRecovery !== "false") {
   fail("--existing-package-recovery must be true or false");
 }
 if (prepublication !== "true" && prepublication !== "false") fail("--prepublication must be true or false");
-if (prepublication === "true" && existingPackageRecovery === "true") fail("prepublication cannot be combined with existing-package recovery");
+if (prepublication === "true" && existingPackageRecovery === "true" && !candidateLedgerArg) fail("prepublication cannot be combined with existing-package recovery outside candidate-ledger mode");
 
 const cwd = process.cwd();
 const candidateLedgerPath = candidateLedgerArg ? resolveCandidateLedgerPath(cwd, candidateLedgerArg, expectedVersion) : undefined;

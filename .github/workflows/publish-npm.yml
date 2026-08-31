@@ -77,6 +77,9 @@ jobs:
           node-version: 26
           registry-url: https://registry.npmjs.org
 
+      - name: Install exact script-free rollback dependencies
+        run: npm ci --ignore-scripts --omit=dev
+
       - name: Verify immutable packages and rollback precondition
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -340,7 +343,11 @@ jobs:
             PACKAGE_ALREADY_EXISTS=true
           fi
           PREPUBLICATION_MODE=false
-          if [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then PREPUBLICATION_MODE=true; fi
+          if [ -n "$CANDIDATE_LEDGER" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+            PREPUBLICATION_MODE=true
+          elif [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+            PREPUBLICATION_MODE=true
+          fi
           node scripts/check-public-release-ready.mjs \
             --manifest docs/public-release-manifest.json \
             --expected-version "v$PACKAGE_VERSION" \
@@ -426,7 +433,11 @@ jobs:
             exit 1
           fi
           PREPUBLICATION_MODE=false
-          if [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then PREPUBLICATION_MODE=true; fi
+          if [ -n "$CANDIDATE_LEDGER" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+            PREPUBLICATION_MODE=true
+          elif [ "$PACKAGE_ALREADY_EXISTS" = "false" ] && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+            PREPUBLICATION_MODE=true
+          fi
           if [ -n "$CANDIDATE_LEDGER" ]; then
             ACTIVATION_PROOF_PATH="$(node -e '
               const candidate = require(`./${process.argv[1]}`);
@@ -626,7 +637,9 @@ jobs:
             VERIFY_PACK_ARGS+=(--recovery-proof "$RECOVERY_PROOF_PATH")
           fi
           node "$POLICY_SCRIPT" verify-pack "${VERIFY_PACK_ARGS[@]}"
-          EXPECTED_PREDECESSOR="$(node -p "require('./docs/public-release-manifest.json').packageArtifact.previousReleasedPackageVersion")"
+          RELEASE_METADATA_PATH="docs/public-release-manifest.json"
+          if [ -n "$CANDIDATE_LEDGER" ]; then RELEASE_METADATA_PATH="$CANDIDATE_LEDGER"; fi
+          EXPECTED_PREDECESSOR="$(node -p "require('./' + process.argv[1]).packageArtifact.previousReleasedPackageVersion" "$RELEASE_METADATA_PATH")"
           rm -f channel-metadata.json channel-metadata.tmp.json
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
             rm -f channel-metadata.tmp.json

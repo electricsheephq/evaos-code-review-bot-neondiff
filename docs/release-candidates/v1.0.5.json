@@ -4,12 +4,10 @@
   "publishedVersionAtCandidateCut": "v1.0.4",
   "state": "candidate_pending_publication",
   "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559",
-  "candidateSourceSha": "30062613be1a4ebd1fe66ae86533181838da6c3e",
   "publicationProofPath": "docs/evidence/v1.0.5-publication-proof.json",
   "releaseLevel": "source-beta",
   "source": {
-    "shaState": "candidate",
-    "candidateHeadBeforeReleaseMetadata": "30062613be1a4ebd1fe66ae86533181838da6c3e"
+    "shaState": "pending_source_merge"
   },
   "docs": {
     "version": "v1.0.5",
@@ -19,7 +17,6 @@
   "licenseApi": {
     "requiredForThisRelease": false,
     "state": "pending",
-    "activationProofPath": "docs/evidence/v1.0.5/mandatory-activation-30062613be1a4ebd1fe66ae86533181838da6c3e.json",
     "checkoutIssuanceRequiredForThisRelease": false,
     "checkoutIssuanceState": "deferred",
     "checkoutIssuanceTrackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/559"

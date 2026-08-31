@@ -301,9 +301,7 @@ describe("beta release status", () => {
     expect(candidate.docs.ok).toBe(true);
     expect(candidate.licenseApi.ok).toBe(true);
     expect(candidate.updateChannels.ok).toBe(true);
-    expect(candidate.licenseApi).toMatchObject({
-      activationProofPath: "docs/evidence/v1.0.5/mandatory-activation-30062613be1a4ebd1fe66ae86533181838da6c3e.json"
-    });
+    expect(candidate.licenseApi.activationProofPath).toBeUndefined();
     expect(candidate.npmPublication).toMatchObject({
       ok: false,
       requiredForThisRelease: true,
