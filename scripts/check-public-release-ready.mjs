@@ -111,6 +111,11 @@ const packageVersion = expectedVersion.slice(1);
 if (pack?.name !== "neondiff" || pack?.version !== packageVersion) {
   fail(`npm pack identity must be neondiff@${packageVersion}`);
 }
+if (candidateMode) {
+  const candidateArtifact = status.npmPublication.packageArtifact;
+  if (candidateArtifact?.shasum !== pack?.shasum) fail("candidate ledger shasum does not match npm pack");
+  if (candidateArtifact?.integrity !== pack?.integrity) fail("candidate ledger integrity does not match npm pack");
+}
 const proofLabel = candidateMode ? "candidate activation proof" : "activation proof";
 if (installedCandidate?.sourceHead !== candidateHead) fail(`${proofLabel} source head does not match candidate head`);
 if (installedCandidate?.packageVersion !== packageVersion || installedCandidate?.binaryVersion !== packageVersion) {

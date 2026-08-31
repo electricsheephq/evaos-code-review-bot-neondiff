@@ -688,7 +688,7 @@ export function readPublicReleaseManifestStatus(input: {
     const docsVersion = readString(docs.version) ?? "(missing)";
     const setupPath = readString(docs.setupPath);
     const releaseNotesPath = readString(docs.releaseNotesPath);
-    const changelog = readChangelogHeadForVersion(input.cwd, expectedVersion);
+    const changelog = readChangelogHead(input.cwd);
     const docsPathChecks = [
       setupPath
         ? { label: "setup", path: setupPath, exists: existsSync(resolve(input.cwd, setupPath)) }
@@ -3502,25 +3502,6 @@ function readChangelogHead(cwd: string): ChangelogHeadStatus {
   }
 
   return { path, exists: true };
-}
-
-function readChangelogHeadForVersion(cwd: string, expectedVersion?: string): ChangelogHeadStatus {
-  const current = readChangelogHead(cwd);
-  if (!expectedVersion || !current.exists || current.version === stripLeadingV(expectedVersion)) return current;
-  const path = "CHANGELOG.md";
-  const absolutePath = resolve(cwd, path);
-  const targetVersion = stripLeadingV(expectedVersion);
-  const lines = readFileSync(absolutePath, "utf8").split(/\r?\n/);
-  const historicalLine = lines.find((line) => new RegExp(`^## \\[${escapeRegExp(targetVersion)}\\](?:\\s*-\\s*(\\S+))?`).test(line.trim()));
-  if (!historicalLine) return current;
-  const match = /^## \[([^\]]+)\](?:\s*-\s*(\S+))?/.exec(historicalLine.trim());
-  return match
-    ? { path, exists: true, version: match[1], ...(match[2] ? { releaseNotesPath: match[2] } : {}) }
-    : current;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function stripLeadingV(version: string): string {

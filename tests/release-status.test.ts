@@ -575,8 +575,8 @@ describe("beta release status", () => {
         setupPath: "docs/SETUP.md",
         releaseNotesPath: "docs/releases/v1.0.4.md",
         changelogPath: "CHANGELOG.md",
-        changelogHeadVersion: "1.0.4",
-        changelogReleaseNotesPath: "docs/releases/v1.0.4.md"
+        changelogHeadVersion: "1.0.5",
+        changelogReleaseNotesPath: "docs/releases/v1.0.5.md"
       },
       licenseApi: {
         ok: true,
@@ -1204,6 +1204,7 @@ describe("beta release status", () => {
     writeFileSync(join(root, "docs", "SETUP.md"), "# Setup\n");
     writeFileSync(join(root, "docs", "releases", "v0.4.43-beta.1.md"), "# v0.4.43-beta.1\n");
     writeChangelogHead(root, "0.4.42-beta.1", "docs/releases/v0.4.42-beta.1.md");
+    writeFileSync(join(root, "CHANGELOG.md"), `${readFileSync(join(root, "CHANGELOG.md"), "utf8")}\n## [0.4.43-beta.1] - docs/releases/v0.4.43-beta.1.md\n`);
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
       version: "v0.4.43-beta.1",
       releaseLevel: "source-beta",

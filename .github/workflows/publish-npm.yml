@@ -78,7 +78,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install exact script-free rollback dependencies
-        run: npm ci --ignore-scripts --omit=dev
+        run: npm ci --ignore-scripts
 
       - name: Verify immutable packages and rollback precondition
         id: rollback_plan

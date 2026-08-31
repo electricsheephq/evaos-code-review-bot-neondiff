@@ -25,11 +25,15 @@ describe("neondiff@1.0.5 release plumbing", () => {
 
   it("makes the typed npm publication receipt a release-status gate", () => {
     const releaseStatus = read("src/release-status.ts");
+    const readiness = read("scripts/check-public-release-ready.mjs");
 
     expect(releaseStatus).toContain("neondiff.npm-publication-proof.v1");
     expect(releaseStatus).toContain("publicationProofPath");
     expect(releaseStatus).toContain("validateNpmPublicationProof");
     expect(releaseStatus).toContain("packageArtifact:");
+    expect(readiness).toContain("status.npmPublication.packageArtifact");
+    expect(readiness).toContain("candidate ledger shasum does not match npm pack");
+    expect(readiness).toContain("candidate ledger integrity does not match npm pack");
   });
 
   it("routes predecessor rollback only through an explicit serialized workflow mode", () => {
@@ -61,6 +65,7 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(script).toContain("bounded");
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeGreaterThan(stepNames.indexOf("Setup rollback Node.js"));
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeLessThan(stepNames.indexOf("Verify immutable packages and rollback precondition"));
-    expect(read(".github/workflows/publish-npm.yml")).toContain("npm ci --ignore-scripts --omit=dev");
+    const installStep = rollback?.steps?.find((step) => (step as { name?: string }).name === "Install exact script-free rollback dependencies");
+    expect(installStep?.run?.trim()).toBe("npm ci --ignore-scripts");
   });
 });
