@@ -22,14 +22,14 @@ release truth. Its supported service boundaries are:
 - Signed distribution, feed metadata, updater behavior, and explicit beta and
   stable rings.
 
-The native Desktop version line is `1.1.0`; the npm CLI remains `1.0.4` unless
-its bytes change. For the final Desktop `1.1.0` tag, the npm publication is a
-no-op only when the packet contains an unchanged-CLI-byte receipt: a byte-level
-comparison of the candidate CLI/package file manifest and tarball digest with
-the published `neondiff@1.0.4`. Any changed CLI- or worker-owned byte requires a
-new CLI version and publication. The Desktop-only classifier from merged PR
-#831 is not that receipt and does not by itself prove a Desktop artifact,
-publication, or customer readiness.
+The native Desktop version line is `1.1.0`; the accepted CLI/package boundary
+for this release is immutable registry `neondiff@1.0.5`. For the final Desktop
+`1.1.0` tag, the package gate is satisfied only after changed CLI- or
+worker-owned bytes are proved against the exact reviewed `neondiff@1.0.5`
+candidate and its immutable registry artifact. The immutable `neondiff@1.0.4`
+package remains the predecessor and rollback boundary. The Desktop-only
+classifier from merged PR #831 is not that receipt and does not by itself
+prove a Desktop artifact, publication, or customer readiness.
 
 ## Runtime identities and authorities
 

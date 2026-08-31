@@ -895,6 +895,18 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
     expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance/);
     expect(readiness).toContain("--prepublication");
+    expect(readiness).toContain("--candidate-ledger");
+    expect(readiness).toContain("candidateSourceSha");
+    expect(readiness).toContain("candidate ledger path must stay within docs/release-candidates");
+    expect(readiness).toContain("candidate activation proof path must stay within docs/evidence");
+    expect(readiness).toContain("candidate activation proof evidenceKind is invalid");
+    expect(readiness).toContain("candidate activation proof releaseVersion does not match expected version");
+    expect(readiness).toContain('const proofLabel = candidateMode ? "candidate activation proof" : "activation proof"');
+    expect(readiness).not.toContain("if (candidateMode || installedCandidate)");
+    expect(publish).toContain("EXPECTED_ACTIVATION_PROOF_PATH");
+    expect(publish).toContain('v1.0.5 candidate activation proof is missing');
+    expect(publish).toContain("candidate activation proof path is not the exact candidate evidence path");
+    expect(publish).toContain('--candidate-ledger "$CANDIDATE_LEDGER"');
     expect(publish).toContain('--prepublication "$PREPUBLICATION_MODE"');
     expect(releasePolicy).toMatch(/npmTag = packageVersion\.includes\("-"\) \? "beta" : "latest"/);
     expect(publish).toMatch(/github\.event_name == 'release'/);

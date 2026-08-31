@@ -260,6 +260,35 @@ describe("beta release status", () => {
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication).toMatchObject({ ok: false, candidateReadyForPublication: false });
   });
 
+  it("uses the v1.0.5 candidate ledger for first-publication readiness", () => {
+    const historical = readPublicReleaseManifestStatus({
+      cwd: repoRoot,
+      manifestPath: "docs/public-release-manifest.json",
+      expectedVersion: "v1.0.5"
+    });
+    expect(historical.docs.ok).toBe(false);
+    expect(historical.licenseApi.ok).toBe(false);
+
+    const candidate = readPublicReleaseManifestStatus({
+      cwd: repoRoot,
+      manifestPath: "docs/release-candidates/v1.0.5.json",
+      expectedVersion: "v1.0.5"
+    });
+    expect(candidate.releaseLevelGate.ok).toBe(true);
+    expect(candidate.docs.ok).toBe(true);
+    expect(candidate.licenseApi.ok).toBe(true);
+    expect(candidate.updateChannels.ok).toBe(true);
+    expect(candidate.licenseApi).toMatchObject({
+      activationProofPath: "docs/evidence/v1.0.5/mandatory-activation-30062613be1a4ebd1fe66ae86533181838da6c3e.json"
+    });
+    expect(candidate.npmPublication).toMatchObject({
+      ok: false,
+      requiredForThisRelease: true,
+      state: "candidate_pending_publication",
+      candidateReadyForPublication: true
+    });
+  });
+
   it("fails closed when the live checkout is dirty or not at the expected head", () => {
     const status = buildReleaseStatus({
       repo: {
