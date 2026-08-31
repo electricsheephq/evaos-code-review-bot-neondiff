@@ -14,6 +14,15 @@ const V104_PROVENANCE_RECOVERY = Object.freeze({
   commit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
   predecessor: "1.0.3"
 });
+const V105_PROVENANCE_RELEASE = Object.freeze({
+  package: "neondiff",
+  version: "1.0.5",
+  repository: "electricsheephq/evaos-code-review-bot-neondiff",
+  workflow: ".github/workflows/publish-npm.yml",
+  tag: "v1.0.5",
+  commit: "5e26b79abadaf14b9a6f625ae4e01aad54f313e0",
+  predecessor: "1.0.4"
+});
 const DESKTOP_ONLY_RC_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-rc\.(?:[1-9]\d*)$/;
 const DESKTOP_ONLY_FINAL_TAG = "v1.1.0";
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/;
@@ -231,47 +240,56 @@ function verifyPack(args) {
       const expectedRepository = required(args, "expected-repository");
       const expectedWorkflow = required(args, "expected-workflow");
       const expectedTag = required(args, "expected-tag");
-      if (
-        expectedPackage !== V104_PROVENANCE_RECOVERY.package
-        || expectedVersion !== V104_PROVENANCE_RECOVERY.version
-        || expectedRepository !== V104_PROVENANCE_RECOVERY.repository
-        || expectedWorkflow !== V104_PROVENANCE_RECOVERY.workflow
-        || expectedTag !== V104_PROVENANCE_RECOVERY.tag
-        || expectedGitHead !== V104_PROVENANCE_RECOVERY.commit
-      ) {
-        fail("verified npm provenance fallback is scoped only to the v1.0.4 recovery");
-      }
       const recoveryProofPath = args.get("recovery-proof");
-      if (!recoveryProofPath) {
-        fail("npm gitHead fallback requires a protected-main recovery dispatch proof");
+      const isV104Recovery = expectedPackage === V104_PROVENANCE_RECOVERY.package
+        && expectedVersion === V104_PROVENANCE_RECOVERY.version
+        && expectedRepository === V104_PROVENANCE_RECOVERY.repository
+        && expectedWorkflow === V104_PROVENANCE_RECOVERY.workflow
+        && expectedTag === V104_PROVENANCE_RECOVERY.tag
+        && expectedGitHead === V104_PROVENANCE_RECOVERY.commit;
+      const isV105Release = expectedPackage === V105_PROVENANCE_RELEASE.package
+        && expectedVersion === V105_PROVENANCE_RELEASE.version
+        && expectedRepository === V105_PROVENANCE_RELEASE.repository
+        && expectedWorkflow === V105_PROVENANCE_RELEASE.workflow
+        && expectedTag === V105_PROVENANCE_RELEASE.tag
+        && expectedGitHead === V105_PROVENANCE_RELEASE.commit;
+      if (!isV104Recovery && !isV105Release) {
+        fail("verified npm provenance fallback is scoped only to the exact v1.0.5 release or v1.0.4 recovery");
       }
-      let recoveryProof;
-      try {
-        recoveryProof = JSON.parse(readFileSync(recoveryProofPath, "utf8"));
-      } catch {
-        fail("recovery dispatch proof is not valid JSON");
-      }
-      if (
-        recoveryProof?.schemaVersion !== 1
-        || recoveryProof?.kind !== "neondiff.npm.provenance-recovery-dispatch"
-        || recoveryProof?.eventName !== "workflow_dispatch"
-        || recoveryProof?.githubRef !== "refs/heads/main"
-        || recoveryProof?.workflowRef !== V104_PROVENANCE_RECOVERY.workflowRef
-        || typeof recoveryProof?.githubSha !== "string"
-        || !/^[0-9a-f]{40}$/.test(recoveryProof.githubSha)
-        || recoveryProof?.workflowSha !== recoveryProof.githubSha
-        || recoveryProof?.mainSha !== recoveryProof.githubSha
-        || recoveryProof?.package !== expectedPackage
-        || recoveryProof?.repository !== expectedRepository
-        || recoveryProof?.workflow !== expectedWorkflow
-        || recoveryProof?.tag !== expectedTag
-        || recoveryProof?.tagCommit !== expectedGitHead
-        || recoveryProof?.packageVersion !== expectedVersion
-        || recoveryProof?.provenanceRecovery !== true
-        || recoveryProof?.releaseValid !== true
-        || recoveryProof?.packageExists !== true
-      ) {
-        fail("recovery dispatch proof does not match the exact protected-main v1.0.4 recovery");
+      if (isV104Recovery) {
+        if (!recoveryProofPath) {
+          fail("npm gitHead fallback requires a protected-main recovery dispatch proof");
+        }
+        let recoveryProof;
+        try {
+          recoveryProof = JSON.parse(readFileSync(recoveryProofPath, "utf8"));
+        } catch {
+          fail("recovery dispatch proof is not valid JSON");
+        }
+        if (
+          recoveryProof?.schemaVersion !== 1
+          || recoveryProof?.kind !== "neondiff.npm.provenance-recovery-dispatch"
+          || recoveryProof?.eventName !== "workflow_dispatch"
+          || recoveryProof?.githubRef !== "refs/heads/main"
+          || recoveryProof?.workflowRef !== V104_PROVENANCE_RECOVERY.workflowRef
+          || typeof recoveryProof?.githubSha !== "string"
+          || !/^[0-9a-f]{40}$/.test(recoveryProof.githubSha)
+          || recoveryProof?.workflowSha !== recoveryProof.githubSha
+          || recoveryProof?.mainSha !== recoveryProof.githubSha
+          || recoveryProof?.package !== expectedPackage
+          || recoveryProof?.repository !== expectedRepository
+          || recoveryProof?.workflow !== expectedWorkflow
+          || recoveryProof?.tag !== expectedTag
+          || recoveryProof?.tagCommit !== expectedGitHead
+          || recoveryProof?.packageVersion !== expectedVersion
+          || recoveryProof?.provenanceRecovery !== true
+          || recoveryProof?.releaseValid !== true
+          || recoveryProof?.packageExists !== true
+        ) {
+          fail("recovery dispatch proof does not match the exact protected-main v1.0.4 recovery");
+        }
+      } else if (recoveryProofPath) {
+        fail("v1.0.5 verified npm provenance fallback cannot use a recovery dispatch proof");
       }
       let provenance;
       try {
@@ -397,6 +415,77 @@ function verifyRecoveryChannels(args) {
     targetVersion,
     expectedPredecessor,
     action
+  }));
+}
+
+function verifyV105ExistingPackageContinuation(args) {
+  const eventName = required(args, "event-name");
+  const githubRef = required(args, "github-ref");
+  const workflowRef = required(args, "workflow-ref");
+  const workflowSha = required(args, "workflow-sha");
+  const githubSha = required(args, "github-sha");
+  const mainSha = required(args, "main-sha");
+  const releaseTag = required(args, "release-tag");
+  const tagCommit = required(args, "tag-commit");
+  const packageVersion = required(args, "package-version");
+  const packageExists = parseBoolean(required(args, "package-exists"), "package-exists");
+  const existingPackageContinuation = parseBoolean(required(args, "existing-package-continuation"), "existing-package-continuation");
+  const provenanceRecovery = parseBoolean(required(args, "provenance-recovery"), "provenance-recovery");
+  const latestVersion = required(args, "latest-version");
+  const quarantineVersion = args.get("quarantine-version") ?? "";
+  const targetVersion = required(args, "target-version");
+  const expectedPredecessor = required(args, "expected-predecessor");
+
+  if (
+    !existingPackageContinuation
+    || provenanceRecovery
+    || eventName !== "workflow_dispatch"
+    || githubRef !== "refs/heads/main"
+    || workflowRef !== "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main"
+  ) {
+    fail("v1.0.5 existing-package continuation requires an explicit protected-main workflow dispatch");
+  }
+  if (
+    !/^[0-9a-f]{40}$/.test(githubSha)
+    || workflowSha !== githubSha
+    || mainSha !== githubSha
+  ) {
+    fail("v1.0.5 continuation workflow and protected-main SHAs must match exactly");
+  }
+  if (
+    releaseTag !== V105_PROVENANCE_RELEASE.tag
+    || tagCommit !== V105_PROVENANCE_RELEASE.commit
+    || packageVersion !== V105_PROVENANCE_RELEASE.version
+    || targetVersion !== V105_PROVENANCE_RELEASE.version
+    || expectedPredecessor !== V105_PROVENANCE_RELEASE.predecessor
+  ) {
+    fail("v1.0.5 existing-package continuation is scoped only to the immutable v1.0.5 release");
+  }
+  if (!packageExists) fail("v1.0.5 existing-package continuation requires the immutable npm package to already exist");
+
+  let action;
+  if (latestVersion === expectedPredecessor) {
+    if (quarantineVersion !== targetVersion) {
+      fail("v1.0.5 continuation requires the exact package to own release-candidate before promotion");
+    }
+    action = "promote_existing_package";
+  } else if (latestVersion === targetVersion) {
+    if (quarantineVersion !== "" && quarantineVersion !== targetVersion) {
+      fail("v1.0.5 continuation refuses unexpected release-candidate ownership");
+    }
+    action = quarantineVersion === targetVersion ? "confirm_and_cleanup" : "confirmed";
+  } else {
+    fail("v1.0.5 continuation refuses unexpected latest ownership");
+  }
+  console.log(JSON.stringify({
+    bounded: true,
+    action,
+    latestVersion,
+    quarantineVersion,
+    targetVersion,
+    expectedPredecessor,
+    packageExists,
+    existingPackageContinuation
   }));
 }
 
@@ -540,5 +629,6 @@ else if (command === "verify-pack") verifyPack(args);
 else if (command === "verify-channel") verifyChannel(args);
 else if (command === "verify-recovery-dispatch") verifyRecoveryDispatch(args);
 else if (command === "verify-recovery-channels") verifyRecoveryChannels(args);
+else if (command === "verify-v105-existing-package-continuation") verifyV105ExistingPackageContinuation(args);
 else if (command === "verify-predecessor-rollback") verifyPredecessorRollback(args);
-else fail("command must be classify, verify-git, verify-pack, verify-channel, verify-recovery-dispatch, verify-recovery-channels, or verify-predecessor-rollback");
+else fail("command must be classify, verify-git, verify-pack, verify-channel, verify-recovery-dispatch, verify-recovery-channels, verify-v105-existing-package-continuation, or verify-predecessor-rollback");
