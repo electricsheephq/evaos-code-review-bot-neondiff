@@ -13,7 +13,7 @@ Usage:
   sh install.sh [--dry-run] [--prefix /path/to/prefix]
 
 Environment:
-  NEONDIFF_VERSION  Version to install, defaults to 1.0.4.
+  NEONDIFF_VERSION  Version to install, defaults to the published 1.0.4 package.
   NPM_PREFIX        Optional npm global prefix.
 
 Requires Node.js 26 or newer and npm.

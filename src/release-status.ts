@@ -170,6 +170,22 @@ export interface PublicReleaseStatus {
     ok: boolean;
     channels: PublicReleaseChannelStatus[];
   };
+  npmPublication: NpmPublicationStatus;
+}
+
+export interface NpmPublicationStatus {
+  ok: boolean;
+  requiredForThisRelease: boolean;
+  state: string;
+  candidateReadyForPublication?: boolean;
+  publicationProofPath?: string;
+  packageArtifact?: {
+    name?: string;
+    version?: string;
+    shasum?: string;
+    integrity?: string;
+  };
+  detail: string;
 }
 
 export interface PublicReleaseGateStatus {
@@ -242,6 +258,9 @@ const CHECKOUT_ISSUANCE_STATES = new Set([
   CHECKOUT_ISSUANCE_READY_STATE,
   ...CHECKOUT_ISSUANCE_DEFERRED_STATES
 ]);
+const NPM_PUBLICATION_PROOF_KIND = "neondiff.npm-publication-proof.v1";
+const NPM_PUBLICATION_PENDING_STATE = "candidate_pending_publication";
+const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/;
 const CHECKOUT_ISSUANCE_LOOKUP_KEYS = new Set([
   "neondiff_monthly",
   "neondiff_yearly",
@@ -434,6 +453,11 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
           name: "public_update_channels",
           ok: input.publicRelease.updateChannels.ok,
           detail: describePublicUpdateChannels(input.publicRelease.updateChannels.channels)
+        },
+        {
+          name: "public_npm_publication",
+          ok: input.publicRelease.npmPublication.ok,
+          detail: input.publicRelease.npmPublication.detail
         }
       ]
     : [];
@@ -638,6 +662,12 @@ export function readPublicReleaseManifestStatus(input: {
       updateChannels: {
         ok: false,
         channels: []
+      },
+      npmPublication: {
+        ok: false,
+        requiredForThisRelease: true,
+        state: "missing",
+        detail: "npm publication proof is unavailable because manifest is absent"
       }
     };
   }
@@ -645,6 +675,7 @@ export function readPublicReleaseManifestStatus(input: {
   try {
     const manifest = JSON.parse(readFileSync(absolutePath, "utf8")) as unknown;
     const root = asRecord(manifest);
+    const packageArtifact = asRecord(root.packageArtifact);
     const source = asRecord(root.source);
     const docs = asRecord(root.docs);
     const licenseApi = asRecord(root.licenseApi);
@@ -672,12 +703,16 @@ export function readPublicReleaseManifestStatus(input: {
     const expectedReleaseNotesPath = expectedVersionOk ? `docs/releases/${expectedVersion}.md` : undefined;
     const releaseNotesPathOk = expectedReleaseNotesPath !== undefined && releaseNotesPath === expectedReleaseNotesPath;
     const expectedChangelogVersion = expectedVersionOk ? stripLeadingV(expectedVersion) : undefined;
+    const legacyManifestRemainsReadable =
+      expectedVersion === "v1.0.4" &&
+      changelog.version !== undefined &&
+      isVersionAtLeast(`v${changelog.version}`, "v1.0.5");
     const changelogVersionOk =
       expectedChangelogVersion !== undefined &&
-      changelog.version === expectedChangelogVersion;
+      (changelog.version === expectedChangelogVersion || legacyManifestRemainsReadable);
     const changelogReleaseNotesPathOk =
       expectedReleaseNotesPath !== undefined &&
-      changelog.releaseNotesPath === expectedReleaseNotesPath;
+      (changelog.releaseNotesPath === expectedReleaseNotesPath || legacyManifestRemainsReadable);
     const docsOk =
       expectedVersionOk &&
       manifestVersionOk &&
@@ -803,9 +838,15 @@ export function readPublicReleaseManifestStatus(input: {
       })
     );
     const channelsOk = channels.every((channel) => channel.ok);
+    const npmPublication = readNpmPublicationStatus({
+      cwd: input.cwd,
+      expectedVersion,
+      manifestPackageArtifact: packageArtifact,
+      now: input.now
+    });
     return {
       manifestPath: input.manifestPath,
-      ok: releaseLevelOk && docsOk && licenseOk && channelsOk,
+      ok: releaseLevelOk && docsOk && licenseOk && channelsOk && npmPublication.ok,
       version,
       releaseLevel,
       releaseLevelGate: {
@@ -887,7 +928,8 @@ export function readPublicReleaseManifestStatus(input: {
       updateChannels: {
         ok: channelsOk,
         channels
-      }
+      },
+      npmPublication
     };
   } catch (error) {
     return {
@@ -914,8 +956,285 @@ export function readPublicReleaseManifestStatus(input: {
       updateChannels: {
         ok: false,
         channels: []
+      },
+      npmPublication: {
+        ok: false,
+        requiredForThisRelease: true,
+        state: "invalid",
+        detail: "npm publication proof is unavailable because manifest is invalid"
       }
     };
+  }
+}
+
+function readNpmPublicationStatus(input: {
+  cwd: string;
+  expectedVersion?: string;
+  manifestPackageArtifact: Record<string, unknown>;
+  now?: Date;
+}): NpmPublicationStatus {
+  const expectedVersion = input.expectedVersion;
+  const packageVersion = expectedVersion?.startsWith("v") ? expectedVersion.slice(1) : undefined;
+  const manifestArtifact = input.manifestPackageArtifact;
+  const legacyArtifact = {
+    name: readString(manifestArtifact.name),
+    version: readString(manifestArtifact.version),
+    shasum: readString(manifestArtifact.shasum),
+    integrity: readString(manifestArtifact.integrity)
+  };
+  if (!expectedVersion || !isVersionAtLeast(expectedVersion, "v1.0.5")) {
+    return {
+      ok: true,
+      requiredForThisRelease: false,
+      state: "legacy",
+      packageArtifact: legacyArtifact,
+      detail: "typed npm publication proof is not required for the legacy release"
+    };
+  }
+  const candidatePath = `docs/release-candidates/${expectedVersion}.json`;
+  const absoluteCandidatePath = resolve(input.cwd, candidatePath);
+  if (!existsSync(absoluteCandidatePath)) {
+    return {
+      ok: false,
+      requiredForThisRelease: true,
+      state: "missing",
+      packageArtifact: legacyArtifact,
+      detail: `release candidate ledger missing at ${candidatePath}`
+    };
+  }
+  let candidate: Record<string, unknown>;
+  try {
+    candidate = asRecord(JSON.parse(readFileSync(absoluteCandidatePath, "utf8")));
+  } catch {
+    return {
+      ok: false,
+      requiredForThisRelease: true,
+      state: "invalid",
+      packageArtifact: legacyArtifact,
+      detail: `release candidate ledger is invalid JSON at ${candidatePath}`
+    };
+  }
+  const candidateArtifact = asRecord(candidate.packageArtifact);
+  const registry = asRecord(candidate.registry);
+  const state = readString(candidate.state) ?? "missing";
+  const registryState = readString(registry.state) ?? "missing";
+  const publicationProofPath = readString(candidate.publicationProofPath);
+  const artifact = {
+    name: readString(candidateArtifact.name) ?? "neondiff",
+    version: readString(candidateArtifact.version) ?? readString(candidate.packageVersion),
+    shasum: readString(candidateArtifact.shasum),
+    integrity: readString(candidateArtifact.integrity)
+  };
+  const identityFailures: string[] = [];
+  if (readString(candidate.version) !== expectedVersion) identityFailures.push(`candidate version must match ${expectedVersion}`);
+  if (readString(candidate.packageVersion) !== packageVersion) identityFailures.push(`candidate packageVersion must match ${packageVersion}`);
+  const candidateSourceSha = readString(candidate.candidateSourceSha);
+  const source = asRecord(candidate.source);
+  if (!/^[a-f0-9]{40}$/.test(candidateSourceSha ?? "")) identityFailures.push("candidateSourceSha must be a full lowercase Git SHA");
+  if (readString(source.candidateHeadBeforeReleaseMetadata) !== candidateSourceSha) identityFailures.push("candidate source identity must match candidateSourceSha");
+  if (artifact.name !== "neondiff") identityFailures.push("candidate packageArtifact.name must be neondiff");
+  if (artifact.version !== packageVersion) identityFailures.push(`candidate packageArtifact.version must match ${packageVersion}`);
+  const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
+  const declared = registryState === "published_latest" && state === "published";
+  if (!pending && !declared) identityFailures.push("candidate registry state must be pending_publication or published_latest");
+  if (pending) {
+    const immutablePredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
+    if (immutablePredecessor !== "1.0.4") identityFailures.push("pending candidate predecessor must be immutable v1.0.4");
+    if (readString(registry.latest) !== "1.0.4") identityFailures.push("pending candidate registry.latest must retain 1.0.4");
+    if (readString(registry.predecessor) !== "1.0.4") identityFailures.push("pending candidate registry.predecessor must be 1.0.4");
+    if (registry.releaseCandidatePresent !== false) identityFailures.push("pending candidate releaseCandidatePresent must be false");
+    if (candidateArtifact.requiredForThisRelease !== true) identityFailures.push("pending candidate packageArtifact must be required for this release");
+    if (readString(candidateArtifact.state) !== "candidate") identityFailures.push("pending candidate packageArtifact.state must be candidate");
+    if (!/^[a-f0-9]{40}$/.test(artifact.shasum ?? "")) identityFailures.push("pending candidate packageArtifact.shasum must be a full lowercase SHA-1 digest");
+    if (!NPM_SHA512_INTEGRITY_PATTERN.test(artifact.integrity ?? "")) identityFailures.push("pending candidate packageArtifact.integrity must be a SHA-512 npm integrity value");
+    if (!publicationProofPath) {
+      identityFailures.push("pending candidate must declare publicationProofPath");
+    } else {
+      const confined = resolveConfinedEvidenceProofPath(input.cwd, publicationProofPath, "publicationProofPath");
+      if (!confined.ok) identityFailures.push(`invalid publicationProofPath: ${confined.detail}`);
+    }
+    return {
+      ok: false,
+      requiredForThisRelease: true,
+      state,
+      candidateReadyForPublication: identityFailures.length === 0,
+      publicationProofPath,
+      packageArtifact: artifact,
+      detail: identityFailures.length === 0
+        ? `neondiff@${packageVersion} is a candidate; npm publication proof is pending publication`
+        : identityFailures.join("; ")
+    };
+  }
+  if (declared && readString(registry.latest) !== packageVersion) {
+    identityFailures.push(`published candidate registry.latest must match ${packageVersion}`);
+  }
+  if (declared && registry.releaseCandidatePresent !== false) identityFailures.push("candidate releaseCandidatePresent must be false");
+  if (declared && JSON.stringify(legacyArtifact) !== JSON.stringify(artifact)) identityFailures.push("candidate packageArtifact must match manifest packageArtifact");
+  const declaredPredecessor = readString(registry.predecessor);
+  if (!declaredPredecessor) {
+    identityFailures.push("published candidate must declare registry.predecessor");
+  } else if (declaredPredecessor !== stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4")) {
+    identityFailures.push("published candidate registry.predecessor must match the immutable predecessor");
+  }
+  if (!publicationProofPath) identityFailures.push("published candidate must declare publicationProofPath");
+  let proofResult: { ok: boolean; detail: string } = { ok: false, detail: "publication proof is missing" };
+  if (publicationProofPath) {
+    const confined = resolveConfinedEvidenceProofPath(input.cwd, publicationProofPath, "publicationProofPath");
+    if (!confined.ok) {
+      proofResult = { ok: false, detail: confined.detail };
+    } else if (!existsSync(confined.absolutePath)) {
+      proofResult = { ok: false, detail: `publication proof missing at ${publicationProofPath}` };
+    } else {
+      proofResult = validateNpmPublicationProof({
+        cwd: input.cwd,
+        proofPath: publicationProofPath,
+        expectedVersion,
+        expectedPredecessor: stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4"),
+        expectedArtifact: legacyArtifact,
+        expectedLatest: packageVersion,
+        expectedReleaseCandidatePresent: registry.releaseCandidatePresent,
+        expectedTagCommit: readString(candidate.tagCommit) ?? readString(candidate.releaseCommit) ?? "",
+        now: input.now
+      });
+    }
+  }
+  return {
+    ok: identityFailures.length === 0 && proofResult.ok,
+    requiredForThisRelease: true,
+    state,
+    publicationProofPath,
+    packageArtifact: artifact,
+    detail: identityFailures.length === 0 && proofResult.ok
+      ? `neondiff@${packageVersion} publication proof verified`
+      : [...identityFailures, ...(proofResult.ok ? [] : [proofResult.detail])].join("; ")
+  };
+}
+
+export function validateNpmPublicationProof(input: {
+  cwd: string;
+  proofPath: string;
+  expectedVersion: string;
+  expectedPredecessor: string;
+  expectedLatest?: string;
+  expectedReleaseCandidatePresent?: unknown;
+  expectedTagCommit: string;
+  expectedArtifact: { name?: string; version?: string; shasum?: string; integrity?: string };
+  now?: Date;
+}): { ok: boolean; detail: string } {
+  const confined = resolveConfinedEvidenceProofPath(input.cwd, input.proofPath, "publicationProofPath");
+  if (!confined.ok) return { ok: false, detail: confined.detail };
+  let proof: Record<string, unknown>;
+  let serialized: string;
+  try {
+    serialized = readFileSync(confined.absolutePath, "utf8");
+    proof = asRecord(JSON.parse(serialized));
+  } catch {
+    return { ok: false, detail: "publication proof JSON is invalid" };
+  }
+  if (containsSecretLikeText(serialized)) return { ok: false, detail: "publication proof contains secret-like material" };
+  const failures: string[] = [];
+  const packageArtifact = asRecord(proof.packageArtifact);
+  const registry = asRecord(proof.registry);
+  const workflowRun = asRecord(proof.workflowRun);
+  const githubRelease = asRecord(proof.githubRelease);
+  const sourceIdentity = asRecord(proof.sourceIdentity);
+  const unexpectedTopLevel = collectUnexpectedKeys(proof, new Set([
+    "schemaVersion", "evidenceKind", "observedAt", "package", "packageName", "version", "packageVersion",
+    "tag", "tagCommit", "workflowRun", "workflowRunId", "workflowRunUrl", "packageArtifact", "registry",
+    "sourceIdentity", "githubRelease", "proofBoundary"
+  ]));
+  if (unexpectedTopLevel.length) failures.push(`unexpected proof fields: ${unexpectedTopLevel.join(", ")}`);
+  const unexpectedWorkflowRun = collectUnexpectedKeys(workflowRun, new Set(["id", "url", "workflow"]));
+  if (unexpectedWorkflowRun.length) failures.push(`unexpected workflowRun fields: ${unexpectedWorkflowRun.join(", ")}`);
+  if (proof.schemaVersion !== 1) failures.push("schemaVersion must be 1");
+  if (readString(proof.evidenceKind) !== NPM_PUBLICATION_PROOF_KIND) failures.push(`evidenceKind must be ${NPM_PUBLICATION_PROOF_KIND}`);
+  const packageName = readString(proof.package) ?? readString(proof.packageName);
+  if (readString(proof.package) && readString(proof.packageName) && readString(proof.package) !== readString(proof.packageName)) {
+    failures.push("package and packageName must agree");
+  }
+  if (packageName !== "neondiff") failures.push("package must be neondiff");
+  const packageVersion = readString(proof.version) ?? readString(proof.packageVersion);
+  if (readString(proof.version) && readString(proof.packageVersion) && readString(proof.version) !== readString(proof.packageVersion)) {
+    failures.push("version and packageVersion must agree");
+  }
+  if (packageVersion !== input.expectedVersion.slice(1)) failures.push(`package version must match ${input.expectedVersion.slice(1)}`);
+  const tag = readString(proof.tag);
+  const tagCommit = readString(proof.tagCommit);
+  if (tag !== input.expectedVersion) failures.push(`tag must match ${input.expectedVersion}`);
+  if (!/^[a-f0-9]{40}$/.test(tagCommit ?? "")) failures.push("tagCommit must be a full lowercase Git SHA");
+  if (!/^[a-f0-9]{40}$/.test(input.expectedTagCommit)) failures.push("expectedTagCommit must be a full lowercase Git SHA");
+  if (tagCommit !== input.expectedTagCommit) failures.push("tagCommit must match the recorded release commit");
+  const workflowRunUrl = readString(workflowRun.url) ?? readString(proof.workflowRunUrl) ?? (typeof proof.workflowRun === "string" ? proof.workflowRun : undefined);
+  const workflowRunUrlId = workflowRunUrl?.match(/\/actions\/runs\/(\d+)$/)?.[1];
+  const workflowRunId = workflowRun.id ?? proof.workflowRunId ?? (Number.isInteger(proof.workflowRun) ? proof.workflowRun : workflowRunUrlId ? Number(workflowRunUrlId) : undefined);
+  if (proof.workflowRunId !== undefined && proof.workflowRunId !== workflowRunId || proof.workflowRunUrl !== undefined && proof.workflowRunUrl !== workflowRunUrl) failures.push("workflowRun aliases must agree");
+  if (!Number.isInteger(workflowRunId) || Number(workflowRunId) < 1) failures.push("workflowRun id must be a positive integer");
+  if (!workflowRunUrl || !isSafeWorkflowRunUrl(workflowRunUrl)) failures.push("workflowRun must be a public GitHub Actions run URL");
+  if (workflowRunUrlId && Number(workflowRunId) !== Number(workflowRunUrlId)) failures.push("workflowRun id must match the run ID in workflowRun URL");
+  if (workflowRun.workflow !== ".github/workflows/publish-npm.yml") failures.push("workflowRun.workflow must be publish-npm.yml");
+  const githubReleasePublishedAt = readString(githubRelease.publishedAt);
+  const githubReleasePublishedAtMs = githubReleasePublishedAt ? Date.parse(githubReleasePublishedAt) : Number.NaN;
+  if (githubRelease.url !== "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/" + input.expectedVersion || githubRelease.tag !== input.expectedVersion || githubRelease.draft !== false || githubRelease.prerelease !== false || Number.isNaN(githubReleasePublishedAtMs)) failures.push("githubRelease must identify a published non-prerelease release");
+  const artifactName = readString(packageArtifact.name) ?? readString(packageArtifact.package);
+  if (readString(packageArtifact.name) && readString(packageArtifact.package) && readString(packageArtifact.name) !== readString(packageArtifact.package)) {
+    failures.push("packageArtifact.name and packageArtifact.package must agree");
+  }
+  const artifactVersion = readString(packageArtifact.version);
+  const artifactIntegrity = readString(packageArtifact.integrity);
+  const artifactShasum = readString(packageArtifact.shasum);
+  const unexpectedArtifact = collectUnexpectedKeys(packageArtifact, new Set(["name", "package", "version", "integrity", "shasum"]));
+  if (unexpectedArtifact.length) failures.push(`unexpected packageArtifact fields: ${unexpectedArtifact.join(", ")}`);
+  if (artifactName !== "neondiff") failures.push("packageArtifact.name must be neondiff");
+  if (artifactVersion !== input.expectedVersion.slice(1)) failures.push("packageArtifact.version must match package version");
+  if (!NPM_SHA512_INTEGRITY_PATTERN.test(artifactIntegrity ?? "")) failures.push("packageArtifact.integrity must be a SHA-512 npm integrity value");
+  if (!/^[a-f0-9]{40}$/.test(artifactShasum ?? "")) failures.push("packageArtifact.shasum must be a full lowercase SHA-1 digest");
+  if (artifactName !== input.expectedArtifact.name || artifactVersion !== input.expectedArtifact.version || artifactIntegrity !== input.expectedArtifact.integrity || artifactShasum !== input.expectedArtifact.shasum) {
+    failures.push("packageArtifact does not match the reviewed candidate artifact");
+  }
+  const unexpectedRegistry = collectUnexpectedKeys(registry, new Set(["latest", "predecessor", "releaseCandidatePresent"]));
+  if (unexpectedRegistry.length) failures.push(`unexpected registry fields: ${unexpectedRegistry.join(", ")}`);
+  if (readString(registry.latest) !== (input.expectedLatest ?? input.expectedVersion.slice(1))) failures.push("registry.latest must match the exact published version");
+  if (readString(registry.predecessor) !== input.expectedPredecessor) failures.push("registry.predecessor must match the immutable predecessor");
+  if (registry.releaseCandidatePresent !== false || input.expectedReleaseCandidatePresent !== undefined && registry.releaseCandidatePresent !== input.expectedReleaseCandidatePresent) failures.push("registry.releaseCandidatePresent must be false and match candidate");
+  const mode = readString(sourceIdentity.mode);
+  const sourceKeys = collectUnexpectedKeys(sourceIdentity, new Set(["mode", "gitHead", "provenance"]));
+  if (sourceKeys.length) failures.push(`unexpected sourceIdentity fields: ${sourceKeys.join(", ")}`);
+  if (mode !== "gitHead" && mode !== "matching_gitHead" && mode !== "verified_provenance" && mode !== "provenance") failures.push("sourceIdentity.mode must be gitHead/matching_gitHead or verified_provenance/provenance");
+  if (mode === "gitHead" || mode === "matching_gitHead") {
+    if (Object.prototype.hasOwnProperty.call(sourceIdentity, "provenance")) failures.push("gitHead mode must not include provenance");
+    if (readString(sourceIdentity.gitHead) !== tagCommit) failures.push("sourceIdentity.gitHead must match tagCommit");
+  } else if (mode === "verified_provenance" || mode === "provenance") {
+    if (Object.prototype.hasOwnProperty.call(sourceIdentity, "gitHead")) failures.push("verified_provenance mode must not include gitHead");
+    const provenance = asRecord(sourceIdentity.provenance);
+    const unexpectedProvenance = collectUnexpectedKeys(provenance, new Set(["package", "version", "repository", "workflow", "tag", "commit", "integrity", "shasum", "verified"]));
+    if (unexpectedProvenance.length) failures.push(`unexpected provenance fields: ${unexpectedProvenance.join(", ")}`);
+    if (provenance.verified !== true || provenance.package !== "neondiff" || provenance.version !== input.expectedVersion.slice(1) || provenance.repository !== "electricsheephq/evaos-code-review-bot-neondiff" || provenance.workflow !== ".github/workflows/publish-npm.yml" || provenance.tag !== input.expectedVersion || provenance.commit !== tagCommit || provenance.integrity !== artifactIntegrity || provenance.shasum !== artifactShasum) {
+      failures.push("verified provenance must bind package, version, tag, workflow, source, and artifact");
+    }
+  }
+  const observedAt = readString(proof.observedAt);
+  const observedAtMs = observedAt ? Date.parse(observedAt) : Number.NaN;
+  if (Number.isNaN(observedAtMs)) {
+    failures.push("observedAt must be a valid ISO timestamp");
+  } else if (observedAtMs > (input.now ?? new Date()).getTime() + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("observedAt must not be more than 5 minutes in the future");
+  }
+  const validationClockMs = (input.now ?? new Date()).getTime();
+  if (!Number.isNaN(githubReleasePublishedAtMs) && !Number.isNaN(observedAtMs) && githubReleasePublishedAtMs > observedAtMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("githubRelease.publishedAt must not be later than observedAt by more than 5 minutes");
+  }
+  if (!Number.isNaN(githubReleasePublishedAtMs) && githubReleasePublishedAtMs > validationClockMs + LICENSE_PROOF_MAX_FUTURE_SKEW_MS) {
+    failures.push("githubRelease.publishedAt must not be more than 5 minutes in the future");
+  }
+  return { ok: failures.length === 0, detail: failures.join("; ") };
+}
+
+function isSafeWorkflowRunUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && parsed.hostname === "github.com" && parsed.username === "" && parsed.password === "" && parsed.search === "" && parsed.hash === "" && /^\/electricsheephq\/evaos-code-review-bot-neondiff\/actions\/runs\/\d+$/.test(parsed.pathname);
+  } catch {
+    return false;
   }
 }
 
@@ -1163,7 +1482,7 @@ function validateLicenseProofObservedAt(observedAt: string | undefined, now?: Da
   return failures;
 }
 
-function validateMandatoryActivationProofPath(input: {
+export function validateMandatoryActivationProofPath(input: {
   cwd: string;
   proofPath?: string;
   expectedReleaseVersion?: string;
@@ -2053,7 +2372,7 @@ function resolveConfinedHealthProofPath(cwd: string, proofPath: string): { ok: t
 function resolveConfinedEvidenceProofPath(
   cwd: string,
   proofPath: string,
-  fieldName: "healthProofPath" | "checkoutIssuanceProofPath" | "checkoutIssuanceAuthenticatedProofPath" | "activationProofPath"
+  fieldName: "healthProofPath" | "checkoutIssuanceProofPath" | "checkoutIssuanceAuthenticatedProofPath" | "activationProofPath" | "publicationProofPath"
 ): { ok: true; absolutePath: string } | { ok: false; detail: string } {
   if (isAbsolute(proofPath)) {
     return { ok: false, detail: `${fieldName} must be relative and stay within docs/evidence` };

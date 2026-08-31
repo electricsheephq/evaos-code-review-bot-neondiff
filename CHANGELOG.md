@@ -36,6 +36,15 @@ for the semver/GA-line and npm dist-tag policy.
   converged `latest=1.0.4`, removed the owned quarantine tag, and the public
   install, API activation, cache no-bypass, and browser-dashboard proof passed.
 
+## [1.0.5] - docs/releases/v1.0.5.md
+
+### Changed
+
+- Prepare the next immutable npm package with package-derived worker and Desktop
+  identity checks, explicit `requires-license` public config wording, and a
+  strict post-publication proof boundary. This source candidate is not a
+  publication claim until registry and GitHub release evidence is recorded.
+
 ## [1.0.4] - docs/releases/v1.0.4.md
 
 ### Changed

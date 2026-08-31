@@ -16,6 +16,7 @@ const V104_PROVENANCE_RECOVERY = Object.freeze({
 });
 const DESKTOP_ONLY_RC_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-rc\.(?:[1-9]\d*)$/;
 const DESKTOP_ONLY_FINAL_TAG = "v1.1.0";
+const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 function fail(message) {
   console.error(message);
@@ -420,6 +421,117 @@ function verifyChannel(args) {
   console.log(JSON.stringify({ npmTag, currentVersion, targetVersion, expectedPredecessor }));
 }
 
+function readJsonFile(path, label) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    fail(`${label} is not valid JSON`);
+  }
+}
+
+function validateRollbackPackage(value, expectedVersion, label) {
+  const metadata = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const packageName = metadata.name ?? metadata.package ?? (typeof metadata._id === "string" ? metadata._id.split("@")[0] : undefined);
+  const version = metadata.version;
+  const dist = metadata.dist && typeof metadata.dist === "object" && !Array.isArray(metadata.dist) ? metadata.dist : metadata;
+  const integrity = dist.integrity ?? metadata.integrity;
+  const shasum = dist.shasum ?? metadata.shasum;
+  if (packageName !== "neondiff" || version !== expectedVersion) {
+    fail(`${label} package identity must be neondiff@${expectedVersion}`);
+  }
+  if (typeof integrity !== "string" || !NPM_SHA512_INTEGRITY_PATTERN.test(integrity)) {
+    fail(`${label} integrity must be a SHA-512 npm integrity value`);
+  }
+  if (typeof shasum !== "string" || !/^[a-f0-9]{40}$/i.test(shasum)) {
+    fail(`${label} shasum must be a SHA-1 digest`);
+  }
+  const gitHead = metadata.gitHead ?? dist.gitHead;
+  const provenance = metadata.provenance;
+  const provenanceVerified = metadata.provenanceVerified === true || provenance?.verified === true;
+  const hasGitHead = Object.prototype.hasOwnProperty.call(metadata, "gitHead") || Object.prototype.hasOwnProperty.call(dist, "gitHead");
+  const hasProvenance = Object.prototype.hasOwnProperty.call(metadata, "provenance") || metadata.provenanceVerified === true;
+  if (hasGitHead && hasProvenance) fail(`${label} must provide exactly one source identity mode`);
+  if (hasGitHead) {
+    if (typeof gitHead !== "string" || !/^[0-9a-f]{40}$/i.test(gitHead)) fail(`${label} gitHead is malformed`);
+    return { packageName, version, integrity, shasum, sourceIdentity: "matching_gitHead", gitHead };
+  }
+  if (!hasProvenance || !provenanceVerified || !provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    fail(`${label} requires verified provenance when gitHead is absent`);
+  }
+  const repository = provenance.repository;
+  const workflow = provenance.workflow;
+  const tag = provenance.tag;
+  const commit = provenance.commit;
+  if (
+    repository !== "electricsheephq/evaos-code-review-bot-neondiff"
+    || workflow !== ".github/workflows/publish-npm.yml"
+    || tag !== `v${expectedVersion}`
+    || typeof commit !== "string"
+    || !/^[0-9a-f]{40}$/i.test(commit)
+    || provenance.package !== "neondiff"
+    || provenance.version !== expectedVersion
+    || provenance.integrity !== integrity
+    || provenance.shasum !== shasum
+  ) {
+    fail(`${label} verified provenance does not bind the exact package, tag, workflow, and source`);
+  }
+  return { packageName, version, integrity, shasum, sourceIdentity: "verified_provenance", commit };
+}
+
+function verifyPredecessorRollback(args) {
+  const eventName = required(args, "event-name");
+  const githubRef = required(args, "github-ref");
+  const rollback = parseBoolean(required(args, "predecessor-rollback"), "predecessor-rollback");
+  const confirmationOnly = parseBoolean(args.get("confirmation-only") ?? "false", "confirmation-only");
+  const provenanceRecovery = args.get("provenance-recovery") ?? "false";
+  const latestVersion = required(args, "latest-version");
+  const quarantineVersion = args.get("quarantine-version") ?? "";
+  const targetVersion = required(args, "target-version");
+  const expectedPredecessor = required(args, "expected-predecessor");
+  if (provenanceRecovery !== "false") parseBoolean(provenanceRecovery, "provenance-recovery");
+  if (eventName !== "workflow_dispatch" || githubRef !== "refs/heads/main" || !rollback || provenanceRecovery === "true") {
+    fail("predecessor rollback requires an explicit protected-main workflow dispatch");
+  }
+  if (targetVersion !== "1.0.4" || expectedPredecessor !== "1.0.4") {
+    fail("predecessor rollback requires immutable predecessor 1.0.4");
+  }
+  if (confirmationOnly ? latestVersion !== "1.0.4" : latestVersion !== "1.0.5") {
+    fail(confirmationOnly
+      ? "predecessor rollback confirmation requires latest=1.0.4"
+      : "predecessor rollback requires latest=1.0.5 before mutation");
+  }
+  if (quarantineVersion !== "") fail("predecessor rollback requires the release-candidate tag to be absent");
+  const current = validateRollbackPackage(readJsonFile(required(args, "current-metadata"), "current package metadata"), "1.0.5", "current package");
+  const predecessor = validateRollbackPackage(readJsonFile(required(args, "predecessor-metadata"), "predecessor package metadata"), "1.0.4", "predecessor package");
+  const currentTagCommit = required(args, "current-tag-commit");
+  const predecessorTagCommit = required(args, "predecessor-tag-commit");
+  if (!/^[0-9a-f]{40}$/i.test(currentTagCommit) || (current.gitHead ?? current.commit) !== currentTagCommit) {
+    fail("current package source identity does not match the immutable v1.0.5 tag commit");
+  }
+  if (!/^[0-9a-f]{40}$/i.test(predecessorTagCommit) || (predecessor.gitHead ?? predecessor.commit) !== predecessorTagCommit) {
+    fail("predecessor package source identity does not match the immutable v1.0.4 tag commit");
+  }
+  if (current.sourceIdentity !== "matching_gitHead" && current.sourceIdentity !== "verified_provenance") {
+    fail("current package source identity is not verified");
+  }
+  if (predecessor.sourceIdentity !== "matching_gitHead" && predecessor.sourceIdentity !== "verified_provenance") {
+    fail("predecessor package source identity is not verified");
+  }
+  const mutationRequired = !confirmationOnly;
+  const command = mutationRequired ? 'npm dist-tag add "neondiff@1.0.4" latest' : undefined;
+  console.log(JSON.stringify({
+    bounded: true,
+    action: mutationRequired ? "predecessor_dist_tag_rollback" : "confirm_predecessor_dist_tag_rollback",
+    latestVersion,
+    targetVersion,
+    expectedPredecessor,
+    mutationRequired,
+    currentPackage: current,
+    predecessorPackage: predecessor,
+    ...(command ? { command } : {})
+  }));
+}
+
 const [command, ...rawArgs] = process.argv.slice(2);
 const args = parseArgs(rawArgs);
 if (command === "classify") classify(args);
@@ -428,4 +540,5 @@ else if (command === "verify-pack") verifyPack(args);
 else if (command === "verify-channel") verifyChannel(args);
 else if (command === "verify-recovery-dispatch") verifyRecoveryDispatch(args);
 else if (command === "verify-recovery-channels") verifyRecoveryChannels(args);
-else fail("command must be classify, verify-git, verify-pack, verify-channel, verify-recovery-dispatch, or verify-recovery-channels");
+else if (command === "verify-predecessor-rollback") verifyPredecessorRollback(args);
+else fail("command must be classify, verify-git, verify-pack, verify-channel, verify-recovery-dispatch, verify-recovery-channels, or verify-predecessor-rollback");

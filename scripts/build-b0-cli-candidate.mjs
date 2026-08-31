@@ -168,8 +168,8 @@ function main() {
   const originalPackageLock = readFileSync(packageLockPath);
   const packageMetadata = JSON.parse(originalPackage.toString("utf8"));
   const basePackageVersion = packageMetadata.version;
-  if (packageMetadata.name !== "neondiff" || basePackageVersion !== "1.0.4") {
-    fail("B0 candidate packaging requires the reviewed neondiff@1.0.4 source baseline");
+  if (packageMetadata.name !== "neondiff" || basePackageVersion !== "1.0.5") {
+    fail("B0 candidate packaging requires the reviewed neondiff@1.0.5 source baseline");
   }
   const installRoot = mkdtempSync(join(tmpdir(), "neondiff-b0-cli-install-"));
   let manifest;

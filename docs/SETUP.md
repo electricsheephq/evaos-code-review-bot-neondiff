@@ -11,10 +11,10 @@ a fallback for contributors and reviewers who want to inspect or build locally. 
 for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
 for the support-tier pricing contract.
 
-> **v1.0.4 verification notice:** v1.0.4 is the first package intended to enforce
-> mandatory API-backed activation. Verify `npm view neondiff version` and the
-> matching non-prerelease GitHub Release before relying on it; v1.0.3 and
-> earlier do not enforce this boundary.
+> **v1.0.5 verification notice:** Before relying on v1.0.5, verify
+> `npm view neondiff@1.0.5` and the matching non-prerelease GitHub Release plus
+> its typed publication proof. If those identities do not agree, keep using the
+> verified v1.0.4 package; v1.0.3 and earlier do not enforce this boundary.
 
 ## Requirements
 
@@ -42,10 +42,17 @@ include hosted model credits, unlimited SaaS inference, or bundled provider toke
 
 ## 1. Install NeonDiff
 
-Recommended package install after v1.0.4 is published and verified:
+Recommended package install after v1.0.5 is published and verified:
 
 ```bash
-npm install -g neondiff
+npm install -g neondiff@1.0.5
+```
+
+If the required v1.0.5 registry and GitHub Release identities do not agree, use
+the immutable verified predecessor instead:
+
+```bash
+npm install -g neondiff@1.0.4
 ```
 
 Installer script:
@@ -206,7 +213,7 @@ configured `evidenceDir` as
 
 The `keychain` backend remains reserved for a separately proven native broker.
 Headless CLI activation currently rejects Keychain writes rather than passing
-license keys through process arguments. v1.0.4 supports the approved file
+license keys through process arguments. v1.0.5 supports the approved file
 backend; the Desktop app remains blocked from useful actions until native
 broker/launchd access is proven.
 The local `machineId` sent to the license API is advisory beta metadata derived

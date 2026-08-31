@@ -57,9 +57,9 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.licenseBoundary).toMatchObject({
       sourceAvailableCommercial: true,
       activationRequired: expect.stringContaining("live API-backed activation"),
-      packageVersion: "1.0.4",
+      packageVersion: "1.0.5",
       releaseState:
-        "This package reports 1.0.4; verify the matching npm version and GitHub Release before relying on activation enforcement."
+        "This package reports 1.0.5; verify the matching npm version and GitHub Release before relying on activation enforcement."
     });
     expect(output.licenseBoundary.releaseState).not.toContain("1.0.3");
     expect(output.licenseBoundary.releaseState).not.toContain("staged");

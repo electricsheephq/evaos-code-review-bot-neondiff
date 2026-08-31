@@ -172,7 +172,7 @@ function main() {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"]
     }).trim();
-    if (reportedVersion !== "1.0.4") {
+    if (reportedVersion !== sealedPackageVersion) {
       fail(`sealed worker reports unexpected version ${reportedVersion}`);
     }
     const dependencies = execFileSync("/usr/bin/otool", ["-L", output], {
