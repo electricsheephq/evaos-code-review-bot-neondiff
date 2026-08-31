@@ -186,6 +186,8 @@ describe("NeonDiff public release readiness", () => {
       expect(normalizedReleaseNotice).toContain(
         "If those identities do not agree, keep using the verified v1.0.4 package"
       );
+      expect(normalizedReleaseNotice).toMatch(/current (?:npm )?CLI \(v1\.0\.x\) requires API-backed activation for every repository/i);
+      expect(normalizedReleaseNotice).toContain("matching non-prerelease GitHub Release");
       expect(normalizedReleaseNotice).toContain("v1.0.3 and earlier do not enforce this boundary.");
       expect(releaseNotice).not.toContain("this source branch");
     }
