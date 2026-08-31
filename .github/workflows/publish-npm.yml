@@ -819,8 +819,25 @@ jobs:
           const temporaryPath = `${outputPath}.tmp`;
           rmSync(outputPath, { force: true });
           rmSync(temporaryPath, { force: true });
+          const NPM_VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+          const sanitizeVersion = (value) => (
+            typeof value === "string" && value.length <= 128 && NPM_VERSION_PATTERN.test(value)
+              ? value
+              : "[redacted]"
+          );
+          const sanitizeDistTags = (tags) => Object.fromEntries(
+            Object.entries(tags)
+              .filter(([tag]) => tag === "latest" || tag === "beta" || tag === "release-candidate")
+              .map(([tag, value]) => [tag, sanitizeVersion(value)])
+          );
           const writeResult = (distTags, quarantineCleanup) => {
-            writeFileSync(temporaryPath, `${JSON.stringify({ distTags, quarantineCleanup })}\n`, { encoding: "utf8", mode: 0o600 });
+            const sanitizedCleanup = {
+              ...quarantineCleanup,
+              observedVersion: quarantineCleanup.observedVersion === null
+                ? null
+                : sanitizeVersion(quarantineCleanup.observedVersion)
+            };
+            writeFileSync(temporaryPath, `${JSON.stringify({ distTags: sanitizeDistTags(distTags), quarantineCleanup: sanitizedCleanup })}\n`, { encoding: "utf8", mode: 0o600 });
             renameSync(temporaryPath, outputPath);
           };
           let promotionConfirmed = false;
@@ -872,10 +889,11 @@ jobs:
                 process.exit(0);
               }
               if (quarantineVersion !== expectedVersion) {
-                console.error(`::warning::refusing to remove unexpected release-candidate version ${quarantineVersion}`);
+                const sanitizedQuarantineVersion = sanitizeVersion(quarantineVersion);
+                console.error(`::warning::refusing to remove unexpected release-candidate version ${sanitizedQuarantineVersion}`);
                 writeResult(tags, {
                   state: "unexpected_owner",
-                  observedVersion: quarantineVersion,
+                  observedVersion: sanitizedQuarantineVersion,
                   removalAttempted,
                   removalAccepted
                 });
@@ -907,7 +925,7 @@ jobs:
             removalAttempted,
             removalAccepted
           });
-          process.exit(0);
+          process.exit(1);
           NODE
           # END POST_PROMOTION_CONFIRMATION
           # END V104_PROVENANCE_RECOVERY_MUTATION_GATE

@@ -59,6 +59,10 @@ if (process.env.FAKE_NPM_MODE === "unexpected") {
     if (cleanupCount < Number(process.env.FAKE_NPM_CLEANUP_CONVERGE_AT)) tags["release-candidate"] = "1.0.3";
   }
 }
+if (process.env.FAKE_NPM_EMIT_UNSAFE_OUTPUT === "true") {
+  process.stderr.write("synthetic command stderr token\\n");
+  tags.debug = "synthetic-token";
+}
 process.stdout.write(JSON.stringify(tags));
 `
   );
@@ -71,7 +75,8 @@ function runWorkflowBlock(
   mode: "converge" | "stale" | "hang" | "unexpected",
   attempts: number,
   convergeAt = attempts,
-  cleanupConvergeAt = 2
+  cleanupConvergeAt = 2,
+  emitUnsafeOutput = false
 ) {
   const binDir = writeFakeNpm(root);
   const counterPath = join(root, "view-counter.txt");
@@ -101,7 +106,8 @@ function runWorkflowBlock(
       FAKE_NPM_RM_COUNTER: rmCounterPath,
       FAKE_NPM_RM_MARKER: rmMarkerPath,
       FAKE_NPM_MODE: mode,
-      FAKE_NPM_CONVERGE_AT: String(convergeAt)
+      FAKE_NPM_CONVERGE_AT: String(convergeAt),
+      FAKE_NPM_EMIT_UNSAFE_OUTPUT: String(emitUnsafeOutput)
     }
   });
   return { cleanupCounterPath, counterPath, outputPath, result, rmCounterPath };
@@ -168,7 +174,7 @@ describe("npm dist-tag convergence confirmation", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-dist-tag-cleanup-lag-"));
     const { outputPath, result, rmCounterPath } = runWorkflowBlock(root, "converge", 2, 1, 99);
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
     expect(readFileSync(rmCounterPath, "utf8")).toBe("1");
     expect(result.stderr).toContain("::warning::release-candidate cleanup remains unconfirmed after 2 attempts");
     expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
@@ -180,6 +186,19 @@ describe("npm dist-tag convergence confirmation", () => {
         removalAccepted: true
       }
     });
+  });
+
+  it("fails closed with sanitized evidence when cleanup remains unconfirmed", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dist-tag-cleanup-sanitized-"));
+    const { outputPath, result } = runWorkflowBlock(root, "converge", 2, 1, 99, true);
+
+    expect(result.status).toBe(1);
+    const evidence = readFileSync(outputPath, "utf8");
+    expect(evidence).toContain("pending_registry_convergence");
+    expect(evidence).not.toContain("synthetic-token");
+    expect(evidence).not.toContain("synthetic command stderr token");
+    expect(result.stderr).not.toContain("synthetic command stderr token");
+    expect(JSON.parse(evidence).distTags).toEqual({ latest: "1.0.3", "release-candidate": "1.0.3" });
   });
 
   it("derives the workflow block indentation from its marker", () => {
