@@ -52,7 +52,7 @@ feed ring `stable`. The exact channel, tag object, peeled source commit,
 artifact, tree, feed, and packet identities must agree before any candidate
 bytes are staged.
 
-Before an RC declaration, signing, or notarization, #559 must have published
+Before any RC or stable declaration, signing, or notarization, #559 must have published
 immutable `neondiff@1.0.5` and a fresh registry readback must prove its exact
 manifest, tarball, CLI, worker, integrity, provenance, and source identity.
 The Desktop-only npm classification is a no-op for the Desktop release only

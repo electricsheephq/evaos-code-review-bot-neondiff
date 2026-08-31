@@ -86,7 +86,14 @@ Requirements:
 Recommended package install after v1.0.5 is published and verified:
 
 ```bash
-npm install -g neondiff
+npm install -g neondiff@1.0.5
+```
+
+If the required v1.0.5 registry and GitHub Release identities do not agree, use
+the immutable verified predecessor instead:
+
+```bash
+npm install -g neondiff@1.0.4
 ```
 
 Installer script path:

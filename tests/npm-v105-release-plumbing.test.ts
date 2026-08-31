@@ -26,6 +26,9 @@ describe("neondiff@1.0.5 release plumbing", () => {
   it("makes the typed npm publication receipt a release-status gate", () => {
     const releaseStatus = read("src/release-status.ts");
     const readiness = read("scripts/check-public-release-ready.mjs");
+    const releaseRunbook = read("apps/neondiff-desktop/docs/mac-release-runbook.md");
+    const readme = read("README.md");
+    const setup = read("docs/SETUP.md");
 
     expect(releaseStatus).toContain("neondiff.npm-publication-proof.v1");
     expect(releaseStatus).toContain("publicationProofPath");
@@ -34,6 +37,12 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(readiness).toContain("status.npmPublication.packageArtifact");
     expect(readiness).toContain("candidate ledger shasum does not match npm pack");
     expect(readiness).toContain("candidate ledger integrity does not match npm pack");
+    expect(readiness).not.toContain('(prepublication === "true" && !prepublicationReady)');
+    expect(releaseRunbook).toContain("Before any RC or stable declaration, signing, or notarization");
+    for (const installGuide of [readme, setup]) {
+      expect(installGuide).toContain("npm install -g neondiff@1.0.5");
+      expect(installGuide).toContain("npm install -g neondiff@1.0.4");
+    }
   });
 
   it("routes predecessor rollback only through an explicit serialized workflow mode", () => {

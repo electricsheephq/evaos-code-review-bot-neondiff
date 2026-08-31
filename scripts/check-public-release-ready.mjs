@@ -63,7 +63,7 @@ const status = readPublicReleaseManifestStatus({
   allowStaleActivationProof: existingPackageRecovery === "true"
 });
 const prepublicationReady = prepublication === "true" && candidateMode && status.npmPublication.ok === false && status.npmPublication.requiredForThisRelease === true && status.npmPublication.state === "candidate_pending_publication" && status.npmPublication.candidateReadyForPublication === true && status.releaseLevelGate.ok && status.docs.ok && status.licenseApi.ok && status.updateChannels.ok;
-if ((!status.ok && !prepublicationReady) || (prepublication === "true" && !prepublicationReady)) fail("public release manifest is blocked; run release-status locally for redacted gate details");
+if (!status.ok && !prepublicationReady) fail("public release manifest is blocked; run release-status locally for redacted gate details");
 const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
 if (actualHead !== releaseHead) fail("release head does not match the checked-out commit");
 

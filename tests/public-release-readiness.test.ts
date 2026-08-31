@@ -800,7 +800,8 @@ describe("NeonDiff public release readiness", () => {
       );
 
     expect(docs).toContain("https://github.com/electricsheephq/evaos-code-review-bot-neondiff");
-    expect(docs).toMatch(/npm install -g neondiff(?!@)/i);
+    expect(docs).toMatch(/npm install -g neondiff@1\.0\.5/i);
+    expect(docs).toMatch(/npm install -g neondiff@1\.0\.4/i);
     expect(docs).toMatch(/neondiff dashboard --config config\.local\.json/i);
     expect(docs).toMatch(/Verify API Key/i);
     expect(docs).toMatch(/license\s+status,\s+GitHub App status,\s+daemon status,\s+and provider readiness/i);
