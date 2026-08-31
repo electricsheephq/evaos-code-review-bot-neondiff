@@ -79,4 +79,24 @@ describe("neondiff@1.0.5 release plumbing", () => {
     const installStep = rollback?.steps?.find((step) => (step as { name?: string }).name === "Install exact script-free rollback dependencies");
     expect(installStep?.run?.trim()).toBe("npm ci --ignore-scripts");
   });
+
+  it("routes immutable v1.0.5 existing-package continuation through protected main", () => {
+    const workflow = read(".github/workflows/publish-npm.yml");
+    const parsed = parse(workflow) as {
+      on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
+      jobs?: Record<string, { if?: string }>;
+    };
+
+    expect(parsed.on?.workflow_dispatch?.inputs).toHaveProperty("v105_existing_package_continuation");
+    expect(workflow).toContain("V105_EXISTING_PACKAGE_CONTINUATION");
+    expect(workflow).toContain("verify-v105-existing-package-continuation");
+    expect(workflow).toContain("Checkout protected-main publication policy");
+    expect(workflow).toContain('test "$RELEASE_TAG" = "v1.0.5"');
+    expect(workflow).toContain('$V105_EXISTING_PACKAGE_CONTINUATION" != "true"');
+    expect(workflow).toContain('neondiff@$PACKAGE_VERSION already exists; existing-package continuation will not publish');
+    expect(workflow).not.toContain('npm publish "$PACK_TARBALL" --provenance --access public --tag "latest"');
+    expect(parsed.jobs?.publish?.if).toContain("predecessor_rollback");
+    expect(parsed.jobs?.rollback_predecessor?.if).toContain("predecessor_rollback");
+    expect(workflow).toContain("Predecessor rollback cannot run with v1.0.5 existing-package continuation");
+  });
 });

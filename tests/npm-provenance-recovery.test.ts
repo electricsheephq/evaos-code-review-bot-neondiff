@@ -239,6 +239,7 @@ fi
         GIT_STATE_FILE: gitState,
         FAIL_STAGE: "",
         PROVENANCE_RECOVERY: "true",
+        V105_EXISTING_PACKAGE_CONTINUATION: "false",
         RUNNER_TEMP: root,
         RELEASE_EVENT_NAME: "workflow_dispatch",
         GITHUB_REF: "refs/heads/main",
@@ -308,6 +309,56 @@ fi
       const commands = readFileSync(log, "utf8");
       expect(commands).not.toMatch(/^publish\b/m);
       expect(result.status).toBe(packageAlreadyExists === "true" ? 0 : 1);
+    }
+  });
+
+  it("only continues v1.0.5 from its existing release-candidate package", () => {
+    const block = extractBlock("V105_EXISTING_PACKAGE_CONTINUATION");
+    const policyScript = resolve("scripts/npm-release-policy.mjs");
+    const { root, bin, log } = harness();
+    const exactEnvironment = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      NPM_MUTATION_LOG: log,
+      POLICY_SCRIPT: policyScript,
+      V105_EXISTING_PACKAGE_CONTINUATION: "true",
+      PROVENANCE_RECOVERY: "false",
+      RELEASE_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: "refs/heads/main",
+      WORKFLOW_REF: "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main",
+      WORKFLOW_SHA: "a".repeat(40),
+      GITHUB_SHA: "a".repeat(40),
+      PREPROMOTION_MAIN_SHA: "a".repeat(40),
+      RELEASE_TAG: "v1.0.5",
+      EXPECTED_GIT_HEAD: "5e26b79abadaf14b9a6f625ae4e01aad54f313e0",
+      PACKAGE_VERSION: "1.0.5",
+      PACKAGE_ALREADY_EXISTS: "true",
+      PREPROMOTION_TAG_VERSION: "1.0.4",
+      PREPROMOTION_QUARANTINE_VERSION: "1.0.5",
+      EXPECTED_PREDECESSOR: "1.0.4",
+      NPM_TAG: "latest"
+    };
+    const accepted = spawnSync("bash", ["-euo", "pipefail", "-c", block], {
+      cwd: root,
+      encoding: "utf8",
+      env: exactEnvironment
+    });
+    expect(accepted.status, `${accepted.stdout}\n${accepted.stderr}`).toBe(0);
+    expect(readFileSync(log, "utf8")).toBe("");
+
+    for (const [name, overrides] of [
+      ["foreign latest", { PREPROMOTION_TAG_VERSION: "9.9.9" }],
+      ["foreign quarantine", { PREPROMOTION_QUARANTINE_VERSION: "9.9.9" }],
+      ["missing package", { PACKAGE_ALREADY_EXISTS: "false" }],
+      ["recovery mode", { PROVENANCE_RECOVERY: "true" }]
+    ] as const) {
+      const rejected = spawnSync("bash", ["-euo", "pipefail", "-c", block], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...exactEnvironment, ...overrides }
+      });
+      expect(rejected.status, name).not.toBe(0);
+      expect(readFileSync(log, "utf8"), name).toBe("");
     }
   });
 

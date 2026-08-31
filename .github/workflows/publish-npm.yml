@@ -15,6 +15,11 @@ on:
         required: true
         type: boolean
         default: false
+      v105_existing_package_continuation:
+        description: Verify and promote the already-published v1.0.5 release-candidate package without publishing
+        required: true
+        type: boolean
+        default: false
       predecessor_rollback:
         description: Roll back npm latest from immutable 1.0.5 to immutable 1.0.4 after guarded verification
         required: true
@@ -47,6 +52,7 @@ jobs:
       - name: Verify rollback dispatch and policy identity
         env:
           PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+          V105_EXISTING_PACKAGE_CONTINUATION: ${{ inputs.v105_existing_package_continuation || false }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
@@ -56,6 +62,10 @@ jobs:
           }
           test "$PROVENANCE_RECOVERY" != "true" || {
             echo "::error::Predecessor rollback cannot run with provenance recovery"
+            exit 1
+          }
+          test "$V105_EXISTING_PACKAGE_CONTINUATION" != "true" || {
+            echo "::error::Predecessor rollback cannot run with v1.0.5 existing-package continuation"
             exit 1
           }
           test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/publish-npm.yml@refs/heads/main" || {
@@ -188,6 +198,7 @@ jobs:
       RELEASE_EVENT_NAME: ${{ github.event_name }}
       RELEASE_PRERELEASE: ${{ github.event.release.prerelease || false }}
       PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+      V105_EXISTING_PACKAGE_CONTINUATION: ${{ inputs.v105_existing_package_continuation || false }}
       PREDECESSOR_ROLLBACK: ${{ inputs.predecessor_rollback || false }}
       WORKFLOW_REF: ${{ github.workflow_ref }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -204,11 +215,41 @@ jobs:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
           RELEASE_EVENT_NAME: ${{ github.event_name }}
           PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+          V105_EXISTING_PACKAGE_CONTINUATION: ${{ inputs.v105_existing_package_continuation || false }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+          if [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
+            test "$RELEASE_EVENT_NAME" = "workflow_dispatch" || {
+              echo "::error::v1.0.5 existing-package continuation requires workflow_dispatch"
+              exit 1
+            }
+            test "$GITHUB_REF" = "refs/heads/main" || {
+              echo "::error::v1.0.5 existing-package continuation must run from protected main"
+              exit 1
+            }
+            test "$RELEASE_TAG" = "v1.0.5" || {
+              echo "::error::v1.0.5 existing-package continuation is scoped only to v1.0.5"
+              exit 1
+            }
+            test "$PROVENANCE_RECOVERY" != "true" || {
+              echo "::error::v1.0.5 existing-package continuation cannot run with v1.0.4 provenance recovery"
+              exit 1
+            }
+            test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/publish-npm.yml@refs/heads/main" || {
+              echo "::error::v1.0.5 continuation workflow ref must be publish-npm.yml on protected main"
+              exit 1
+            }
+            test "$WORKFLOW_SHA" = "$GITHUB_SHA" || {
+              echo "::error::v1.0.5 continuation workflow SHA must equal the protected-main dispatch SHA"
+              exit 1
+            }
+            test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" || {
+              echo "::error::v1.0.5 continuation dispatch SHA is not the current protected-main head"
+              exit 1
+            }
+          elif [ "$PROVENANCE_RECOVERY" = "true" ]; then
             test "$RELEASE_EVENT_NAME" = "workflow_dispatch" || {
               echo "::error::Provenance recovery requires workflow_dispatch"
               exit 1
@@ -240,7 +281,12 @@ jobs:
             exit 1
           }
           TAG_COMMIT="$(git rev-list -n 1 "$RELEASE_TAG")"
-          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+          if [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
+            test "$TAG_COMMIT" = "5e26b79abadaf14b9a6f625ae4e01aad54f313e0" || {
+              echo "::error::v1.0.5 continuation tag must peel to the immutable v1.0.5 release commit"
+              exit 1
+            }
+          elif [ "$PROVENANCE_RECOVERY" = "true" ]; then
             test "$RELEASE_TAG" = "v1.0.4" || {
               echo "::error::Provenance recovery is scoped only to v1.0.4"
               exit 1
@@ -376,8 +422,8 @@ jobs:
             --candidate-ledger "$CANDIDATE_LEDGER" \
             --prepublication "$PREPUBLICATION_MODE"
 
-      - name: Checkout protected-main recovery policy
-        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
+      - name: Checkout protected-main publication policy
+        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && (inputs.provenance_recovery == true || inputs.v105_existing_package_continuation == true) }}
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ github.workflow_sha }}
@@ -385,8 +431,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify protected-main recovery policy checkout
-        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && inputs.provenance_recovery == true }}
+      - name: Verify protected-main publication policy checkout
+        if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && (inputs.provenance_recovery == true || inputs.v105_existing_package_continuation == true) }}
         env:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
@@ -404,6 +450,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
           RELEASE_EVENT_NAME: ${{ github.event_name }}
           PROVENANCE_RECOVERY: ${{ inputs.provenance_recovery || false }}
+          V105_EXISTING_PACKAGE_CONTINUATION: ${{ inputs.v105_existing_package_continuation || false }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
@@ -420,11 +467,11 @@ jobs:
           PACK_TARBALL="$RUNNER_TEMP/neondiff-reviewed-pack/neondiff-$PACKAGE_VERSION.tgz"
           POLICY_SCRIPT="scripts/npm-release-policy.mjs"
           PROVENANCE_VERIFIER="scripts/verify-npm-provenance.mjs"
-          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+          if [ "$PROVENANCE_RECOVERY" = "true" ] || [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
             POLICY_SCRIPT=".recovery-policy/scripts/npm-release-policy.mjs"
             PROVENANCE_VERIFIER=".recovery-policy/scripts/verify-npm-provenance.mjs"
             test -f "$POLICY_SCRIPT" -a -f "$PROVENANCE_VERIFIER" || {
-              echo "::error::Protected-main recovery policy files are missing"
+              echo "::error::Protected-main publication policy files are missing"
               exit 1
             }
           fi
@@ -433,7 +480,7 @@ jobs:
             exit 1
           }
           PACKAGE_ALREADY_EXISTS=false
-          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+          if [ "$PROVENANCE_RECOVERY" = "true" ] || [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
             for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
               OBSERVED_PACKAGE_VERSION="$(npm view "neondiff@$PACKAGE_VERSION" version --prefer-online 2>/dev/null || true)"
               if [ "$OBSERVED_PACKAGE_VERSION" = "$PACKAGE_VERSION" ]; then
@@ -445,7 +492,7 @@ jobs:
           elif npm view "neondiff@$PACKAGE_VERSION" version >/dev/null 2>&1; then
             PACKAGE_ALREADY_EXISTS=true
           fi
-          if { [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]; } && [ "$PROVENANCE_RECOVERY" != "true" ]; then
+          if { [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$WORKFLOW_REF" = "electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/publish-npm.yml@refs/heads/main" ]; } && [ "$PROVENANCE_RECOVERY" != "true" ] && [ "$V105_EXISTING_PACKAGE_CONTINUATION" != "true" ]; then
             echo "::error::Protected-main npm execution must remain in provenance recovery mode"
             exit 1
           fi
@@ -567,6 +614,16 @@ jobs:
               exit 1
             }
             echo "neondiff@$PACKAGE_VERSION already exists; provenance recovery will not publish"
+          elif [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
+            test "$PACKAGE_VERSION" = "1.0.5" || {
+              echo "::error::v1.0.5 existing-package continuation package version is not 1.0.5"
+              exit 1
+            }
+            test "$PACKAGE_ALREADY_EXISTS" = "true" || {
+              echo "::error::v1.0.5 existing-package continuation requires neondiff@$PACKAGE_VERSION to already exist"
+              exit 1
+            }
+            echo "neondiff@$PACKAGE_VERSION already exists; existing-package continuation will not publish"
           elif [ "$PACKAGE_ALREADY_EXISTS" = "true" ]; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
@@ -677,7 +734,7 @@ jobs:
             --target-version "$PACKAGE_VERSION" \
             --expected-predecessor "$EXPECTED_PREDECESSOR" \
             --npm-tag "$NPM_TAG"
-          if [ "$PROVENANCE_RECOVERY" = "true" ]; then
+          if [ "$PROVENANCE_RECOVERY" = "true" ] || [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
             PREPROMOTION_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
             test "$PREPROMOTION_MAIN_SHA" = "$GITHUB_SHA" || {
@@ -688,6 +745,27 @@ jobs:
           npm view neondiff dist-tags --json --prefer-online > prepromotion-channel.json
           PREPROMOTION_TAG_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags[process.argv[2]] ?? "")' prepromotion-channel.json "$NPM_TAG")"
           PREPROMOTION_QUARANTINE_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!tags || Array.isArray(tags) || typeof tags !== "object") process.exit(1); process.stdout.write(tags["release-candidate"] ?? "")' prepromotion-channel.json)"
+          # BEGIN V105_EXISTING_PACKAGE_CONTINUATION
+          if [ "$V105_EXISTING_PACKAGE_CONTINUATION" = "true" ]; then
+            node "$POLICY_SCRIPT" verify-v105-existing-package-continuation \
+              --event-name "$RELEASE_EVENT_NAME" \
+              --github-ref "$GITHUB_REF" \
+              --workflow-ref "$WORKFLOW_REF" \
+              --workflow-sha "$WORKFLOW_SHA" \
+              --github-sha "$GITHUB_SHA" \
+              --main-sha "$PREPROMOTION_MAIN_SHA" \
+              --release-tag "$RELEASE_TAG" \
+              --tag-commit "$EXPECTED_GIT_HEAD" \
+              --package-version "$PACKAGE_VERSION" \
+              --package-exists "$PACKAGE_ALREADY_EXISTS" \
+              --existing-package-continuation "$V105_EXISTING_PACKAGE_CONTINUATION" \
+              --provenance-recovery "$PROVENANCE_RECOVERY" \
+              --latest-version "$PREPROMOTION_TAG_VERSION" \
+              --quarantine-version "$PREPROMOTION_QUARANTINE_VERSION" \
+              --target-version "$PACKAGE_VERSION" \
+              --expected-predecessor "$EXPECTED_PREDECESSOR"
+          fi
+          # END V105_EXISTING_PACKAGE_CONTINUATION
           # BEGIN V104_PROVENANCE_RECOVERY_PREPROMOTION_GUARD
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
             node "$POLICY_SCRIPT" verify-recovery-channels \
