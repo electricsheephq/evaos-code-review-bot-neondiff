@@ -422,7 +422,7 @@ jobs:
             --candidate-ledger "$CANDIDATE_LEDGER" \
             --prepublication "$PREPUBLICATION_MODE"
 
-      - name: Checkout protected-main publication policy
+      - name: Checkout protected-main recovery policy
         if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && (inputs.provenance_recovery == true || inputs.v105_existing_package_continuation == true) }}
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -431,7 +431,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify protected-main publication policy checkout
+      - name: Verify protected-main recovery policy checkout
         if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && (inputs.provenance_recovery == true || inputs.v105_existing_package_continuation == true) }}
         env:
           WORKFLOW_SHA: ${{ github.workflow_sha }}

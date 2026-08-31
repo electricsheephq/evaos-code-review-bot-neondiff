@@ -90,7 +90,7 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(parsed.on?.workflow_dispatch?.inputs).toHaveProperty("v105_existing_package_continuation");
     expect(workflow).toContain("V105_EXISTING_PACKAGE_CONTINUATION");
     expect(workflow).toContain("verify-v105-existing-package-continuation");
-    expect(workflow).toContain("Checkout protected-main publication policy");
+    expect(workflow).toContain("Checkout protected-main recovery policy");
     expect(workflow).toContain('test "$RELEASE_TAG" = "v1.0.5"');
     expect(workflow).toContain('$V105_EXISTING_PACKAGE_CONTINUATION" != "true"');
     expect(workflow).toContain('neondiff@$PACKAGE_VERSION already exists; existing-package continuation will not publish');
