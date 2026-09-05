@@ -28,8 +28,10 @@ Exit `0` = all required credentials present; non-zero lists exactly what is miss
 
 ## Release identity and package gate
 
-Before an RC or stable signing action, resolve the fixed Desktop declaration and
-accepted packet. RC and stable require a distinct annotated tag object whose
+Before an RC or stable signing action, resolve the accepted Desktop declaration,
+exact source/package identity, and logical credential profile. Construction does
+not consume the final accepted promotion packet: artifact verification and the
+required real tests supply that packet afterward. RC and stable require a distinct annotated tag object whose
 annotation contains exactly one line:
 
 ```text
@@ -38,8 +40,10 @@ NeonDiff-Release-Class: desktop-only
 
 The RC product channel remains `rc`, even though its retained Sparkle enclosure
 and enclosure proof use the observed `beta` feed ring. Stable uses the `stable`
-feed ring. The tag, peeled source, artifact, tree, feed, and packet identities
-must agree.
+feed ring. Construction must agree with the declaration's tag, peeled source,
+package, channel, and intended feed identity. After construction, verify the
+actual artifact and tree; before promotion, require the complete accepted packet
+and agreement of all artifact, tree, attestation, and feed identities.
 
 Issue #559 must first publish and provenance-bind immutable `neondiff@1.0.5`.
 The release manager must read back its exact manifest, tarball, CLI, worker,
@@ -47,6 +51,10 @@ integrity, provenance, and source identity before declaring, signing, or
 notarizing a Desktop candidate. Credential presence cannot bypass this gate.
 The Desktop-only npm no-op is valid only after that package identity is
 reconciled; the tag marker alone does not prove unchanged CLI/worker bytes.
+
+A redundant `release-candidate` alias resolving to the same verified `1.0.5`
+does not block private staging or construction. It does not satisfy #559's
+strict typed closure, which remains required before public GA.
 
 Executable update, rollback, identical-byte re-update, feed/publication, and
 local-adoption commands remain blocked until #895 reaches `source-accepted`.

@@ -84,9 +84,45 @@ No layer may be substituted for another. In particular, a source checkout,
 build output, running process, or account-independent health page cannot prove
 the current launch entitlement or installed release identity.
 
+## Construction, verification, and promotion order
+
+The release stages are ordered; later evidence cannot be a prerequisite for
+creating the artifact that produces it. Under #610's product-first staging
+admission, #559 may establish exact immutable `neondiff@1.0.5` package,
+provenance, worker-byte, and install evidence while redundant same-version
+`release-candidate` alias cleanup remains open. This permits private staging
+only. It does not satisfy the strict typed publication validator, close #559,
+or permit public GA; never report an absent alias while it is present.
+
+1. Prove the supported development/staging setup and dry-review path before
+   Developer ID signing or notarization. Do not use the operations installation
+   to debug a candidate.
+2. Construct from the accepted clean source, append-only declaration, exact
+   package identity, and approved credential profile. A final artifact digest,
+   notarization result, or accepted promotion packet does not exist yet.
+3. After signing, notarization, stapling, and packaging, verify the actual
+   artifact and collect its immutable identity and clean-host evidence.
+4. Assemble and accept the promotion packet only from real completed evidence
+   for the selected gate. Source acceptance of #895 precedes RC publication;
+   its live transition acceptance and the stable minimums precede stable
+   promotion. Construction receipts cannot substitute for these approvals.
+
+The immutable GitHub release used as the packet producer's artifact input is
+not itself accepted promotion. Its separately authorized, reported creation
+may follow private signed-byte testing and #895 source acceptance while
+feed/site/download promotion remains held. #1093 must reconcile the producer's
+feed prerequisites and protected stable-declaration selection before execution;
+do not synthesize stable identity from an uploaded asset or imply GA acceptance.
+
+This ordering adds no alternate transition implementation or evidence schema.
+The accepted-packet validation, cryptographic binding, two-asset retention,
+append-only history, and no-replacement rules below remain mandatory. An
+incomplete construction record must never be passed off as an accepted packet.
+
 ## Immutable accepted evidence packet
 
-Every candidate and promotion decision names one immutable packet containing:
+Every accepted promotion decision names one immutable packet containing the
+completed evidence required by its release gate:
 
 - source SHA, immutable tag object, protected/signed-tag verification, and
   provenance binding exact artifact/tree digests to that source/build;
@@ -271,6 +307,24 @@ startup/update/review session for each on every supported target, a seven-day
 window from last install, 100% candidate-bound startup/update success, zero
 P0/P1 regressions or state-loss/credential-exposure outcomes, and zero
 unresolved P2 threads; unknown denominators or missing outcomes block stable.
+The 24-hour and 72-hour/100-cycle acceptance checkpoints may be collected inside
+the same seven-day window when their candidate, install, account, target, and
+scenario bindings agree; these are not additional consecutive waits. Reinstall
+or an identity/behavior change invalidates the affected observations, not
+unrelated evidence. Five internal unassisted evaluators remain required by
+#524; synthetic sessions cannot substitute.
+
+For #610's observation gate, one cycle is one completed outer worker loop,
+not an item, transport retry, or synthetic test iteration. Record 24-hour and
+72-hour checkpoints with at least 100 completed cycles by the latter: one
+worker pair, no expired held leases or new unclassified failures, a new-failure
+rate below 1% (failed cycles / completed cycles), and zero P0/P1, leaks,
+stale/duplicate posts or state loss. The redacted #524/#610 receipt binds source,
+package/artifact, host/account aliases, install/start/end times, cycle and
+failure counts, classification references, and heartbeat/lease summaries;
+missing counts or bindings fail the gate. Five internal participants require
+at least four unassisted successes and median first review under ten minutes.
+
 These are candidate-bound observations, not fleet/customer authority: they may
 not be inferred from process health, ring names, dashboards, or an operator
 install, and the authoritative fleet/customer decision remains separate.
