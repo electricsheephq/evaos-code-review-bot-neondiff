@@ -107,6 +107,13 @@ or permit public GA; never report an absent alias while it is present.
    its live transition acceptance and the stable minimums precede stable
    promotion. Construction receipts cannot substitute for these approvals.
 
+The immutable GitHub release used as the packet producer's artifact input is
+not itself accepted promotion. Its separately authorized, reported creation
+may follow private signed-byte testing and #895 source acceptance while
+feed/site/download promotion remains held. #1093 must reconcile the producer's
+feed prerequisites and protected stable-declaration selection before execution;
+do not synthesize stable identity from an uploaded asset or imply GA acceptance.
+
 This ordering adds no alternate transition implementation or evidence schema.
 The accepted-packet validation, cryptographic binding, two-asset retention,
 append-only history, and no-replacement rules below remain mandatory. An
@@ -306,6 +313,17 @@ scenario bindings agree; these are not additional consecutive waits. Reinstall
 or an identity/behavior change invalidates the affected observations, not
 unrelated evidence. Five internal unassisted evaluators remain required by
 #524; synthetic sessions cannot substitute.
+
+For #610's observation gate, one cycle is one completed outer worker loop,
+not an item, transport retry, or synthetic test iteration. Record 24-hour and
+72-hour checkpoints with at least 100 completed cycles by the latter: one
+worker pair, no expired held leases or new unclassified failures, a new-failure
+rate below 1% (failed cycles / completed cycles), and zero P0/P1, leaks,
+stale/duplicate posts or state loss. The redacted #524/#610 receipt binds source,
+package/artifact, host/account aliases, install/start/end times, cycle and
+failure counts, classification references, and heartbeat/lease summaries;
+missing counts or bindings fail the gate. Five internal participants require
+at least four unassisted successes and median first review under ten minutes.
 
 These are candidate-bound observations, not fleet/customer authority: they may
 not be inferred from process health, ring names, dashboards, or an operator

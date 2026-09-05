@@ -203,6 +203,11 @@ missing or disagrees with the accepted source.
 
 Required owner/Codex inputs for a real signing run:
 
+- A passing pre-signing #524 development/staging receipt at the exact candidate
+  source and registry package: clean internal macOS 15 host, supported setup,
+  account/bot/repository/entitlement/configuration/worker agreement, truthful
+  readiness, and one dry review without hidden repair. Missing or failed proof
+  blocks Developer ID signing and notarization; never use the operations app.
 - Exact accepted declaration, source SHA, annotated tag and tag-object SHA,
   version, build, product channel, and logical credential profile. The final
   accepted packet digest is collected after artifact verification and required
@@ -381,6 +386,15 @@ release authority has been recorded. After that gate, use only the exact tested
 repository-owned command supplied by #895; never assemble a transition from
 these snippets or from a mutable live feed.
 
+Distinguish authorized immutable artifact hosting from accepted promotion:
+the packet producer consumes an existing non-draft immutable GitHub release.
+After private signed-byte testing and #895 source acceptance, a separately
+authorized artifact-hosting release may supply those exact bytes while the
+feed/site/download promotion remains held. That hosting action is public and
+must be reported; it is not private staging, an accepted packet, or GA.
+Complete #1093's protected-declaration and feed/packet ordering checks before
+dispatching its workflow; this document does not certify that workflow ready.
+
 Rollback proof:
 
 - Generate or reference the committed rollback fixture/appcast.
@@ -418,6 +432,8 @@ a packet or treat a construction receipt as promotion approval:
   version, build, product channel, feed ring, operator, UTC timestamp, and,
   when CI-built, workflow run URL plus artifact ID/name.
 - `declaration.json`: exact accepted Desktop declaration and index readback.
+- `pre-signing-product-smoke.md`: the passing source/package-bound #524 setup,
+  readiness/alignment and dry-review receipt required before signing.
 - `accepted-packet.json`: content-addressed accepted packet and its digest.
 - `credential-preflight.json`: output from `preflight-credentials.sh --json`.
 - `build.txt`: build commands, bundle metadata, and checksums.
