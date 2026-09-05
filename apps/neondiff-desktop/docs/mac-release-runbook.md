@@ -17,9 +17,11 @@ publication, installed update, runtime adoption, customer readiness, or GA.
 
 **TRANSITION GATE:** executable update, rollback, identical-byte re-update,
 feed/publication, and local-adoption commands remain blocked until #895 reaches
-`source-accepted` with its exact-head CI, review, and acceptance evidence. Until
-then, use only declaration/packet resolution, credential presence checks, and
-non-mutating dry-plan evidence. Manual copy, source reset, rebuild, LaunchAgent
+`source-accepted` with its exact-head CI, review, and acceptance evidence. Private
+development/staging proof and declared artifact construction may proceed in an
+isolated environment without modifying an existing installation or public surface.
+Resolve construction inputs and credentials first; collect artifact verification
+and accepted promotion evidence afterward. Manual copy, source reset, rebuild, LaunchAgent
 restart, database edit, or ad hoc feed mutation is not a supported substitute.
 
 ## Release State Gates
@@ -48,9 +50,12 @@ NeonDiff-Release-Class: desktop-only
 
 The RC product channel is `rc`; its retained Sparkle enclosure and enclosure
 proof remain on the observed `beta` feed ring. Stable uses product channel and
-feed ring `stable`. The exact channel, tag object, peeled source commit,
-artifact, tree, feed, and packet identities must agree before any candidate
-bytes are staged.
+feed ring `stable`. Before construction, bind the accepted declaration, exact
+channel, tag object, peeled source commit, package, intended feed, and logical
+credential profile. Verify actual artifact/tree/signature/notary identities after
+construction. Before promotion, require the complete accepted packet, attestation,
+real-test evidence, and exact artifact/tree/feed agreement. The final packet is
+not a prerequisite for constructing the bytes needed to produce that evidence.
 
 Before any RC or stable declaration, signing, or notarization, #559 must have published
 immutable `neondiff@1.0.5` and a fresh registry readback must prove its exact
@@ -58,6 +63,10 @@ manifest, tarball, CLI, worker, integrity, provenance, and source identity.
 The Desktop-only npm classification is a no-op for the Desktop release only
 after this package identity gate is satisfied; the marker never proves
 unchanged CLI/worker bytes and never bypasses #559.
+
+A redundant `release-candidate` alias resolving to the same verified `1.0.5`
+does not block private staging or construction. Keep cleanup and strict typed
+#559 closure open until proven; both remain required before public GA.
 
 ## Fast Desktop Iteration Before Release
 
@@ -195,7 +204,9 @@ missing or disagrees with the accepted source.
 Required owner/Codex inputs for a real signing run:
 
 - Exact accepted declaration, source SHA, annotated tag and tag-object SHA,
-  version, build, product channel, and accepted packet digest.
+  version, build, product channel, and logical credential profile. The final
+  accepted packet digest is collected after artifact verification and required
+  real tests, before promotion; it is not a signing input.
 - Fresh #559 registry readback for immutable `neondiff@1.0.5`.
 - Unique portable `RUN_ID` for this immutable evidence packet.
 - Developer ID Application identity name, for example
@@ -399,7 +410,9 @@ Create a public-safe packet under:
 $RUN_DIR/
 ```
 
-Minimum files:
+Minimum files collected across the completed release gates, not prerequisites
+for construction. Record missing later-gate evidence as pending; never fabricate
+a packet or treat a construction receipt as promotion approval:
 
 - `source.txt`: repo, branch, source SHA, annotated tag and tag-object SHA,
   version, build, product channel, feed ring, operator, UTC timestamp, and,
@@ -462,7 +475,7 @@ minimal packet:
 
 ```text
 Accepted declaration:
-Accepted packet digest:
+Accepted packet digest (after verification/tests, before promotion):
 Source SHA:
 Annotated tag / tag-object SHA:
 Version / build:
@@ -479,7 +492,8 @@ Rollback target:
 License/update policy:
 ```
 
-The agent should stop before signing if any required input is missing. The agent
+The agent should stop before signing if any construction input above is missing;
+the final accepted packet is later-gate evidence, not a construction input. The agent
 should stop before publishing if appcast hosting, artifact hosting, rollback, or
 license/update policy is undecided.
 
