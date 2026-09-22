@@ -120,7 +120,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { appendLcmReviewAssessment, assertOrdinaryLcmReviewBodySafe, buildLcmReviewAssessmentBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import {
   buildReviewPrompt,
@@ -2146,7 +2146,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
-    const summary = buildSummary({
+    const generatedSummary = buildSummary({
       repo,
       pull,
       comments,
@@ -2155,12 +2155,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: input.dryRun,
       commandDecision
     });
+    const summary = isLcmReviewRepository(repo)
+      ? escapeOrdinaryLcmReviewBody(generatedSummary)
+      : generatedSummary;
     assertReviewOutputSafe(summary);
-    if (isLcmReviewRepository(repo)) assertOrdinaryLcmReviewBodySafe(summary);
     for (const comment of comments) {
       assertReviewOutputSafe(comment.body);
     }
-    const walkthrough = config.walkthrough.enabled && input.dryRun
+    const generatedWalkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,
           pull,
@@ -2176,9 +2178,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
+    const walkthrough = generatedWalkthrough && isLcmReviewRepository(repo)
+      ? { ...generatedWalkthrough, body: escapeOrdinaryLcmReviewBody(generatedWalkthrough.body) }
+      : generatedWalkthrough;
     if (walkthrough) {
       assertReviewOutputSafe(walkthrough.body);
-      if (isLcmReviewRepository(repo)) assertOrdinaryLcmReviewBodySafe(walkthrough.body);
     }
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({

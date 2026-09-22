@@ -72,14 +72,14 @@ export function lcmReviewFileInventoryIsComplete(fileCount: number): boolean {
 
 /** Keep original prose and assessment intact within the consumer's whole-body limit. */
 export function appendLcmReviewAssessment(body: string, assessment: string | undefined, repo: string): string {
-  if (isLcmReviewRepository(repo)) assertOrdinaryLcmReviewBodySafe(body);
-  if (!assessment) return body;
-  const combined = [body, assessment].filter(Boolean).join("\n\n");
-  return Buffer.byteLength(combined, "utf8") <= 8192 ? combined : body;
+  const ordinaryBody = isLcmReviewRepository(repo) ? escapeOrdinaryLcmReviewBody(body) : body;
+  if (!assessment) return ordinaryBody;
+  const combined = [ordinaryBody, assessment].filter(Boolean).join("\n\n");
+  return Buffer.byteLength(combined, "utf8") <= 8192 ? combined : ordinaryBody;
 }
 
-export function assertOrdinaryLcmReviewBodySafe(body: string): void {
-  if (body.includes("<!-- lcm-x-ai-review:v2")) throw new Error("ordinary review body contains the reserved LCM assessment marker");
+export function escapeOrdinaryLcmReviewBody(body: string): string {
+  return body.replaceAll("<!-- lcm-x-ai-review:v2", "&lt;!-- lcm-x-ai-review:v2");
 }
 
 function record(value: unknown): value is Record<string, unknown> {
