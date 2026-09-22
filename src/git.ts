@@ -311,7 +311,7 @@ export async function hydratePullFilePatchesFromWorktree(input: {
         "-C", input.worktreePath, "cat-file", "blob", blobSpec
       ], timeoutMs)).stdout;
       const decoded = blob.toString("utf8");
-      const isLfsPointer = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\r?\noid sha256:[a-f0-9]{64}\r?\nsize [0-9]+(?:\r?\n|$)/.test(decoded);
+      const isLfsPointer = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\r?\n/.test(decoded);
       if (blob.includes(0) || !Buffer.from(decoded, "utf8").equals(blob) || isLfsPointer) {
         containsUnreviewableBlob = true;
         break;

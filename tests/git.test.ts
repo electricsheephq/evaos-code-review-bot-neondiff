@@ -215,6 +215,26 @@ describe("pull worktree path planning", () => {
     expect(file?.patchComplete).toBe(false);
   });
 
+  it("fails the completeness receipt for extended Git LFS pointers", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-extended-lfs-pointer-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    execFileSync("git", ["-C", sourcePath, "commit", "--allow-empty", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), "version https://git-lfs.github.com/spec/v1\next-0-example sha256:" + "a".repeat(64) + "\noid sha256:" + "b".repeat(64) + "\nsize 101\n");
+    execFileSync("git", ["-C", sourcePath, "add", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin", status: "added" }]
+    });
+    expect(file?.patchComplete).toBe(false);
+  });
+
   it("fails the completeness receipt for gitlink diffs", async () => {
     const sourcePath = mkdtempSync(join(tmpdir(), "evaos-gitlink-patch-"));
     roots.push(sourcePath);
