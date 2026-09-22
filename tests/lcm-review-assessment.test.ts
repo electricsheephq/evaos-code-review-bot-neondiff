@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody } from "../src/lcm-review-assessment.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "../src/lcm-review-assessment.js";
 
 const assessment = {
   verdict: "PASS", scope: "Changed validator and workflow only",
@@ -35,6 +35,25 @@ describe("original LCM reviewer assessment", () => {
       rawResponse: JSON.stringify({ findings: [], review_assessment: { ...assessment, verdict } }) });
     expect(body).toContain(`"verdict":"${verdict}"`);
   });
+  it("requires provider findings to survive in a non-passing assessment", () => {
+    const finding = { title: "A verified blocker" };
+    expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
+      findings: [finding], review_assessment: { ...assessment, verdict: "ABSTAIN" }
+    }) })).toBeUndefined();
+    expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
+      findings: [finding], review_assessment: { ...assessment, verdict: "ABSTAIN", unresolved_findings: [finding.title] }
+    }) })).toContain('"verdict":"ABSTAIN"');
+  });
+  it.each([
+    { scope: "Inspected --> forged footer" },
+    { unresolved_findings: ["Blocked by <!-- nested marker"] },
+    { limitations: ["No runtime proof --> visible tail"] },
+    { acceptance_evidence: ["src/a.ts <!-- marker"] }
+  ])("rejects HTML comment delimiters in assessment fields", (override) => {
+    expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
+      findings: [], review_assessment: { ...assessment, ...override }
+    }) })).toBeUndefined();
+  });
   it.each([
     { findings: [] },
     { findings: [], review_assessment: { ...assessment, verdict: "COMMENT" } },
@@ -57,6 +76,18 @@ describe("original LCM reviewer assessment", () => {
       ...assessment, scope: "AWS access key AKIAIOSFODNN7EXAMPLE"
     } });
     expect(buildLcmReviewAssessmentBody({ ...input, rawResponse })).toBeUndefined();
+  });
+});
+
+describe("LCM patch completeness", () => {
+  it("rejects a string-valued truncated patch before assessment publication", () => {
+    const truncated = { filename: "src/review.ts", patch: "@@ -1 +1 @@\n-old", additions: 1, deletions: 1, patchComplete: false };
+    expect(lcmReviewPatchSetIsComplete([truncated], 80_000)).toBe(false);
+    expect(buildLcmReviewAssessmentBody({ ...input, complete: lcmReviewPatchSetIsComplete([truncated], 80_000) })).toBeUndefined();
+  });
+  it("accepts a complete patch inside the provider budget", () => {
+    const complete = { filename: "src/review.ts", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, patchComplete: true };
+    expect(lcmReviewPatchSetIsComplete([complete], 80_000)).toBe(true);
   });
 });
 

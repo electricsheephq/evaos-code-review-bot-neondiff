@@ -341,7 +341,7 @@ export class GitHubApi {
         `/repos/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
-      files.push(...chunk);
+      files.push(...chunk.map((file) => ({ ...file, patchComplete: pullFilePatchIsComplete(file) })));
       if (chunk.length < 100) return files;
     }
   }
@@ -758,6 +758,21 @@ export class GitHubApi {
       clearTimeout(timeout);
     }
   }
+}
+
+/** GitHub may return a string patch that is truncated; line totals provide the fail-closed receipt. */
+export function pullFilePatchIsComplete(file: PullFilePatch): boolean {
+  if (typeof file.patch !== "string" || !Number.isInteger(file.additions) || !Number.isInteger(file.deletions)) return false;
+  let additions = 0;
+  let deletions = 0;
+  let inHunk = false;
+  for (const line of file.patch.split("\n")) {
+    if (line.startsWith("@@")) { inHunk = true; continue; }
+    if (!inHunk) continue;
+    if (line.startsWith("+")) additions += 1;
+    if (line.startsWith("-")) deletions += 1;
+  }
+  return additions === file.additions && deletions === file.deletions;
 }
 
 function normalizePullRequestSummary(pull: PullRequestSummary): PullRequestSummary {

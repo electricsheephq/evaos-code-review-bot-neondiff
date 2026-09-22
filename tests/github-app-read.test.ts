@@ -3,7 +3,20 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GitHubApi, normalizeAndValidateGitHubInstallationIdentity } from "../src/github.js";
+import { GitHubApi, normalizeAndValidateGitHubInstallationIdentity, pullFilePatchIsComplete } from "../src/github.js";
+
+describe("GitHub pull-file patch completeness", () => {
+  it("uses hunk change totals and counts source lines that resemble diff headers", () => {
+    expect(pullFilePatchIsComplete({
+      filename: "src/operators.ts", additions: 1, deletions: 1,
+      patch: "--- a/src/operators.ts\n+++ b/src/operators.ts\n@@ -1 +1 @@\n---old\n+++new"
+    })).toBe(true);
+    expect(pullFilePatchIsComplete({
+      filename: "src/operators.ts", additions: 2, deletions: 1,
+      patch: "@@ -1 +1 @@\n---old\n+++new"
+    })).toBe(false);
+  });
+});
 
 describe("GitHub App read authentication", () => {
   const roots: string[] = [];
@@ -564,7 +577,7 @@ describe("GitHub App read authentication", () => {
         return jsonResponse({ message: "Moved Permanently" }, 301, "Moved Permanently");
       }
       if (requestUrl.endsWith("/repos/owner/repo/pulls/42/files?per_page=100&page=1")) {
-        return jsonResponse([{ filename: "src/index.ts", patch: "@@ -1 +1 @@" }]);
+        return jsonResponse([{ filename: "src/index.ts", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1 }]);
       }
       return jsonResponse({ message: "unexpected" }, 404);
     }) as typeof fetch;
@@ -575,7 +588,9 @@ describe("GitHub App read authentication", () => {
       github_api_status: 301,
       github_api_error_class: "renamed_or_transferred"
     });
-    await expect(github.listPullFiles("owner/repo", 42)).resolves.toEqual([{ filename: "src/index.ts", patch: "@@ -1 +1 @@" }]);
+    await expect(github.listPullFiles("owner/repo", 42)).resolves.toEqual([{
+      filename: "src/index.ts", patch: "@@ -1 +1 @@\n-old\n+new", additions: 1, deletions: 1, patchComplete: true
+    }]);
 
     const tokenCalls = calls.filter((call) => call.url.endsWith("/app/installations/123/access_tokens"));
     expect(tokenCalls).toHaveLength(1);

@@ -1,4 +1,5 @@
 import { redactSecrets } from "./secrets.js";
+import type { PullFilePatch } from "./types.js";
 import { extractJsonObject } from "./zcode.js";
 
 export const LCM_REVIEW_ASSESSMENT_SCHEMA = {
@@ -32,8 +33,11 @@ export function buildLcmReviewAssessmentBody(input: {
       !text(assessment.scope) || !texts(assessment.unresolved_findings) ||
       !texts(assessment.limitations) || !texts(assessment.acceptance_evidence) ||
       assessment.acceptance_evidence.length === 0) return;
-  // Finding filters may suppress public comments; they cannot upgrade the review.
-  if (assessment.verdict === "PASS" && (result.findings.length !== 0 || assessment.unresolved_findings.length !== 0)) return;
+  // Finding filters may suppress public comments; they cannot upgrade or erase the review.
+  if ((assessment.verdict === "PASS" && (result.findings.length !== 0 || assessment.unresolved_findings.length !== 0)) ||
+      (result.findings.length !== 0 && assessment.unresolved_findings.length === 0)) return;
+  const assessmentText = [assessment.scope, ...assessment.unresolved_findings, ...assessment.limitations, ...assessment.acceptance_evidence];
+  if (assessmentText.some((value) => value.includes("<!--") || value.includes("-->"))) return;
   const body = JSON.stringify({
     schema_version: "2", repository: input.repo, pr_number: input.prNumber,
     base_sha: input.baseSha, head_sha: input.headSha, lane: "acceptance",
@@ -43,6 +47,13 @@ export function buildLcmReviewAssessmentBody(input: {
   // Keep the exact assessment or omit it. Redaction must not rewrite its meaning.
   if (Buffer.byteLength(body) > 8000 || redactSecrets(body) !== body) return;
   return `<!-- lcm-x-ai-review:v2\n${body}\n-->`;
+}
+
+/** Only exact, untruncated patches inside the provider budget can establish full coverage. */
+export function lcmReviewPatchSetIsComplete(files: PullFilePatch[], maxPatchBytes: number): boolean {
+  return Number.isInteger(maxPatchBytes) && maxPatchBytes >= 0 &&
+    files.every((file) => file.patchComplete === true && typeof file.patch === "string") &&
+    files.reduce((bytes, file) => bytes + Buffer.byteLength(file.patch ?? ""), 0) <= maxPatchBytes;
 }
 
 /** Keep original prose and assessment intact within the consumer's whole-body limit. */

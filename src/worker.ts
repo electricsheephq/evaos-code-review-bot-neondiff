@@ -120,7 +120,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody } from "./lcm-review-assessment.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import {
   buildReviewPrompt,
   emptyReviewModelSummary,
@@ -2179,8 +2179,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
       rawResponse: zcodeResult.rawResponse,
       complete: contextBudget.mode !== "chunk" && zcodeResult.attempts > 0 &&
-        reviewFiles.length === files.length && reviewFiles.every((file) => typeof file.patch === "string") &&
-        reviewFiles.reduce((bytes, file) => bytes + Buffer.byteLength(file.patch ?? ""), 0) <= config.zcode.maxPatchBytes,
+        reviewFiles.length === files.length && lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
       droppedFindingCount: zcodeResult.droppedFromSchema.length
     });
     if (assessmentBody) {

@@ -37,6 +37,8 @@ export interface DroppedFinding extends Partial<Finding> {
 export interface PullFilePatch {
   filename: string;
   patch?: string | null;
+  /** True only when the fetched patch contains every changed line reported by GitHub. */
+  patchComplete?: boolean;
   status?: string;
   additions?: number;
   deletions?: number;
