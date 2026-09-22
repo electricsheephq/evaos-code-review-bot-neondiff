@@ -301,10 +301,25 @@ export async function hydratePullFilePatchesFromWorktree(input: {
     ], timeoutMs)).stdout;
     const containsBinaryChange = numstat.split("\0").some((record) => /^-\t-\t/.test(record));
     const containsGitlinkChange = /^(?:index [0-9a-f]+\.\.[0-9a-f]+ 160000|(?:new file|deleted file|old|new) mode 160000)$/m.test(patch);
+    const blobSpecs = containsGitlinkChange ? [] : [
+      ...(file.status === "added" ? [] : [`${mergeBase}:${file.previous_filename ?? file.filename}`]),
+      ...(file.status === "removed" ? [] : [`${input.headSha}:${file.filename}`])
+    ];
+    let containsUnreviewableBlob = false;
+    for (const blobSpec of blobSpecs) {
+      const blob = (await runBuffer([
+        "-C", input.worktreePath, "cat-file", "blob", blobSpec
+      ], timeoutMs)).stdout;
+      const decoded = blob.toString("utf8");
+      if (blob.includes(0) || !Buffer.from(decoded, "utf8").equals(blob)) {
+        containsUnreviewableBlob = true;
+        break;
+      }
+    }
     hydrated.push({
       ...file,
       patch,
-      patchComplete: patch.length > 0 && !containsBinaryChange && !containsGitlinkChange
+      patchComplete: patch.length > 0 && !containsBinaryChange && !containsGitlinkChange && !containsUnreviewableBlob
     });
   }
   return hydrated;
@@ -401,6 +416,28 @@ function run(args: string[], timeoutMs: number): Promise<{ stdout: string; stder
         failureKind,
         timeoutMs,
         detail: stderr || stdout || error.message
+      }));
+    });
+  });
+}
+
+function runBuffer(args: string[], timeoutMs: number): Promise<{ stdout: Buffer; stderr: Buffer }> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { encoding: "buffer", maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs }, (error, stdout, stderr) => {
+      if (!error) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const processError = error as typeof error & { killed?: boolean; code?: string | number };
+      const failureKind = processError.killed
+        ? "timeout"
+        : typeof processError.code === "number"
+          ? "exit_nonzero"
+          : "spawn_error";
+      reject(new GitCommandError({
+        failureKind,
+        timeoutMs,
+        detail: (stderr.length > 0 ? stderr : stdout).toString("utf8") || error.message
       }));
     });
   });

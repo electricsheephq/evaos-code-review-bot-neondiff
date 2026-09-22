@@ -145,6 +145,29 @@ describe("pull worktree path planning", () => {
     expect(file?.patchComplete).toBe(false);
   });
 
+  it("fails the completeness receipt when attributes force a binary blob through the text diff", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-binary-attribute-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, ".gitattributes"), "*.bin diff\n");
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    execFileSync("git", ["-C", sourcePath, "add", ".gitattributes", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 4]));
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "binary change"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin" }]
+    });
+    expect(file?.patch).not.toContain("Binary files");
+    expect(file?.patchComplete).toBe(false);
+  });
+
   it("fails the completeness receipt for gitlink diffs", async () => {
     const sourcePath = mkdtempSync(join(tmpdir(), "evaos-gitlink-patch-"));
     roots.push(sourcePath);
