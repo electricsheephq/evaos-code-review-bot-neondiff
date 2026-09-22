@@ -27,7 +27,8 @@ export function buildLcmReviewAssessmentBody(input: {
   const assessment = result.review_assessment;
   if (!record(assessment) ||
       Object.keys(assessment).sort().join(",") !== "acceptance_evidence,limitations,scope,unresolved_findings,verdict" ||
-      !["PASS", "BLOCKED", "ABSTAIN"].includes(String(assessment.verdict)) ||
+      typeof assessment.verdict !== "string" ||
+      !["PASS", "BLOCKED", "ABSTAIN"].includes(assessment.verdict) ||
       !text(assessment.scope) || !texts(assessment.unresolved_findings) ||
       !texts(assessment.limitations) || !texts(assessment.acceptance_evidence) ||
       assessment.acceptance_evidence.length === 0) return;

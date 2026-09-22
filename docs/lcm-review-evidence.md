@@ -5,7 +5,8 @@ For `electricsheephq/lcm-x`, the normal reviewer prompt requests an explicit
 scope, unresolved findings, limitations and acceptance evidence. The Codex
 runtime requests those fields in its strict output schema only for that repo.
 
-The worker publishes a `lcm-x-ai-review:v2` review body only when that original
+The worker appends a terminal `lcm-x-ai-review:v2` assessment to the normal
+human-readable review body only when that original
 assessment is valid and the review was a complete, single execution. Filtered
 files, missing/truncated patches, chunked review or invalid findings cannot
 produce a gate assessment. Missing assessment data leaves the ordinary review

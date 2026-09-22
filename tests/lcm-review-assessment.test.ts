@@ -14,6 +14,13 @@ const input = {
 };
 
 describe("original LCM reviewer assessment", () => {
+  it("rejects array verdicts even when their string conversion is PASS", () => {
+    expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
+      findings: [{ title: "A blocking finding" }], review_assessment: {
+        ...assessment, verdict: ["PASS"], unresolved_findings: ["A blocking finding"]
+      }
+    }) })).toBeUndefined();
+  });
   it("preserves the original verdict, evidence and limitations without adding scores", () => {
     const body = buildLcmReviewAssessmentBody(input)!;
     const parsed = JSON.parse(body.split("\n")[1]!);

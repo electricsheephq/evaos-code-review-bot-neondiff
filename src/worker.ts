@@ -2461,7 +2461,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       event: plan.event,
-      body: assessmentBody ?? reviewBodyAfterWalkthroughPost(plan),
+      body: [reviewBodyAfterWalkthroughPost(plan), assessmentBody].filter(Boolean).join("\n\n"),
       comments
     });
     try {
