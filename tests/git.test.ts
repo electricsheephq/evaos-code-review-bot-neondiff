@@ -168,6 +168,31 @@ describe("pull worktree path planning", () => {
     expect(file?.patchComplete).toBe(false);
   });
 
+  it("does not execute repository-selected text conversion while hydrating exact patches", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-textconv-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    execFileSync("git", ["-C", sourcePath, "config", "diff.lossy.textconv", "printf hidden"]);
+    writeFileSync(join(sourcePath, ".gitattributes"), "*.txt diff=lossy\n");
+    writeFileSync(join(sourcePath, "review.txt"), "original\n");
+    execFileSync("git", ["-C", sourcePath, "add", ".gitattributes", "review.txt"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "review.txt"), "exact source\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "review.txt" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain("+exact source");
+    expect(file?.patch).not.toContain("hidden");
+  });
+
   it("fails the completeness receipt for gitlink diffs", async () => {
     const sourcePath = mkdtempSync(join(tmpdir(), "evaos-gitlink-patch-"));
     roots.push(sourcePath);

@@ -292,11 +292,11 @@ export async function hydratePullFilePatchesFromWorktree(input: {
       .filter((path): path is string => Boolean(path))
       .map((path) => `:(literal)${path}`);
     const patch = (await run([
-      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-color", "--find-renames", "--unified=3",
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--unified=3",
       mergeBase, input.headSha, "--", ...pathspecs
     ], timeoutMs)).stdout;
     const numstat = (await run([
-      "-C", input.worktreePath, "diff", "--no-ext-diff", "--find-renames", "--numstat", "-z",
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z",
       mergeBase, input.headSha, "--", ...pathspecs
     ], timeoutMs)).stdout;
     const containsBinaryChange = numstat.split("\0").some((record) => /^-\t-\t/.test(record));
