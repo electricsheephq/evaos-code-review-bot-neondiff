@@ -15,7 +15,7 @@ import {
 import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -120,7 +120,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
+import { appendLcmReviewAssessment, assertOrdinaryLcmReviewBodySafe, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import {
   buildReviewPrompt,
   emptyReviewModelSummary,
@@ -1838,7 +1838,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     mkdirSync(evidenceDir, { recursive: true });
 
     const files = await github.listPullFiles(repo, pull.number);
-    const reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
+    let reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
     const filterImpact = buildPullFileFilterImpact(files, repoPolicy.profile);
     const validation = buildChangedSurfaceValidationReport({
       repo,
@@ -1854,6 +1854,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
+    if (repo === "electricsheephq/lcm-x") {
+      reviewFiles = await hydratePullFilePatchesFromWorktree({
+        worktreePath: worktree.path,
+        baseSha: pull.base.sha,
+        headSha: pull.head.sha,
+        files: reviewFiles
+      });
+    }
     const reviewModeSelection = selectReviewMode({
       config,
       repo,
@@ -2129,6 +2137,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandDecision
     });
     assertReviewOutputSafe(summary);
+    assertOrdinaryLcmReviewBodySafe(summary);
     for (const comment of comments) {
       assertReviewOutputSafe(comment.body);
     }
@@ -2148,7 +2157,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
-    if (walkthrough) assertReviewOutputSafe(walkthrough.body);
+    if (walkthrough) {
+      assertReviewOutputSafe(walkthrough.body);
+      assertOrdinaryLcmReviewBodySafe(walkthrough.body);
+    }
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({
           repo,

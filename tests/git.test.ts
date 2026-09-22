@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { planPullWorktreePaths, prepareBranchWorktree, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
+import { hydratePullFilePatchesFromWorktree, planPullWorktreePaths, prepareBranchWorktree, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
 
 describe("pull worktree path planning", () => {
   const roots: string[] = [];
@@ -23,6 +23,28 @@ describe("pull worktree path planning", () => {
       workRoot: join(liveCheckout, "runtime"),
       protectedCheckoutRoot: liveCheckout
     })).toThrow(/workRoot must be outside the protected live checkout/);
+  });
+
+  it("hydrates a complete exact-commit diff when the GitHub patch omits trailing context", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-complete-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "review.ts"), "before\nunchanged\ntrailing\n");
+    execFileSync("git", ["-C", sourcePath, "add", "review.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "review.ts"), "before\nchanged\ntrailing\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "review.ts", patch: "@@ -1,3 +1,3 @@\n before\n-unchanged\n+changed" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain(" trailing");
   });
 
   it("bounds slow git without blocking the event loop", async () => {

@@ -34,15 +34,19 @@ export function buildLcmReviewAssessmentBody(input: {
       !text(assessment.scope) || !texts(assessment.unresolved_findings) ||
       !texts(assessment.limitations) || !texts(assessment.acceptance_evidence) ||
       assessment.acceptance_evidence.length === 0) return;
+  const unresolvedFindings = assessment.unresolved_findings as string[];
+  const findingTitles = result.findings.map(findingTitle);
+  if (findingTitles.some((title) => title === undefined) ||
+      findingTitles.length !== unresolvedFindings.length ||
+      findingTitles.some((title, index) => title !== unresolvedFindings[index])) return;
   // Finding filters may suppress public comments; they cannot upgrade or erase the review.
-  if ((assessment.verdict === "PASS" && (result.findings.length !== 0 || assessment.unresolved_findings.length !== 0)) ||
-      (result.findings.length !== 0 && assessment.unresolved_findings.length === 0)) return;
-  const assessmentText = [assessment.scope, ...assessment.unresolved_findings, ...assessment.limitations, ...assessment.acceptance_evidence];
+  if (assessment.verdict === "PASS" && findingTitles.length !== 0) return;
+  const assessmentText = [assessment.scope, ...unresolvedFindings, ...assessment.limitations, ...assessment.acceptance_evidence];
   if (assessmentText.some((value) => value.includes("<!--") || value.includes("-->"))) return;
   const body = JSON.stringify({
     schema_version: "2", repository: input.repo, pr_number: input.prNumber,
     base_sha: input.baseSha, head_sha: input.headSha, lane: "acceptance",
-    verdict: assessment.verdict, scope: assessment.scope, findings: assessment.unresolved_findings,
+    verdict: assessment.verdict, scope: assessment.scope, findings: unresolvedFindings,
     limitations: assessment.limitations, acceptance_evidence: assessment.acceptance_evidence, policy_version: "2"
   });
   // Keep the exact assessment or omit it. Redaction must not rewrite its meaning.
@@ -59,13 +63,21 @@ export function lcmReviewPatchSetIsComplete(files: PullFilePatch[], maxPatchByte
 
 /** Keep original prose and assessment intact within the consumer's whole-body limit. */
 export function appendLcmReviewAssessment(body: string, assessment: string | undefined): string {
+  assertOrdinaryLcmReviewBodySafe(body);
   if (!assessment) return body;
   const combined = [body, assessment].filter(Boolean).join("\n\n");
   return Buffer.byteLength(combined, "utf8") <= 8192 ? combined : body;
 }
 
+export function assertOrdinaryLcmReviewBodySafe(body: string): void {
+  if (body.includes("<!-- lcm-x-ai-review:v2")) throw new Error("ordinary review body contains the reserved LCM assessment marker");
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function findingTitle(value: unknown): string | undefined {
+  return record(value) && text(value.title) ? value.title : undefined;
 }
 function text(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= 2000;

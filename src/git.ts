@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
 import { redactSecrets } from "./secrets.js";
+import type { PullFilePatch } from "./types.js";
 
 export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 120_000;
 const gitMirrorTails = new Map<string, Promise<void>>();
@@ -239,6 +240,34 @@ export async function assertGitClean(worktreePath: string): Promise<void> {
   if (status) {
     throw new Error(`Worktree has untracked or modified files after review:\n${status}`);
   }
+}
+
+/** Replace GitHub's possibly truncated patches with complete diffs from the exact prepared worktree. */
+export async function hydratePullFilePatchesFromWorktree(input: {
+  worktreePath: string;
+  baseSha: string;
+  headSha: string;
+  files: PullFilePatch[];
+  gitCommandTimeoutMs?: number;
+}): Promise<PullFilePatch[]> {
+  const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
+  if (!/^[a-f0-9]{40}$/.test(input.baseSha) || !/^[a-f0-9]{40}$/.test(input.headSha)) {
+    throw new Error("complete patch hydration requires exact lowercase commit SHAs");
+  }
+  const actualHead = (await run(["-C", input.worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
+  if (actualHead !== input.headSha) throw new Error(`complete patch hydration head mismatch: ${actualHead} !== ${input.headSha}`);
+  await run(["-C", input.worktreePath, "rev-parse", "--verify", `${input.baseSha}^{commit}`], timeoutMs);
+
+  const hydrated: PullFilePatch[] = [];
+  for (const file of input.files) {
+    if (!file.filename || file.filename.includes("\0")) throw new Error("complete patch hydration received an invalid filename");
+    const patch = (await run([
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-color", "--unified=3",
+      input.baseSha, input.headSha, "--", `:(literal)${file.filename}`
+    ], timeoutMs)).stdout;
+    hydrated.push({ ...file, patch, patchComplete: true });
+  }
+  return hydrated;
 }
 
 async function existsAsGitMirror(path: string, timeoutMs: number): Promise<boolean> {

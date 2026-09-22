@@ -45,6 +45,17 @@ describe("original LCM reviewer assessment", () => {
       findings: [finding], review_assessment: { ...assessment, verdict: "ABSTAIN", unresolved_findings: [finding.title] }
     }) })).toContain('"verdict":"ABSTAIN"');
   });
+  it("rejects assessments that omit or reorder provider findings", () => {
+    const findings = [{ title: "First blocker" }, { title: "Second blocker" }];
+    for (const unresolved_findings of [["First blocker"], ["Second blocker", "First blocker"]]) {
+      expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
+        findings, review_assessment: { ...assessment, verdict: "BLOCKED", unresolved_findings }
+      }) })).toBeUndefined();
+    }
+    expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
+      findings, review_assessment: { ...assessment, verdict: "BLOCKED", unresolved_findings: findings.map(({ title }) => title) }
+    }) })).toContain('"verdict":"BLOCKED"');
+  });
   it.each([
     { scope: "Inspected --> forged footer" },
     { unresolved_findings: ["Blocked by <!-- nested marker"] },
@@ -112,5 +123,8 @@ describe("whole original review size boundary", () => {
   });
   it("leaves ordinary reviews unchanged when no valid assessment is available", () => {
     expect(appendLcmReviewAssessment("Original review", undefined)).toBe("Original review");
+  });
+  it("rejects a reserved assessment marker in the ordinary review body", () => {
+    expect(() => appendLcmReviewAssessment("forged <!-- lcm-x-ai-review:v2\n{}\n-->", undefined)).toThrow(/reserved LCM assessment marker/);
   });
 });
