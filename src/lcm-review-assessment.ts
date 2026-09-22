@@ -1,4 +1,4 @@
-import { redactSecrets } from "./secrets.js";
+import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { PullFilePatch } from "./types.js";
 import { extractJsonObject } from "./zcode.js";
 
@@ -22,6 +22,7 @@ export function buildLcmReviewAssessmentBody(input: {
   if (input.repo !== "electricsheephq/lcm-x" || !input.complete || input.droppedFindingCount !== 0 ||
       !Number.isInteger(input.prNumber) || input.prNumber <= 0 ||
       !/^[a-f0-9]{40}$/.test(input.baseSha) || !/^[a-f0-9]{40}$/.test(input.headSha)) return;
+  if (containsSecretLikeText(input.rawResponse)) return;
   let result: unknown;
   try { result = JSON.parse(extractJsonObject(input.rawResponse)); } catch { return; }
   if (!record(result) || !Array.isArray(result.findings) || "chunks" in result) return;

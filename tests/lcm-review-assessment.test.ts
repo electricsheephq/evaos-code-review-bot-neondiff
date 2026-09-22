@@ -12,6 +12,7 @@ const input = {
   rawResponse: JSON.stringify({ findings: [], review_assessment: assessment }),
   complete: true, droppedFindingCount: 0
 };
+const secretLike = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 
 describe("original LCM reviewer assessment", () => {
   it("rejects array verdicts even when their string conversion is PASS", () => {
@@ -73,9 +74,17 @@ describe("original LCM reviewer assessment", () => {
   });
   it("rejects sensitive text instead of laundering it into an unchanged verdict", () => {
     const rawResponse = JSON.stringify({ findings: [], review_assessment: {
-      ...assessment, scope: "AWS access key AKIAIOSFODNN7EXAMPLE"
+      ...assessment, scope: `AWS access key ${secretLike}`
     } });
     expect(buildLcmReviewAssessmentBody({ ...input, rawResponse })).toBeUndefined();
+  });
+  it.each([
+    { findings: [{ title: "Leaked value", body: secretLike }], review_assessment: {
+      ...assessment, verdict: "BLOCKED", unresolved_findings: ["Leaked value"]
+    } },
+    { findings: [], ignored_debug_field: secretLike, review_assessment: { ...assessment, verdict: "ABSTAIN" } }
+  ])("rejects secret-like text anywhere in the raw provider response", (output) => {
+    expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify(output) })).toBeUndefined();
   });
 });
 
