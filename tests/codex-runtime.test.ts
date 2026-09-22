@@ -41,14 +41,16 @@ describe("Codex CLI review runtime", () => {
           writeFileSync(invocation.outputPath, JSON.stringify({ findings: [],
             summary: { changedBehavior: ["Fixture"], invariants: ["Original verdict"],
               evidence: ["Fixture"], limitations: ["Mock"], noFindingRationale: "Mock" },
-            ...(includeAssessment ? { review_assessment: assessment } : {}) }));
+            ...(enabled ? { review_assessment: includeAssessment ? assessment : null } : {}) }));
           return { stdout: "", stderr: "", status: 0, signal: null };
         }
       });
       const schema = JSON.parse(readFileSync(join(evidenceDir, "codex-review-schema.json"), "utf8"));
-      expect(schema.required.includes("review_assessment")).toBe(false);
+      expect(schema.required.includes("review_assessment")).toBe(enabled);
       expect("review_assessment" in schema.properties).toBe(enabled);
-      expect(JSON.parse(result.rawResponse).review_assessment).toEqual(includeAssessment ? assessment : undefined);
+      expect(JSON.parse(result.rawResponse).review_assessment).toEqual(
+        enabled ? (includeAssessment ? assessment : null) : undefined
+      );
     }
   });
 

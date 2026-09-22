@@ -155,8 +155,9 @@ export async function runCodexReview(input: {
     artifactPrefix: "codex-review",
     schema: input.lcmReviewAssessment ? {
       ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+      required: [...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.required, "review_assessment"],
       properties: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties,
-        review_assessment: LCM_REVIEW_ASSESSMENT_SCHEMA }
+        review_assessment: { anyOf: [LCM_REVIEW_ASSESSMENT_SCHEMA, { type: "null" }] } }
     } : CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
     parse: (parsed) => {
       const { findings, dropped } = parseFindings(parsed);
