@@ -123,6 +123,26 @@ describe("pull worktree path planning", () => {
     expect(file?.patchComplete).toBe(false);
   });
 
+  it("fails the completeness receipt for gitlink diffs", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-gitlink-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    execFileSync("git", ["-C", sourcePath, "commit", "--allow-empty", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", sourcePath, "update-index", "--add", "--cacheinfo", `160000,${baseSha},vendor/dependency`]);
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "add gitlink"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "vendor/dependency", status: "added" }]
+    });
+    expect(file?.patch).toContain("Subproject commit");
+    expect(file?.patchComplete).toBe(false);
+  });
+
   it("bounds slow git without blocking the event loop", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-slow-git-"));
     roots.push(root);

@@ -284,7 +284,12 @@ export async function hydratePullFilePatchesFromWorktree(input: {
       mergeBase, input.headSha, "--", ...pathspecs
     ], timeoutMs)).stdout;
     const containsBinaryChange = numstat.split("\0").some((record) => /^-\t-\t/.test(record));
-    hydrated.push({ ...file, patch, patchComplete: patch.length > 0 && !containsBinaryChange });
+    const containsGitlinkChange = /^(?:index [0-9a-f]+\.\.[0-9a-f]+ 160000|(?:new file|deleted file|old|new) mode 160000)$/m.test(patch);
+    hydrated.push({
+      ...file,
+      patch,
+      patchComplete: patch.length > 0 && !containsBinaryChange && !containsGitlinkChange
+    });
   }
   return hydrated;
 }
