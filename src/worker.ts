@@ -120,6 +120,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
+import { buildLcmReviewAssessmentBody } from "./lcm-review-assessment.js";
 import {
   buildReviewPrompt,
   emptyReviewModelSummary,
@@ -2174,6 +2175,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(enrichment ? { enrichment } : {})
     };
 
+    const assessmentBody = buildLcmReviewAssessmentBody({
+      repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
+      rawResponse: zcodeResult.rawResponse,
+      complete: contextBudget.mode !== "chunk" && zcodeResult.attempts > 0 &&
+        reviewFiles.length === files.length && reviewFiles.every((file) => typeof file.patch === "string") &&
+        reviewFiles.reduce((bytes, file) => bytes + Buffer.byteLength(file.patch ?? ""), 0) <= config.zcode.maxPatchBytes,
+      droppedFindingCount: zcodeResult.droppedFromSchema.length
+    });
+    if (assessmentBody) {
+      assertReviewOutputSafe(assessmentBody);
+      writeRedactedText(join(evidenceDir, "lcm-review-assessment.md"), assessmentBody);
+    }
+
     if (input.dryRun && walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
     if (input.dryRun && enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
     if (input.dryRun) {
@@ -2447,7 +2461,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       event: plan.event,
-      body: reviewBodyAfterWalkthroughPost(plan),
+      body: assessmentBody ?? reviewBodyAfterWalkthroughPost(plan),
       comments
     });
     try {
@@ -4256,6 +4270,7 @@ async function runSingleReviewWithContextBudget(input: {
 
   const result = input.useZCode
     ? await runConfiguredReview({
+        lcmReviewAssessment: input.repo === "electricsheephq/lcm-x",
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
@@ -4312,6 +4327,7 @@ async function runChunkedZCodeReview(input: {
     try {
       result = input.useZCode
         ? await runConfiguredReview({
+            lcmReviewAssessment: input.repo === "electricsheephq/lcm-x",
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
@@ -4413,6 +4429,7 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
 
 async function runConfiguredReview(input: {
   config: BotConfig;
+  lcmReviewAssessment?: boolean;
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
@@ -4422,6 +4439,7 @@ async function runConfiguredReview(input: {
   input.assertProviderConfigCurrent?.();
   const startedAt = new Date();
   const result = await runCodexReview({
+    lcmReviewAssessment: input.lcmReviewAssessment,
     cwd: input.worktreePath,
     prompt: input.prompt,
     cliPath: input.config.codexRuntime.cliPath,

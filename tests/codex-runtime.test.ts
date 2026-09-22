@@ -19,6 +19,34 @@ afterEach(() => {
 });
 
 describe("Codex CLI review runtime", () => {
+  it("requests an original LCM assessment only when the repository opts in", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-"));
+    temporaryRoots.push(root);
+    for (const enabled of [false, true]) {
+      const evidenceDir = join(root, String(enabled));
+      const assessment = { verdict: "ABSTAIN", scope: "Synthetic schema test",
+        unresolved_findings: [], limitations: ["No real review ran"],
+        acceptance_evidence: ["Test fixture only"] };
+      const result = await runCodexReview({
+        cwd: root, prompt: "Synthetic schema fixture", cliPath: "/test/codex",
+        model: "gpt-6-astra", reasoningEffort: "high", evidenceDir,
+        timeoutMs: 1000, maxOutputBytes: 10000, lcmReviewAssessment: enabled
+      }, {
+        captureWorktreeState: () => "unchanged",
+        runProcess: async (invocation) => {
+          writeFileSync(invocation.outputPath, JSON.stringify({ findings: [],
+            summary: { changedBehavior: ["Fixture"], invariants: ["Original verdict"],
+              evidence: ["Fixture"], limitations: ["Mock"], noFindingRationale: "Mock" },
+            ...(enabled ? { review_assessment: assessment } : {}) }));
+          return { stdout: "", stderr: "", status: 0, signal: null };
+        }
+      });
+      const schema = JSON.parse(readFileSync(join(evidenceDir, "codex-review-schema.json"), "utf8"));
+      expect(schema.required.includes("review_assessment")).toBe(enabled);
+      expect(JSON.parse(result.rawResponse).review_assessment).toEqual(enabled ? assessment : undefined);
+    }
+  });
+
   it("is opt-in and accepts Luna with Max reasoning", () => {
     expect(loadConfigFromObject({}).codexRuntime?.enabled).toBe(false);
     const config = loadConfigFromObject({
