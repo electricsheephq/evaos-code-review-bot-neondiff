@@ -264,6 +264,22 @@ export async function hydratePullFilePatchesFromWorktree(input: {
     throw new Error("complete patch hydration could not resolve an exact merge base");
   }
 
+  const apiFilenames = input.files.map((file) => file.filename);
+  if (apiFilenames.some((filename) => !filename || filename.includes("\0")) ||
+      new Set(apiFilenames).size !== apiFilenames.length) {
+    throw new Error("complete patch hydration received an invalid file inventory");
+  }
+  const exactFilenames = (await run([
+    "-C", input.worktreePath, "diff", "--no-ext-diff", "--find-renames", "--name-only", "-z",
+    mergeBase, input.headSha
+  ], timeoutMs)).stdout.split("\0").filter(Boolean);
+  const sortedApiFilenames = [...apiFilenames].sort();
+  const sortedExactFilenames = [...exactFilenames].sort();
+  if (sortedApiFilenames.length !== sortedExactFilenames.length ||
+      sortedApiFilenames.some((filename, index) => filename !== sortedExactFilenames[index])) {
+    throw new Error("complete patch hydration file inventory does not match the exact worktree diff");
+  }
+
   const hydrated: PullFilePatch[] = [];
   for (const file of input.files) {
     if (!file.filename || file.filename.includes("\0")) throw new Error("complete patch hydration received an invalid filename");

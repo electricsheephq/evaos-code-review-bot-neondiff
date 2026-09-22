@@ -47,6 +47,28 @@ describe("pull worktree path planning", () => {
     expect(file?.patch).toContain(" trailing");
   });
 
+  it("rejects a pull-file inventory that omits an exact worktree path", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-incomplete-inventory-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "a.ts"), "before\n");
+    writeFileSync(join(sourcePath, "b.ts"), "before\n");
+    execFileSync("git", ["-C", sourcePath, "add", "a.ts", "b.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "a.ts"), "after\n");
+    writeFileSync(join(sourcePath, "b.ts"), "after\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    await expect(hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "a.ts", patch: "truncated" }]
+    })).rejects.toThrow(/file inventory does not match the exact worktree diff/);
+  });
+
   it("hydrates the merge-base-to-head PR diff after the base branch advances", async () => {
     const sourcePath = mkdtempSync(join(tmpdir(), "evaos-merge-base-patch-"));
     roots.push(sourcePath);
