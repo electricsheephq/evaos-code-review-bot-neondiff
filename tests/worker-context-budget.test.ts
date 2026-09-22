@@ -20,6 +20,7 @@ const zcodeBarriersByPath = vi.hoisted(() => new Map<string, Promise<void>>());
 const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: string; beforeThrow?: () => void }>());
 const severeRawResponse = vi.hoisted(() => ({ value: "" }));
 const zcodeRawResponseOverride = vi.hoisted(() => ({ value: "" }));
+const zcodeProvenanceOverride = vi.hoisted(() => ({ attempts: 1, degradedRecovery: false }));
 const lcmHydrationControl = vi.hoisted((): { error?: Error } => ({}));
 const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
 const severeWorktreePath = vi.hoisted(() => ({ value: "" }));
@@ -86,8 +87,8 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
         findings,
         droppedFromSchema: [],
         rawResponse: zcodeRawResponseOverride.value || JSON.stringify({ findings }),
-        attempts: 1,
-        degradedRecovery: false
+        attempts: zcodeProvenanceOverride.attempts,
+        degradedRecovery: zcodeProvenanceOverride.degradedRecovery
       };
     }),
     runZCodeRawJson: vi.fn(async ({ prompt }: { prompt: string }) => (zcodePrompts.push(prompt), severeRawResponse.value))
@@ -184,6 +185,8 @@ describe("worker context budget preflight", () => {
     zcodeFirstFailuresByPath.clear();
     severeRawResponse.value = "";
     zcodeRawResponseOverride.value = "";
+    zcodeProvenanceOverride.attempts = 1;
+    zcodeProvenanceOverride.degradedRecovery = false;
     delete lcmHydrationControl.error;
     severeCurrentWorktree.enabled = false;
     severeWorktreePath.value = "";
@@ -1658,6 +1661,73 @@ describe("worker context budget preflight", () => {
         unresolved_findings: [],
         limitations: [],
         acceptance_evidence: ["Original provider verdict"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    state.close();
+  });
+
+  it("omits the LCM assessment after a degraded provider retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-degraded-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(433, "e".repeat(40));
+    zcodeProvenanceOverride.attempts = 2;
+    zcodeProvenanceOverride.degradedRecovery = true;
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "PASS",
+        scope: "Exact pull request diff",
+        unresolved_findings: [],
+        limitations: [],
+        acceptance_evidence: ["Recovered provider verdict"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    state.close();
+  });
+
+  it("omits the LCM assessment when the budget identity differs from the executing provider", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-provider-budget-mismatch-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.zcode.providerId = "builtin:zai-coding-plan";
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(434, "f".repeat(40));
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "PASS",
+        scope: "Exact pull request diff",
+        unresolved_findings: [],
+        limitations: [],
+        acceptance_evidence: ["Provider verdict with mismatched budget identity"]
       }
     });
 

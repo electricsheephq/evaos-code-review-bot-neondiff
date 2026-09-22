@@ -220,6 +220,11 @@ function resolveReviewRegistryProviderId(config: BotConfig): string {
   return config.providers?.defaultProviderId ?? config.zcode.providerId ?? "zcode-glm";
 }
 
+function reviewContextBudgetMatchesExecutionProvider(config: BotConfig): boolean {
+  return config.codexRuntime?.enabled === true ||
+    config.providers?.defaultProviderId === config.zcode.providerId;
+}
+
 function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown> {
   return {
     mode: plan.mode,
@@ -2204,7 +2209,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const assessmentBody = buildLcmReviewAssessmentBody({
       repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
       rawResponse: zcodeResult.rawResponse,
-      complete: contextBudget.mode === "within_budget" && zcodeResult.attempts > 0 &&
+      complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
+        !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
         reviewFiles.length === files.length && lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
       droppedFindingCount: zcodeResult.droppedFromSchema.length
     });
