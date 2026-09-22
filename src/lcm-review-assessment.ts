@@ -62,8 +62,8 @@ export function lcmReviewPatchSetIsComplete(files: PullFilePatch[], maxPatchByte
 }
 
 /** Keep original prose and assessment intact within the consumer's whole-body limit. */
-export function appendLcmReviewAssessment(body: string, assessment: string | undefined): string {
-  assertOrdinaryLcmReviewBodySafe(body);
+export function appendLcmReviewAssessment(body: string, assessment: string | undefined, repo: string): string {
+  if (repo === "electricsheephq/lcm-x") assertOrdinaryLcmReviewBodySafe(body);
   if (!assessment) return body;
   const combined = [body, assessment].filter(Boolean).join("\n\n");
   return Buffer.byteLength(combined, "utf8") <= 8192 ? combined : body;

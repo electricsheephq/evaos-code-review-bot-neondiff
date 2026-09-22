@@ -1855,12 +1855,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
     if (repo === "electricsheephq/lcm-x") {
-      reviewFiles = await hydratePullFilePatchesFromWorktree({
-        worktreePath: worktree.path,
-        baseSha: pull.base.sha,
-        headSha: pull.head.sha,
-        files: reviewFiles
-      });
+      try {
+        reviewFiles = await hydratePullFilePatchesFromWorktree({
+          worktreePath: worktree.path,
+          baseSha: pull.base.sha,
+          headSha: pull.head.sha,
+          files: reviewFiles
+        });
+        writeRedactedJsonBestEffort(join(evidenceDir, "lcm-review-patch-hydration.json"), {
+          status: "complete",
+          fileCount: reviewFiles.length
+        });
+      } catch (error) {
+        reviewFiles = reviewFiles.map((file) => ({ ...file, patchComplete: false }));
+        writeRedactedJsonBestEffort(join(evidenceDir, "lcm-review-patch-hydration.json"), {
+          status: "incomplete",
+          reason: "hydration_failed",
+          error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 400)
+        });
+      }
     }
     const reviewModeSelection = selectReviewMode({
       config,
@@ -2137,7 +2150,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandDecision
     });
     assertReviewOutputSafe(summary);
-    assertOrdinaryLcmReviewBodySafe(summary);
+    if (repo === "electricsheephq/lcm-x") assertOrdinaryLcmReviewBodySafe(summary);
     for (const comment of comments) {
       assertReviewOutputSafe(comment.body);
     }
@@ -2159,7 +2172,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       : undefined;
     if (walkthrough) {
       assertReviewOutputSafe(walkthrough.body);
-      assertOrdinaryLcmReviewBodySafe(walkthrough.body);
+      if (repo === "electricsheephq/lcm-x") assertOrdinaryLcmReviewBodySafe(walkthrough.body);
     }
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({
@@ -2190,7 +2203,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const assessmentBody = buildLcmReviewAssessmentBody({
       repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
       rawResponse: zcodeResult.rawResponse,
-      complete: contextBudget.mode !== "chunk" && zcodeResult.attempts > 0 &&
+      complete: contextBudget.mode === "within_budget" && zcodeResult.attempts > 0 &&
         reviewFiles.length === files.length && lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
       droppedFindingCount: zcodeResult.droppedFromSchema.length
     });
@@ -2472,7 +2485,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       event: plan.event,
-      body: appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody),
+      body: appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo),
       comments
     });
     try {
