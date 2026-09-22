@@ -31,10 +31,15 @@ describe("original LCM reviewer assessment", () => {
       lane: "acceptance", schema_version: "2", policy_version: "2" });
     expect(body).not.toMatch(/score|receipt_id|issued_at|expires_at/);
   });
-  it.each(["BLOCKED", "ABSTAIN"])("preserves explicit %s rather than promoting it", (verdict) => {
+  it("preserves explicit ABSTAIN rather than promoting it", () => {
     const body = buildLcmReviewAssessmentBody({ ...input,
-      rawResponse: JSON.stringify({ findings: [], review_assessment: { ...assessment, verdict } }) });
-    expect(body).toContain(`"verdict":"${verdict}"`);
+      rawResponse: JSON.stringify({ findings: [], review_assessment: { ...assessment, verdict: "ABSTAIN" } }) });
+    expect(body).toContain('"verdict":"ABSTAIN"');
+  });
+  it("rejects BLOCKED without a verified finding", () => {
+    expect(buildLcmReviewAssessmentBody({ ...input,
+      rawResponse: JSON.stringify({ findings: [], review_assessment: { ...assessment, verdict: "BLOCKED" } })
+    })).toBeUndefined();
   });
   it("requires provider findings to survive in a non-passing assessment", () => {
     const finding = { title: "A verified blocker" };

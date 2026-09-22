@@ -42,6 +42,7 @@ export function buildLcmReviewAssessmentBody(input: {
       findingTitles.some((title, index) => title !== unresolvedFindings[index])) return;
   // Finding filters may suppress public comments; they cannot upgrade or erase the review.
   if (assessment.verdict === "PASS" && findingTitles.length !== 0) return;
+  if (assessment.verdict === "BLOCKED" && findingTitles.length === 0) return;
   const assessmentText = [assessment.scope, ...unresolvedFindings, ...assessment.limitations, ...assessment.acceptance_evidence];
   if (assessmentText.some((value) => value.includes("<!--") || value.includes("-->"))) return;
   const body = JSON.stringify({

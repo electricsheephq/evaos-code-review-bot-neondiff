@@ -155,7 +155,6 @@ export async function runCodexReview(input: {
     artifactPrefix: "codex-review",
     schema: input.lcmReviewAssessment ? {
       ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
-      required: [...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.required, "review_assessment"],
       properties: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties,
         review_assessment: LCM_REVIEW_ASSESSMENT_SCHEMA }
     } : CODEX_REVIEW_FINDINGS_JSON_SCHEMA,

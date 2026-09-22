@@ -2206,7 +2206,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(enrichment ? { enrichment } : {})
     };
 
-    const assessmentBody = buildLcmReviewAssessmentBody({
+    let assessmentBody = buildLcmReviewAssessmentBody({
       repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
       rawResponse: zcodeResult.rawResponse,
       complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
@@ -2215,8 +2215,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       droppedFindingCount: zcodeResult.droppedFromSchema.length
     });
     if (assessmentBody) {
-      assertReviewOutputSafe(assessmentBody);
-      writeRedactedText(join(evidenceDir, "lcm-review-assessment.md"), assessmentBody);
+      try {
+        assertReviewOutputSafe(assessmentBody);
+      } catch {
+        assessmentBody = undefined;
+      }
+      if (assessmentBody) writeRedactedText(join(evidenceDir, "lcm-review-assessment.md"), assessmentBody);
     }
 
     if (input.dryRun && walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);

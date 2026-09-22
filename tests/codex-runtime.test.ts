@@ -22,8 +22,12 @@ describe("Codex CLI review runtime", () => {
   it("requests an original LCM assessment only when the repository opts in", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-"));
     temporaryRoots.push(root);
-    for (const enabled of [false, true]) {
-      const evidenceDir = join(root, String(enabled));
+    for (const { enabled, includeAssessment } of [
+      { enabled: false, includeAssessment: false },
+      { enabled: true, includeAssessment: true },
+      { enabled: true, includeAssessment: false }
+    ]) {
+      const evidenceDir = join(root, `${enabled}-${includeAssessment}`);
       const assessment = { verdict: "ABSTAIN", scope: "Synthetic schema test",
         unresolved_findings: [], limitations: ["No real review ran"],
         acceptance_evidence: ["Test fixture only"] };
@@ -37,13 +41,14 @@ describe("Codex CLI review runtime", () => {
           writeFileSync(invocation.outputPath, JSON.stringify({ findings: [],
             summary: { changedBehavior: ["Fixture"], invariants: ["Original verdict"],
               evidence: ["Fixture"], limitations: ["Mock"], noFindingRationale: "Mock" },
-            ...(enabled ? { review_assessment: assessment } : {}) }));
+            ...(includeAssessment ? { review_assessment: assessment } : {}) }));
           return { stdout: "", stderr: "", status: 0, signal: null };
         }
       });
       const schema = JSON.parse(readFileSync(join(evidenceDir, "codex-review-schema.json"), "utf8"));
-      expect(schema.required.includes("review_assessment")).toBe(enabled);
-      expect(JSON.parse(result.rawResponse).review_assessment).toEqual(enabled ? assessment : undefined);
+      expect(schema.required.includes("review_assessment")).toBe(false);
+      expect("review_assessment" in schema.properties).toBe(enabled);
+      expect(JSON.parse(result.rawResponse).review_assessment).toEqual(includeAssessment ? assessment : undefined);
     }
   });
 

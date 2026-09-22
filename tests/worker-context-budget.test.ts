@@ -1746,6 +1746,38 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("keeps the ordinary LCM review when the assessment fails the public-output safety gate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-unsafe-assessment-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(435, "1".repeat(40));
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "ABSTAIN",
+        scope: "Profile proof expectations",
+        unresolved_findings: [],
+        limitations: ["Assessment output is unsafe to publish"],
+        acceptance_evidence: ["Original provider verdict"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    state.close();
+  });
+
   it("uses the single-prompt path when overflow chunk is configured but the prompt fits", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-within-chunk-config-"));
     roots.push(root);
