@@ -120,7 +120,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { appendLcmReviewAssessment, assertOrdinaryLcmReviewBodySafe, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
+import { appendLcmReviewAssessment, assertOrdinaryLcmReviewBodySafe, buildLcmReviewAssessmentBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import {
   buildReviewPrompt,
@@ -2211,7 +2211,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       rawResponse: zcodeResult.rawResponse,
       complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
         !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
-        reviewFiles.length === files.length && lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
+        reviewFiles.length === files.length && lcmReviewFileInventoryIsComplete(files.length) &&
+        lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
       droppedFindingCount: zcodeResult.droppedFromSchema.length
     });
     if (assessmentBody) {

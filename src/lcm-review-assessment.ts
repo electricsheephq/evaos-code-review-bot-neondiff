@@ -3,6 +3,8 @@ import type { PullFilePatch } from "./types.js";
 import { extractJsonObject } from "./zcode.js";
 import { isLcmReviewRepository, LCM_REVIEW_REPOSITORY } from "./lcm-review-repository.js";
 
+const GITHUB_PULL_FILES_MAX = 3_000;
+
 export const LCM_REVIEW_ASSESSMENT_SCHEMA = {
   type: "object", additionalProperties: false,
   required: ["verdict", "scope", "unresolved_findings", "limitations", "acceptance_evidence"],
@@ -61,6 +63,11 @@ export function lcmReviewPatchSetIsComplete(files: PullFilePatch[], maxPatchByte
   return Number.isInteger(maxPatchBytes) && maxPatchBytes >= 0 &&
     files.every((file) => file.patchComplete === true && typeof file.patch === "string") &&
     files.reduce((bytes, file) => bytes + Buffer.byteLength(file.patch ?? ""), 0) <= maxPatchBytes;
+}
+
+/** A response at GitHub's endpoint cap cannot prove that the PR file inventory is exhaustive. */
+export function lcmReviewFileInventoryIsComplete(fileCount: number): boolean {
+  return Number.isInteger(fileCount) && fileCount >= 0 && fileCount < GITHUB_PULL_FILES_MAX;
 }
 
 /** Keep original prose and assessment intact within the consumer's whole-body limit. */

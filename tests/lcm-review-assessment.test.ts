@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "../src/lcm-review-assessment.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "../src/lcm-review-assessment.js";
 
 const assessment = {
   verdict: "PASS", scope: "Changed validator and workflow only",
@@ -15,6 +15,10 @@ const input = {
 const secretLike = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 
 describe("original LCM reviewer assessment", () => {
+  it("fails closed when the pull-file inventory reaches GitHub's endpoint cap", () => {
+    expect(lcmReviewFileInventoryIsComplete(2_999)).toBe(true);
+    expect(lcmReviewFileInventoryIsComplete(3_000)).toBe(false);
+  });
   it("rejects array verdicts even when their string conversion is PASS", () => {
     expect(buildLcmReviewAssessmentBody({ ...input, rawResponse: JSON.stringify({
       findings: [{ title: "A blocking finding" }], review_assessment: {
