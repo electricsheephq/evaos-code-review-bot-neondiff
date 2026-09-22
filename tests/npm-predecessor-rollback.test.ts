@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
 const policy = join(process.cwd(), "scripts/npm-release-policy.mjs");
 
 function metadata(version: string, commit: string, withContradictoryGitHead = false, integrityOverride?: string) {
-  const integrity = integrityOverride ?? `sha512-${Buffer.alloc(64, version === "1.0.5" ? 0xaa : 0xbb).toString("base64")}`;
-  const shasum = version === "1.0.5" ? "a".repeat(40) : "b".repeat(40);
+  const digestByte = version === "1.0.6" ? 0xcc : version === "1.0.5" ? 0xaa : 0xbb;
+  const integrity = integrityOverride ?? `sha512-${Buffer.alloc(64, digestByte).toString("base64")}`;
+  const shasum = version === "1.0.6" ? "c".repeat(40) : version === "1.0.5" ? "a".repeat(40) : "b".repeat(40);
   const value: Record<string, unknown> = {
     name: "neondiff",
     version,
@@ -42,13 +43,13 @@ function baseArgs(currentPath: string, predecessorPath: string): string[] {
     "--github-ref", "refs/heads/main",
     "--predecessor-rollback", "true",
     "--provenance-recovery", "false",
-    "--latest-version", "1.0.5",
-    "--target-version", "1.0.4",
-    "--expected-predecessor", "1.0.4",
+    "--latest-version", "1.0.6",
+    "--target-version", "1.0.5",
+    "--expected-predecessor", "1.0.5",
     "--current-metadata", currentPath,
     "--predecessor-metadata", predecessorPath,
-    "--current-tag-commit", "a".repeat(40),
-    "--predecessor-tag-commit", "b".repeat(40)
+    "--current-tag-commit", "c".repeat(40),
+    "--predecessor-tag-commit", "a".repeat(40)
   ];
 }
 
@@ -58,14 +59,14 @@ describe("predecessor rollback release policy", () => {
     try {
       const currentPath = join(root, "current.json");
       const predecessorPath = join(root, "predecessor.json");
-      writeFileSync(currentPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
-      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.4", "b".repeat(40))));
+      writeFileSync(currentPath, JSON.stringify(metadata("1.0.6", "c".repeat(40))));
+      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
       const result = run(root, ...baseArgs(currentPath, predecessorPath));
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         action: "predecessor_dist_tag_rollback",
         bounded: true,
-        command: 'npm dist-tag add "neondiff@1.0.4" latest'
+        command: 'npm dist-tag add "neondiff@1.0.5" latest'
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -77,16 +78,16 @@ describe("predecessor rollback release policy", () => {
     try {
       const currentPath = join(root, "current.json");
       const predecessorPath = join(root, "predecessor.json");
-      writeFileSync(currentPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
-      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.4", "b".repeat(40))));
+      writeFileSync(currentPath, JSON.stringify(metadata("1.0.6", "c".repeat(40))));
+      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
       const args = baseArgs(currentPath, predecessorPath);
-      args.splice(args.indexOf("--latest-version") + 1, 1, "1.0.4");
+      args.splice(args.indexOf("--latest-version") + 1, 1, "1.0.5");
       args.push("--confirmation-only", "true");
       const result = run(root, ...args);
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         action: "confirm_predecessor_dist_tag_rollback",
-        latestVersion: "1.0.4",
+        latestVersion: "1.0.5",
         mutationRequired: false
       });
     } finally {
@@ -95,7 +96,7 @@ describe("predecessor rollback release policy", () => {
   });
 
   it.each([
-    ["wrong latest", ["--latest-version", "1.0.4"], "latest=1.0.5"],
+    ["wrong latest", ["--latest-version", "1.0.5"], "latest=1.0.6"],
     ["simultaneous provenance recovery", ["--provenance-recovery", "true"], "protected-main workflow dispatch"],
     ["unexpected quarantine owner", ["--quarantine-version", "1.0.5"], "release-candidate tag to be absent"],
     ["contradictory source modes", [], "exactly one source identity mode"],
@@ -105,12 +106,12 @@ describe("predecessor rollback release policy", () => {
     try {
       const currentPath = join(root, "current.json");
       const predecessorPath = join(root, "predecessor.json");
-      writeFileSync(currentPath, JSON.stringify(metadata("1.0.5", "a".repeat(40), _name === "contradictory source modes", _name === "malformed integrity" ? "sha512-too-short" : undefined)));
-      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.4", "b".repeat(40))));
+      writeFileSync(currentPath, JSON.stringify(metadata("1.0.6", "c".repeat(40), _name === "contradictory source modes", _name === "malformed integrity" ? "sha512-too-short" : undefined)));
+      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
       const args = baseArgs(currentPath, predecessorPath);
-      if (_name === "wrong latest") args.splice(args.indexOf("--latest-version") + 1, 1, "1.0.4");
+      if (_name === "wrong latest") args.splice(args.indexOf("--latest-version") + 1, 1, "1.0.5");
       if (_name === "simultaneous provenance recovery") args.splice(args.indexOf("--provenance-recovery") + 1, 1, "true");
-      if (_name === "unexpected quarantine owner") args.push("--quarantine-version", "1.0.5");
+      if (_name === "unexpected quarantine owner") args.push("--quarantine-version", "1.0.6");
       const result = run(root, ...args);
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain(expectedMessage);

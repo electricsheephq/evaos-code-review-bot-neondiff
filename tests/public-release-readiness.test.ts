@@ -60,7 +60,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("1.0.5");
+    expect(pkg.version).toBe("1.0.6");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -94,10 +94,10 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("1.0.5");
+    expect(lock.version).toBe("1.0.6");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "1.0.5",
+      version: "1.0.6",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
