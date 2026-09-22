@@ -312,6 +312,71 @@ fi
     }
   });
 
+  it("publishes a new package from the exact tag checkout so npm can record gitHead", () => {
+    const block = extractBlock("V104_PROVENANCE_RECOVERY_PUBLISH_GUARD");
+    const { root, bin, log } = harness();
+    const reviewedTarball = join(root, "neondiff-1.0.6.tgz");
+    writeFileSync(reviewedTarball, "reviewed-neondiff-1.0.6");
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", block], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        NPM_MUTATION_LOG: log,
+        PROVENANCE_RECOVERY: "false",
+        V105_EXISTING_PACKAGE_CONTINUATION: "false",
+        PACKAGE_ALREADY_EXISTS: "false",
+        PACKAGE_VERSION: "1.0.6",
+        PACK_TARBALL: reviewedTarball
+      }
+    });
+    const commands = readFileSync(log, "utf8");
+    expect(result.status).toBe(0);
+    expect(commands).toContain("publish . --ignore-scripts --provenance --access public --tag release-candidate");
+    expect(commands).not.toContain(`publish ${reviewedTarball}`);
+  });
+
+  it("requires the script-free directory repack to match the reviewed tarball byte-for-byte", () => {
+    const block = extractBlock("FUTURE_NPM_DIRECTORY_PUBLISH_IDENTITY_GATE");
+    for (const mismatch of [false, true]) {
+      const { root, bin } = harness();
+      const reviewedTarball = join(root, "neondiff-1.0.6.tgz");
+      writeFileSync(reviewedTarball, "reviewed-neondiff-1.0.6");
+      const npm = join(bin, "npm");
+      writeFileSync(npm, `#!/usr/bin/env bash
+set -euo pipefail
+test "\${1:-}" = "pack"
+test "\${2:-}" = "--ignore-scripts"
+test "\${3:-}" = "--json"
+test "\${4:-}" = "--pack-destination"
+destination="\${5:-}"
+payload="reviewed-neondiff-1.0.6"
+if [ "\${MISMATCH_REPACK:-false}" = "true" ]; then payload="different-neondiff-1.0.6"; fi
+printf '%s' "$payload" > "$destination/neondiff-1.0.6.tgz"
+printf '%s\n' '[{"filename":"neondiff-1.0.6.tgz"}]'
+`, { mode: 0o700 });
+      chmodSync(npm, 0o700);
+      const result = spawnSync("bash", ["-euo", "pipefail", "-c", block], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          PROVENANCE_RECOVERY: "false",
+          V105_EXISTING_PACKAGE_CONTINUATION: "false",
+          PACKAGE_ALREADY_EXISTS: "false",
+          PACKAGE_VERSION: "1.0.6",
+          PACK_TARBALL: reviewedTarball,
+          RUNNER_TEMP: root,
+          MISMATCH_REPACK: String(mismatch)
+        }
+      });
+      expect(result.status, result.stderr).toBe(mismatch ? 1 : 0);
+      if (mismatch) expect(result.stderr).toContain("directory publish repack differs from reviewed tarball");
+    }
+  });
+
   it("only continues v1.0.5 from its existing release-candidate package", () => {
     const block = extractBlock("V105_EXISTING_PACKAGE_CONTINUATION");
     const policyScript = resolve("scripts/npm-release-policy.mjs");

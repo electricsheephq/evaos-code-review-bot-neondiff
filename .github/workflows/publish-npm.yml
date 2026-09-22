@@ -389,7 +389,7 @@ jobs:
           PACK_DIR="$RUNNER_TEMP/neondiff-reviewed-pack"
           rm -rf "$PACK_DIR"
           mkdir -p "$PACK_DIR"
-          npm pack --json --pack-destination "$PACK_DIR" > pack.json
+          npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" > pack.json
           node scripts/check-packlist.mjs pack.json
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           CANDIDATE_LEDGER=""
@@ -607,6 +607,36 @@ jobs:
             --existing-package-recovery "$PACKAGE_ALREADY_EXISTS" \
             --candidate-ledger "$CANDIDATE_LEDGER" \
             --prepublication "$PREPUBLICATION_MODE"
+          # BEGIN FUTURE_NPM_DIRECTORY_PUBLISH_IDENTITY_GATE
+          if [ "$PROVENANCE_RECOVERY" != "true" ] \
+            && [ "$V105_EXISTING_PACKAGE_CONTINUATION" != "true" ] \
+            && [ "$PACKAGE_ALREADY_EXISTS" = "false" ]; then
+            DIRECTORY_PACK_DIR="$RUNNER_TEMP/neondiff-directory-publish-pack"
+            DIRECTORY_PACK_JSON="$RUNNER_TEMP/neondiff-directory-publish-pack.json"
+            rm -rf "$DIRECTORY_PACK_DIR"
+            rm -f "$DIRECTORY_PACK_JSON"
+            mkdir -p "$DIRECTORY_PACK_DIR"
+            npm pack --ignore-scripts --json --pack-destination "$DIRECTORY_PACK_DIR" > "$DIRECTORY_PACK_JSON"
+            DIRECTORY_PACK_FILENAME="$(node -e '
+              const [entry] = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+              const expected = `neondiff-${process.argv[2]}.tgz`;
+              if (entry?.filename !== expected) process.exit(1);
+              process.stdout.write(entry.filename);
+            ' "$DIRECTORY_PACK_JSON" "$PACKAGE_VERSION")" || {
+              echo "::error::directory publish repack metadata is invalid" >&2
+              exit 1
+            }
+            DIRECTORY_PACK_TARBALL="$DIRECTORY_PACK_DIR/$DIRECTORY_PACK_FILENAME"
+            test -f "$DIRECTORY_PACK_TARBALL" || {
+              echo "::error::directory publish repack tarball is missing" >&2
+              exit 1
+            }
+            cmp -s "$PACK_TARBALL" "$DIRECTORY_PACK_TARBALL" || {
+              echo "::error::directory publish repack differs from reviewed tarball" >&2
+              exit 1
+            }
+          fi
+          # END FUTURE_NPM_DIRECTORY_PUBLISH_IDENTITY_GATE
           # BEGIN V104_PROVENANCE_RECOVERY_PUBLISH_GUARD
           if [ "$PROVENANCE_RECOVERY" = "true" ]; then
             test "$PACKAGE_ALREADY_EXISTS" = "true" || {
@@ -627,7 +657,7 @@ jobs:
           elif [ "$PACKAGE_ALREADY_EXISTS" = "true" ]; then
             echo "neondiff@$PACKAGE_VERSION already exists; verifying reviewed tarball identity"
           else
-            npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"
+            npm publish . --ignore-scripts --provenance --access public --tag "release-candidate"
           fi
           # END V104_PROVENANCE_RECOVERY_PUBLISH_GUARD
           rm -f remote-package.json registry-metadata.tmp.json
