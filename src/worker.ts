@@ -121,6 +121,7 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { appendLcmReviewAssessment, assertOrdinaryLcmReviewBodySafe, buildLcmReviewAssessmentBody, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
+import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import {
   buildReviewPrompt,
   emptyReviewModelSummary,
@@ -1854,7 +1855,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
-    if (repo === "electricsheephq/lcm-x") {
+    if (isLcmReviewRepository(repo)) {
       try {
         reviewFiles = await hydratePullFilePatchesFromWorktree({
           worktreePath: worktree.path,
@@ -2150,7 +2151,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandDecision
     });
     assertReviewOutputSafe(summary);
-    if (repo === "electricsheephq/lcm-x") assertOrdinaryLcmReviewBodySafe(summary);
+    if (isLcmReviewRepository(repo)) assertOrdinaryLcmReviewBodySafe(summary);
     for (const comment of comments) {
       assertReviewOutputSafe(comment.body);
     }
@@ -2172,7 +2173,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       : undefined;
     if (walkthrough) {
       assertReviewOutputSafe(walkthrough.body);
-      if (repo === "electricsheephq/lcm-x") assertOrdinaryLcmReviewBodySafe(walkthrough.body);
+      if (isLcmReviewRepository(repo)) assertOrdinaryLcmReviewBodySafe(walkthrough.body);
     }
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({
@@ -4294,7 +4295,7 @@ async function runSingleReviewWithContextBudget(input: {
 
   const result = input.useZCode
     ? await runConfiguredReview({
-        lcmReviewAssessment: input.repo === "electricsheephq/lcm-x",
+        lcmReviewAssessment: isLcmReviewRepository(input.repo),
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
@@ -4351,7 +4352,7 @@ async function runChunkedZCodeReview(input: {
     try {
       result = input.useZCode
         ? await runConfiguredReview({
-            lcmReviewAssessment: input.repo === "electricsheephq/lcm-x",
+            lcmReviewAssessment: isLcmReviewRepository(input.repo),
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,

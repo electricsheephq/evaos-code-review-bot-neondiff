@@ -1,6 +1,7 @@
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { PullFilePatch } from "./types.js";
 import { extractJsonObject } from "./zcode.js";
+import { isLcmReviewRepository, LCM_REVIEW_REPOSITORY } from "./lcm-review-repository.js";
 
 export const LCM_REVIEW_ASSESSMENT_SCHEMA = {
   type: "object", additionalProperties: false,
@@ -19,7 +20,7 @@ export function buildLcmReviewAssessmentBody(input: {
   repo: string; prNumber: number; baseSha: string; headSha: string;
   rawResponse: string; complete: boolean; droppedFindingCount: number;
 }): string | undefined {
-  if (input.repo !== "electricsheephq/lcm-x" || !input.complete || input.droppedFindingCount !== 0 ||
+  if (!isLcmReviewRepository(input.repo) || !input.complete || input.droppedFindingCount !== 0 ||
       !Number.isInteger(input.prNumber) || input.prNumber <= 0 ||
       !/^[a-f0-9]{40}$/.test(input.baseSha) || !/^[a-f0-9]{40}$/.test(input.headSha)) return;
   if (containsSecretLikeText(input.rawResponse)) return;
@@ -44,7 +45,7 @@ export function buildLcmReviewAssessmentBody(input: {
   const assessmentText = [assessment.scope, ...unresolvedFindings, ...assessment.limitations, ...assessment.acceptance_evidence];
   if (assessmentText.some((value) => value.includes("<!--") || value.includes("-->"))) return;
   const body = JSON.stringify({
-    schema_version: "2", repository: input.repo, pr_number: input.prNumber,
+    schema_version: "2", repository: LCM_REVIEW_REPOSITORY, pr_number: input.prNumber,
     base_sha: input.baseSha, head_sha: input.headSha, lane: "acceptance",
     verdict: assessment.verdict, scope: assessment.scope, findings: unresolvedFindings,
     limitations: assessment.limitations, acceptance_evidence: assessment.acceptance_evidence, policy_version: "2"
@@ -63,7 +64,7 @@ export function lcmReviewPatchSetIsComplete(files: PullFilePatch[], maxPatchByte
 
 /** Keep original prose and assessment intact within the consumer's whole-body limit. */
 export function appendLcmReviewAssessment(body: string, assessment: string | undefined, repo: string): string {
-  if (repo === "electricsheephq/lcm-x") assertOrdinaryLcmReviewBodySafe(body);
+  if (isLcmReviewRepository(repo)) assertOrdinaryLcmReviewBodySafe(body);
   if (!assessment) return body;
   const combined = [body, assessment].filter(Boolean).join("\n\n");
   return Buffer.byteLength(combined, "utf8") <= 8192 ? combined : body;

@@ -1620,14 +1620,14 @@ describe("worker context budget preflight", () => {
     roots.push(root);
     const config = minimalConfig(root);
     const state = new ReviewStateStore(config.statePath);
-    const pull = pullSummary(431, "h".repeat(40));
+    const pull = pullSummary(431, "c".repeat(40));
     lcmHydrationControl.error = new Error("hydrated diff exceeded the command buffer");
 
     expect(await reviewPull({
       config,
       github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
       state,
-      repo: "electricsheephq/lcm-x",
+      repo: "ElectricSheepHQ/LCM-X",
       pull,
       dryRun: false,
       useZCode: true
@@ -1635,7 +1635,7 @@ describe("worker context budget preflight", () => {
 
     expect(createdReviews).toHaveLength(1);
     expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
-    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__lcm-x", `pr-${pull.number}`, pull.head.sha);
+    const evidenceDir = join(root, "evidence", localDateFolder(), "ElectricSheepHQ__LCM-X", `pr-${pull.number}`, pull.head.sha);
     expect(JSON.parse(readFileSync(join(evidenceDir, "lcm-review-patch-hydration.json"), "utf8"))).toMatchObject({
       status: "incomplete",
       reason: "hydration_failed"
@@ -1649,7 +1649,7 @@ describe("worker context budget preflight", () => {
     const config = minimalConfig(root);
     config.contextBudget = { ...config.contextBudget, enabled: false };
     const state = new ReviewStateStore(config.statePath);
-    const pull = pullSummary(432, "i".repeat(40));
+    const pull = pullSummary(432, "d".repeat(40));
     zcodeRawResponseOverride.value = JSON.stringify({
       findings: [],
       review_assessment: {
