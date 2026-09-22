@@ -120,7 +120,7 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildLcmReviewAssessmentBody } from "./lcm-review-assessment.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody } from "./lcm-review-assessment.js";
 import {
   buildReviewPrompt,
   emptyReviewModelSummary,
@@ -2461,7 +2461,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       event: plan.event,
-      body: [reviewBodyAfterWalkthroughPost(plan), assessmentBody].filter(Boolean).join("\n\n"),
+      body: appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody),
       comments
     });
     try {

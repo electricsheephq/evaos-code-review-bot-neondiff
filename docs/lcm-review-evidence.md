@@ -13,6 +13,9 @@ produce a gate assessment. Missing assessment data leaves the ordinary review
 body unchanged; neither zero findings nor a `COMMENT` event is converted into
 `PASS`. Contradictory `PASS` plus findings is rejected. Sensitive text causes
 the assessment to be omitted, not rewritten into an apparent original verdict.
+The combined human-readable body and assessment must fit the consumer’s 8192-byte
+UTF-8 limit. Otherwise only the original human-readable review is posted; no
+assessment is truncated or substituted.
 
 The wrapper binds repository, PR, base/head and the acceptance lane to the
 reviewed job. It maps the model's `unresolved_findings` to the public `findings`

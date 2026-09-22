@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLcmReviewAssessmentBody } from "../src/lcm-review-assessment.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody } from "../src/lcm-review-assessment.js";
 
 const assessment = {
   verdict: "PASS", scope: "Changed validator and workflow only",
@@ -57,5 +57,20 @@ describe("original LCM reviewer assessment", () => {
       ...assessment, scope: "AWS access key AKIAIOSFODNN7EXAMPLE"
     } });
     expect(buildLcmReviewAssessmentBody({ ...input, rawResponse })).toBeUndefined();
+  });
+});
+
+
+describe("whole original review size boundary", () => {
+  it("publishes the intact assessment at 8192 UTF8 bytes and omits it above the limit", () => {
+    const marker = buildLcmReviewAssessmentBody(input)!;
+    const prefix = "é" + "x".repeat(8192 - Buffer.byteLength(marker) - 4);
+    const combined = appendLcmReviewAssessment(prefix, marker);
+    expect(Buffer.byteLength(combined)).toBe(8192);
+    expect(combined).toBe(`${prefix}\n\n${marker}`);
+    expect(appendLcmReviewAssessment(prefix + "x", marker)).toBe(prefix + "x");
+  });
+  it("leaves ordinary reviews unchanged when no valid assessment is available", () => {
+    expect(appendLcmReviewAssessment("Original review", undefined)).toBe("Original review");
   });
 });

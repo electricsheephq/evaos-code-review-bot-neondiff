@@ -45,6 +45,13 @@ export function buildLcmReviewAssessmentBody(input: {
   return `<!-- lcm-x-ai-review:v2\n${body}\n-->`;
 }
 
+/** Keep original prose and assessment intact within the consumer's whole-body limit. */
+export function appendLcmReviewAssessment(body: string, assessment: string | undefined): string {
+  if (!assessment) return body;
+  const combined = [body, assessment].filter(Boolean).join("\n\n");
+  return Buffer.byteLength(combined, "utf8") <= 8192 ? combined : body;
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
