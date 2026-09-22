@@ -47,6 +47,82 @@ describe("pull worktree path planning", () => {
     expect(file?.patch).toContain(" trailing");
   });
 
+  it("hydrates the merge-base-to-head PR diff after the base branch advances", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-merge-base-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "review.ts"), "base\nshared\n");
+    execFileSync("git", ["-C", sourcePath, "add", "review.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "common base"], { stdio: "ignore" });
+    const commonBaseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    writeFileSync(join(sourcePath, "review.ts"), "feature\nshared\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "feature head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    execFileSync("git", ["-C", sourcePath, "checkout", "--detach", commonBaseSha], { stdio: "ignore" });
+    writeFileSync(join(sourcePath, "review.ts"), "base\nadvanced\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "advance base"], { stdio: "ignore" });
+    const advancedBaseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", sourcePath, "checkout", "--detach", headSha], { stdio: "ignore" });
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha: advancedBaseSha, headSha,
+      files: [{ filename: "review.ts", patch: "truncated" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain("+feature");
+    expect(file?.patch).not.toContain("advanced");
+  });
+
+  it("hydrates renamed files with both paths so Git preserves rename semantics", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-rename-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "old.ts"), "unchanged content\n");
+    execFileSync("git", ["-C", sourcePath, "add", "old.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", sourcePath, "mv", "old.ts", "new.ts"]);
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "rename"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "new.ts", previous_filename: "old.ts", status: "renamed" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain("rename from old.ts");
+    expect(file?.patch).toContain("rename to new.ts");
+    expect(file?.patch).not.toContain("new file mode");
+  });
+
+  it("fails the completeness receipt for binary diffs", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-binary-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    execFileSync("git", ["-C", sourcePath, "add", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 4]));
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "binary change"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin" }]
+    });
+    expect(file?.patch).toContain("Binary files");
+    expect(file?.patchComplete).toBe(false);
+  });
+
   it("bounds slow git without blocking the event loop", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-slow-git-"));
     roots.push(root);

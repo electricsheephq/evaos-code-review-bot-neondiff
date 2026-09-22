@@ -257,15 +257,34 @@ export async function hydratePullFilePatchesFromWorktree(input: {
   const actualHead = (await run(["-C", input.worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
   if (actualHead !== input.headSha) throw new Error(`complete patch hydration head mismatch: ${actualHead} !== ${input.headSha}`);
   await run(["-C", input.worktreePath, "rev-parse", "--verify", `${input.baseSha}^{commit}`], timeoutMs);
+  const mergeBase = (await run([
+    "-C", input.worktreePath, "merge-base", input.baseSha, input.headSha
+  ], timeoutMs)).stdout.trim();
+  if (!/^[a-f0-9]{40}$/.test(mergeBase)) {
+    throw new Error("complete patch hydration could not resolve an exact merge base");
+  }
 
   const hydrated: PullFilePatch[] = [];
   for (const file of input.files) {
     if (!file.filename || file.filename.includes("\0")) throw new Error("complete patch hydration received an invalid filename");
+    if (file.previous_filename?.includes("\0")) throw new Error("complete patch hydration received an invalid previous filename");
+    if (file.status === "renamed" && !file.previous_filename) {
+      hydrated.push({ ...file, patchComplete: false });
+      continue;
+    }
+    const pathspecs = [file.previous_filename, file.filename]
+      .filter((path): path is string => Boolean(path))
+      .map((path) => `:(literal)${path}`);
     const patch = (await run([
-      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-color", "--unified=3",
-      input.baseSha, input.headSha, "--", `:(literal)${file.filename}`
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-color", "--find-renames", "--unified=3",
+      mergeBase, input.headSha, "--", ...pathspecs
     ], timeoutMs)).stdout;
-    hydrated.push({ ...file, patch, patchComplete: true });
+    const numstat = (await run([
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--find-renames", "--numstat", "-z",
+      mergeBase, input.headSha, "--", ...pathspecs
+    ], timeoutMs)).stdout;
+    const containsBinaryChange = numstat.split("\0").some((record) => /^-\t-\t/.test(record));
+    hydrated.push({ ...file, patch, patchComplete: patch.length > 0 && !containsBinaryChange });
   }
   return hydrated;
 }
