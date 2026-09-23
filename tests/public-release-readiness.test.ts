@@ -1050,7 +1050,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/- name: Verify protected-main recovery policy checkout\n\s+if: \$\{\{[^\n]*steps\.package_release\.outputs\.should_publish == 'true'[^\n]*\}\}/);
     expect(publish).toMatch(/path:\s*\.recovery-policy/);
     expect(publish).toMatch(/ref:\s*\$\{\{\s*github\.workflow_sha\s*\}\}/);
-    expect(publish.indexOf('npm pack --json --pack-destination "$PACK_DIR" > pack.json')).toBeLessThan(
+    expect(publish.indexOf('npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" > pack.json')).toBeLessThan(
       publish.indexOf("Checkout protected-main recovery policy")
     );
     expect(publish).toMatch(/git -C \.recovery-policy rev-parse HEAD/);
