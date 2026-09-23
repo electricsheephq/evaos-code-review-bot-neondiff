@@ -68,6 +68,8 @@ describe("current stable package release plumbing", () => {
     expect(script).toContain('npm dist-tag add "neondiff@$PREDECESSOR_VERSION" latest');
     expect(script).toContain("npm view neondiff versions --json --prefer-online");
     expect(script).toContain('versions.includes("1.0.6")');
+    expect(script).toContain('$([ "$VERSION" = "$CURRENT_VERSION" ]');
+    expect(script).not.toContain('$([ "$VERSION" = "1.0.6" ]');
     expect(script).toContain('rollback-current.json');
     expect(script).toContain('rollback-predecessor.json');
     expect(script).not.toContain('"rollback-$VERSION.json"');

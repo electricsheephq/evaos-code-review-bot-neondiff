@@ -145,7 +145,7 @@ jobs:
               --expected-repository "$GITHUB_REPOSITORY" \
               --expected-workflow .github/workflows/publish-npm.yml \
               --expected-tag "v$VERSION" \
-              --expected-commit "$([ "$VERSION" = "1.0.6" ] && printf '%s' "$CURRENT_TAG_COMMIT" || printf '%s' "$PREDECESSOR_TAG_COMMIT")" \
+              --expected-commit "$([ "$VERSION" = "$CURRENT_VERSION" ] && printf '%s' "$CURRENT_TAG_COMMIT" || printf '%s' "$PREDECESSOR_TAG_COMMIT")" \
               > "rollback-$VERSION-provenance.json"
           done
           node --input-type=module -e '
