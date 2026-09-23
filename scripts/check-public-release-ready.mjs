@@ -152,10 +152,9 @@ process.stdout.write(`${JSON.stringify({
 })}\n`);
 
 function resolveCandidateLedgerPath(cwd, candidatePath, expectedVersion) {
-  if (expectedVersion !== "v1.0.5") fail("candidate ledger mode is scoped only to v1.0.5");
   const expectedPath = `docs/release-candidates/${expectedVersion}.json`;
   if (candidatePath !== expectedPath || isAbsolute(candidatePath)) {
-    fail("candidate ledger path must be the exact relative v1.0.5 release-candidate ledger");
+    fail("candidate ledger path must be the exact relative release-candidate ledger for the expected version");
   }
   try {
     const candidateRoot = realpathSync(resolve(cwd, "docs", "release-candidates"));
@@ -173,7 +172,7 @@ function resolveCandidateLedgerPath(cwd, candidatePath, expectedVersion) {
 function resolveCandidateActivationProofPath(cwd, proofPath, expectedVersion, candidateHead) {
   const expectedPath = `docs/evidence/${expectedVersion}/mandatory-activation-${candidateHead}.json`;
   if (proofPath !== expectedPath || isAbsolute(proofPath)) {
-    fail("candidate activation proof path must be the exact v1.0.5 evidence path");
+    fail("candidate activation proof path must be the exact expected-version evidence path");
   }
   try {
     const evidenceRoot = realpathSync(resolve(cwd, "docs", "evidence"));

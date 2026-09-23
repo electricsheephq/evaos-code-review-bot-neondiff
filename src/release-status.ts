@@ -261,6 +261,10 @@ const CHECKOUT_ISSUANCE_STATES = new Set([
 const NPM_PUBLICATION_PROOF_KIND = "neondiff.npm-publication-proof.v1";
 const NPM_PUBLICATION_PENDING_STATE = "candidate_pending_publication";
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/;
+const APPROVED_NPM_RELEASE_PREDECESSORS = new Map([
+  ["1.0.5", "1.0.4"],
+  ["1.0.6", "1.0.5"]
+]);
 const CHECKOUT_ISSUANCE_LOOKUP_KEYS = new Set([
   "neondiff_monthly",
   "neondiff_yearly",
@@ -1034,14 +1038,32 @@ function readNpmPublicationStatus(input: {
   if (readString(source.candidateHeadBeforeReleaseMetadata) !== candidateSourceSha) identityFailures.push("candidate source identity must match candidateSourceSha");
   if (artifact.name !== "neondiff") identityFailures.push("candidate packageArtifact.name must be neondiff");
   if (artifact.version !== packageVersion) identityFailures.push(`candidate packageArtifact.version must match ${packageVersion}`);
+  const publishedPredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
+  const artifactPredecessor = readString(candidateArtifact.previousReleasedPackageVersion);
+  if (!publishedPredecessor) identityFailures.push("candidate publishedVersionAtCandidateCut must declare the immutable predecessor");
+  if (!artifactPredecessor) {
+    identityFailures.push("candidate packageArtifact.previousReleasedPackageVersion must declare the immutable predecessor");
+  } else if (artifactPredecessor !== publishedPredecessor) {
+    identityFailures.push("candidate packageArtifact.previousReleasedPackageVersion must match publishedVersionAtCandidateCut");
+  }
+  const immutablePredecessor = artifactPredecessor ?? publishedPredecessor;
+  if (!isSemver(immutablePredecessor)) {
+    identityFailures.push("candidate immutable predecessor must be valid semver");
+  } else if (compareSemverPrecedence(packageVersion ?? "", immutablePredecessor) !== 1) {
+    identityFailures.push(`candidate immutable predecessor must be older than ${packageVersion}`);
+  }
+  const approvedPredecessor = APPROVED_NPM_RELEASE_PREDECESSORS.get(packageVersion ?? "");
+  if (!approvedPredecessor) {
+    identityFailures.push(`candidate release ${packageVersion} has no approved immutable predecessor`);
+  } else if (immutablePredecessor !== approvedPredecessor) {
+    identityFailures.push(`candidate immutable predecessor must be the approved predecessor ${approvedPredecessor}`);
+  }
   const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
   const declared = registryState === "published_latest" && state === "published";
   if (!pending && !declared) identityFailures.push("candidate registry state must be pending_publication or published_latest");
   if (pending) {
-    const immutablePredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
-    if (immutablePredecessor !== "1.0.4") identityFailures.push("pending candidate predecessor must be immutable v1.0.4");
-    if (readString(registry.latest) !== "1.0.4") identityFailures.push("pending candidate registry.latest must retain 1.0.4");
-    if (readString(registry.predecessor) !== "1.0.4") identityFailures.push("pending candidate registry.predecessor must be 1.0.4");
+    if (readString(registry.latest) !== immutablePredecessor) identityFailures.push(`pending candidate registry.latest must retain ${immutablePredecessor}`);
+    if (readString(registry.predecessor) !== immutablePredecessor) identityFailures.push(`pending candidate registry.predecessor must be ${immutablePredecessor}`);
     if (registry.releaseCandidatePresent !== false) identityFailures.push("pending candidate releaseCandidatePresent must be false");
     if (candidateArtifact.requiredForThisRelease !== true) identityFailures.push("pending candidate packageArtifact must be required for this release");
     if (readString(candidateArtifact.state) !== "candidate") identityFailures.push("pending candidate packageArtifact.state must be candidate");
@@ -1073,7 +1095,7 @@ function readNpmPublicationStatus(input: {
   const declaredPredecessor = readString(registry.predecessor);
   if (!declaredPredecessor) {
     identityFailures.push("published candidate must declare registry.predecessor");
-  } else if (declaredPredecessor !== stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4")) {
+  } else if (declaredPredecessor !== immutablePredecessor) {
     identityFailures.push("published candidate registry.predecessor must match the immutable predecessor");
   }
   if (!publicationProofPath) identityFailures.push("published candidate must declare publicationProofPath");
@@ -1089,7 +1111,7 @@ function readNpmPublicationStatus(input: {
         cwd: input.cwd,
         proofPath: publicationProofPath,
         expectedVersion,
-        expectedPredecessor: stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4"),
+        expectedPredecessor: immutablePredecessor,
         expectedArtifact: legacyArtifact,
         expectedLatest: packageVersion,
         expectedReleaseCandidatePresent: registry.releaseCandidatePresent,
@@ -1393,6 +1415,47 @@ function isSemver(version: string): boolean {
   const coreParts = core.split(".");
   if (coreParts.length !== 3 || !coreParts.every(isSemverNumericIdentifier)) return false;
   return prerelease === undefined || isDotSeparatedPrerelease(prerelease);
+}
+
+function compareSemverPrecedence(left: string, right: string): -1 | 0 | 1 | undefined {
+  const parse = (value: string): { core: string[]; prerelease?: string[] } | undefined => {
+    if (!isSemver(value)) return undefined;
+    const buildIndex = value.indexOf("+");
+    const withoutBuild = buildIndex === -1 ? value : value.slice(0, buildIndex);
+    const prereleaseIndex = withoutBuild.indexOf("-");
+    const core = (prereleaseIndex === -1 ? withoutBuild : withoutBuild.slice(0, prereleaseIndex)).split(".");
+    const prerelease = prereleaseIndex === -1 ? undefined : withoutBuild.slice(prereleaseIndex + 1).split(".");
+    return { core, prerelease };
+  };
+  const compareNumeric = (leftValue: string, rightValue: string): -1 | 0 | 1 => {
+    if (leftValue.length !== rightValue.length) return leftValue.length < rightValue.length ? -1 : 1;
+    if (leftValue === rightValue) return 0;
+    return leftValue < rightValue ? -1 : 1;
+  };
+  const leftVersion = parse(left);
+  const rightVersion = parse(right);
+  if (!leftVersion || !rightVersion) return undefined;
+  for (let index = 0; index < 3; index += 1) {
+    const order = compareNumeric(leftVersion.core[index], rightVersion.core[index]);
+    if (order !== 0) return order;
+  }
+  if (!leftVersion.prerelease && !rightVersion.prerelease) return 0;
+  if (!leftVersion.prerelease) return 1;
+  if (!rightVersion.prerelease) return -1;
+  const length = Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftIdentifier = leftVersion.prerelease[index];
+    const rightIdentifier = rightVersion.prerelease[index];
+    if (leftIdentifier === undefined) return -1;
+    if (rightIdentifier === undefined) return 1;
+    if (leftIdentifier === rightIdentifier) continue;
+    const leftNumeric = isAllAsciiDigits(leftIdentifier);
+    const rightNumeric = isAllAsciiDigits(rightIdentifier);
+    if (leftNumeric && rightNumeric) return compareNumeric(leftIdentifier, rightIdentifier);
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftIdentifier < rightIdentifier ? -1 : 1;
+  }
+  return 0;
 }
 
 function isDotSeparatedPrerelease(value: string): boolean {

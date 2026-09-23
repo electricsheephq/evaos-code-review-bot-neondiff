@@ -91,6 +91,15 @@ jobs:
       - name: Full test suite
         run: npm test -- --pool=forks --maxWorkers=1
 
+      - name: Verify npm 11.17.0 directory-publish source identity
+        run: |
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+          NEONDIFF_RUN_NPM_11_SOURCE_IDENTITY_SMOKE=true \
+            npx vitest run tests/npm-provenance-recovery.test.ts \
+              -t "proves npm 11.17.0 directory publish preserves reviewed bytes and records gitHead" \
+              --pool=forks --maxWorkers=1
+
       - name: Package packlist
         run: |
           npm pack --dry-run --json > pack.json

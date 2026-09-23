@@ -4,7 +4,7 @@ import { parse } from "yaml";
 
 const read = (path: string): string => readFileSync(path, "utf8");
 
-describe("neondiff@1.0.5 release plumbing", () => {
+describe("current stable package release plumbing", () => {
   it("derives every sealed-worker version check from package identity", () => {
     const pkg = JSON.parse(read("package.json")) as { version?: string };
     const lock = JSON.parse(read("package-lock.json")) as {
@@ -14,9 +14,9 @@ describe("neondiff@1.0.5 release plumbing", () => {
     const builder = read("scripts/build-desktop-sealed-worker.mjs");
     const desktopBuild = read("apps/neondiff-desktop/script/build_and_run.sh");
 
-    expect(pkg.version).toBe("1.0.5");
-    expect(lock.version).toBe("1.0.5");
-    expect(lock.packages?.[""]?.version).toBe("1.0.5");
+    expect(pkg.version).toBe("1.0.6");
+    expect(lock.version).toBe("1.0.6");
+    expect(lock.packages?.[""]?.version).toBe("1.0.6");
     expect(builder).toContain("reportedVersion !== sealedPackageVersion");
     expect(builder).not.toContain('reportedVersion !== "1.0.4"');
     expect(desktopBuild).toContain("EXPECTED_WORKER_VERSION");
@@ -65,7 +65,13 @@ describe("neondiff@1.0.5 release plumbing", () => {
     const script = rollback?.steps?.map((step) => step.run ?? "").join("\n") ?? "";
     expect(rollback?.if).toContain("predecessor_rollback");
     expect(script).toContain("verify-predecessor-rollback");
-    expect(script).toContain('npm dist-tag add "neondiff@1.0.4" latest');
+    expect(script).toContain('npm dist-tag add "neondiff@$PREDECESSOR_VERSION" latest');
+    expect(script).toContain("npm view neondiff versions --json --prefer-online");
+    expect(script).toContain('versions.includes("1.0.6")');
+    expect(script).toContain('$([ "$VERSION" = "$CURRENT_VERSION" ]');
+    expect(script).not.toContain('$([ "$VERSION" = "1.0.6" ]');
+    expect(script).toContain("did not converge to latest=$PREDECESSOR_VERSION");
+    expect(script).not.toContain("did not converge to latest=1.0.5");
     expect(script).toContain('rollback-current.json');
     expect(script).toContain('rollback-predecessor.json');
     expect(script).not.toContain('"rollback-$VERSION.json"');
@@ -73,7 +79,10 @@ describe("neondiff@1.0.5 release plumbing", () => {
     expect(script).toContain("confirmation-only");
     expect(script).toContain("mutation_required");
     expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.mutation_required");
+    expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.current_version");
+    expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.predecessor_version");
     expect(script).toContain("bounded");
+    expect(read(".github/workflows/publish-npm.yml")).toContain('CANDIDATE_LEDGER="docs/release-candidates/$RELEASE_TAG.json"');
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeGreaterThan(stepNames.indexOf("Setup rollback Node.js"));
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeLessThan(stepNames.indexOf("Verify immutable packages and rollback precondition"));
     const installStep = rollback?.steps?.find((step) => (step as { name?: string }).name === "Install exact script-free rollback dependencies");

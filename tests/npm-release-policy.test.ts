@@ -764,9 +764,9 @@ describe("npm release policy", () => {
 
   it("runs the activation-aware public release gate after packing and before npm publication", () => {
     const workflow = readFileSync(join(repoRoot, ".github", "workflows", "publish-npm.yml"), "utf8");
-    const packIndex = workflow.indexOf('npm pack --json --pack-destination "$PACK_DIR" > pack.json');
+    const packIndex = workflow.indexOf('npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" > pack.json');
     const readinessIndex = workflow.indexOf("node scripts/check-public-release-ready.mjs");
-    const publishIndex = workflow.indexOf('npm publish "$PACK_TARBALL" --provenance');
+    const publishIndex = workflow.indexOf('npm publish . --ignore-scripts --provenance');
 
     expect(packIndex).toBeGreaterThan(-1);
     expect(readinessIndex).toBeGreaterThan(packIndex);

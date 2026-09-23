@@ -575,30 +575,35 @@ function verifyPredecessorRollback(args) {
   const provenanceRecovery = args.get("provenance-recovery") ?? "false";
   const latestVersion = required(args, "latest-version");
   const quarantineVersion = args.get("quarantine-version") ?? "";
+  const currentVersion = required(args, "current-version");
   const targetVersion = required(args, "target-version");
   const expectedPredecessor = required(args, "expected-predecessor");
   if (provenanceRecovery !== "false") parseBoolean(provenanceRecovery, "provenance-recovery");
   if (eventName !== "workflow_dispatch" || githubRef !== "refs/heads/main" || !rollback || provenanceRecovery === "true") {
     fail("predecessor rollback requires an explicit protected-main workflow dispatch");
   }
-  if (targetVersion !== "1.0.4" || expectedPredecessor !== "1.0.4") {
-    fail("predecessor rollback requires immutable predecessor 1.0.4");
+  const allowedPairs = new Map([
+    ["1.0.5", "1.0.4"],
+    ["1.0.6", "1.0.5"]
+  ]);
+  if (allowedPairs.get(currentVersion) !== targetVersion || expectedPredecessor !== targetVersion) {
+    fail("predecessor rollback requires an approved immutable current/predecessor pair");
   }
-  if (confirmationOnly ? latestVersion !== "1.0.4" : latestVersion !== "1.0.5") {
+  if (confirmationOnly ? latestVersion !== targetVersion : latestVersion !== currentVersion) {
     fail(confirmationOnly
-      ? "predecessor rollback confirmation requires latest=1.0.4"
-      : "predecessor rollback requires latest=1.0.5 before mutation");
+      ? `predecessor rollback confirmation requires latest=${targetVersion}`
+      : `predecessor rollback requires latest=${currentVersion} before mutation`);
   }
   if (quarantineVersion !== "") fail("predecessor rollback requires the release-candidate tag to be absent");
-  const current = validateRollbackPackage(readJsonFile(required(args, "current-metadata"), "current package metadata"), "1.0.5", "current package");
-  const predecessor = validateRollbackPackage(readJsonFile(required(args, "predecessor-metadata"), "predecessor package metadata"), "1.0.4", "predecessor package");
+  const current = validateRollbackPackage(readJsonFile(required(args, "current-metadata"), "current package metadata"), currentVersion, "current package");
+  const predecessor = validateRollbackPackage(readJsonFile(required(args, "predecessor-metadata"), "predecessor package metadata"), targetVersion, "predecessor package");
   const currentTagCommit = required(args, "current-tag-commit");
   const predecessorTagCommit = required(args, "predecessor-tag-commit");
   if (!/^[0-9a-f]{40}$/i.test(currentTagCommit) || (current.gitHead ?? current.commit) !== currentTagCommit) {
-    fail("current package source identity does not match the immutable v1.0.5 tag commit");
+    fail(`current package source identity does not match the immutable v${currentVersion} tag commit`);
   }
   if (!/^[0-9a-f]{40}$/i.test(predecessorTagCommit) || (predecessor.gitHead ?? predecessor.commit) !== predecessorTagCommit) {
-    fail("predecessor package source identity does not match the immutable v1.0.4 tag commit");
+    fail(`predecessor package source identity does not match the immutable v${targetVersion} tag commit`);
   }
   if (current.sourceIdentity !== "matching_gitHead" && current.sourceIdentity !== "verified_provenance") {
     fail("current package source identity is not verified");
@@ -607,11 +612,12 @@ function verifyPredecessorRollback(args) {
     fail("predecessor package source identity is not verified");
   }
   const mutationRequired = !confirmationOnly;
-  const command = mutationRequired ? 'npm dist-tag add "neondiff@1.0.4" latest' : undefined;
+  const command = mutationRequired ? `npm dist-tag add "neondiff@${targetVersion}" latest` : undefined;
   console.log(JSON.stringify({
     bounded: true,
     action: mutationRequired ? "predecessor_dist_tag_rollback" : "confirm_predecessor_dist_tag_rollback",
     latestVersion,
+    currentVersion,
     targetVersion,
     expectedPredecessor,
     mutationRequired,

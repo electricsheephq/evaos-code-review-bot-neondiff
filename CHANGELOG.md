@@ -14,6 +14,14 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+### Changed
+
+- Prepare the next immutable `neondiff@1.0.6` package identity for the LCM-X
+  original-verdict publisher, keep the existing `1.0.5` continuation exception
+  bounded, and retarget the serialized predecessor rollback to the exact
+  `1.0.6 -> 1.0.5` pair. Publication, dist-tag movement, Desktop promotion, and
+  runtime adoption remain separate protected gates.
+
 ### Fixed
 
 - Make clean native bot setup immediately patchable: `neondiff init` now gives
