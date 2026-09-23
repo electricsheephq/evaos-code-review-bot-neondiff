@@ -332,7 +332,16 @@ describe("beta release status", () => {
       state: "candidate_pending_publication",
       candidateReadyForPublication: true
     });
+    candidateFixture.publishedVersionAtCandidateCut = "v9.9.9";
+    candidateFixture.packageArtifact.previousReleasedPackageVersion = "9.9.9";
+    candidateFixture.registry.latest = "9.9.9";
+    candidateFixture.registry.predecessor = "9.9.9";
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("immutable predecessor must be older than 1.0.6");
+    candidateFixture.publishedVersionAtCandidateCut = "v1.0.5";
     candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.4";
+    candidateFixture.registry.latest = "1.0.5";
+    candidateFixture.registry.predecessor = "1.0.5";
     writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("previousReleasedPackageVersion must match publishedVersionAtCandidateCut");
   });

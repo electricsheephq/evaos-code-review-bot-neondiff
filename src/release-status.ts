@@ -1043,6 +1043,11 @@ function readNpmPublicationStatus(input: {
     identityFailures.push("candidate packageArtifact.previousReleasedPackageVersion must match publishedVersionAtCandidateCut");
   }
   const immutablePredecessor = artifactPredecessor ?? publishedPredecessor;
+  if (!isSemver(immutablePredecessor)) {
+    identityFailures.push("candidate immutable predecessor must be valid semver");
+  } else if (immutablePredecessor === packageVersion || !isVersionAtLeast(expectedVersion, `v${immutablePredecessor}`)) {
+    identityFailures.push(`candidate immutable predecessor must be older than ${packageVersion}`);
+  }
   const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
   const declared = registryState === "published_latest" && state === "published";
   if (!pending && !declared) identityFailures.push("candidate registry state must be pending_publication or published_latest");
