@@ -1034,14 +1034,21 @@ function readNpmPublicationStatus(input: {
   if (readString(source.candidateHeadBeforeReleaseMetadata) !== candidateSourceSha) identityFailures.push("candidate source identity must match candidateSourceSha");
   if (artifact.name !== "neondiff") identityFailures.push("candidate packageArtifact.name must be neondiff");
   if (artifact.version !== packageVersion) identityFailures.push(`candidate packageArtifact.version must match ${packageVersion}`);
+  const publishedPredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
+  const artifactPredecessor = readString(candidateArtifact.previousReleasedPackageVersion);
+  if (!publishedPredecessor) identityFailures.push("candidate publishedVersionAtCandidateCut must declare the immutable predecessor");
+  if (!artifactPredecessor) {
+    identityFailures.push("candidate packageArtifact.previousReleasedPackageVersion must declare the immutable predecessor");
+  } else if (artifactPredecessor !== publishedPredecessor) {
+    identityFailures.push("candidate packageArtifact.previousReleasedPackageVersion must match publishedVersionAtCandidateCut");
+  }
+  const immutablePredecessor = artifactPredecessor ?? publishedPredecessor;
   const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
   const declared = registryState === "published_latest" && state === "published";
   if (!pending && !declared) identityFailures.push("candidate registry state must be pending_publication or published_latest");
   if (pending) {
-    const immutablePredecessor = stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "");
-    if (immutablePredecessor !== "1.0.4") identityFailures.push("pending candidate predecessor must be immutable v1.0.4");
-    if (readString(registry.latest) !== "1.0.4") identityFailures.push("pending candidate registry.latest must retain 1.0.4");
-    if (readString(registry.predecessor) !== "1.0.4") identityFailures.push("pending candidate registry.predecessor must be 1.0.4");
+    if (readString(registry.latest) !== immutablePredecessor) identityFailures.push(`pending candidate registry.latest must retain ${immutablePredecessor}`);
+    if (readString(registry.predecessor) !== immutablePredecessor) identityFailures.push(`pending candidate registry.predecessor must be ${immutablePredecessor}`);
     if (registry.releaseCandidatePresent !== false) identityFailures.push("pending candidate releaseCandidatePresent must be false");
     if (candidateArtifact.requiredForThisRelease !== true) identityFailures.push("pending candidate packageArtifact must be required for this release");
     if (readString(candidateArtifact.state) !== "candidate") identityFailures.push("pending candidate packageArtifact.state must be candidate");
@@ -1073,7 +1080,7 @@ function readNpmPublicationStatus(input: {
   const declaredPredecessor = readString(registry.predecessor);
   if (!declaredPredecessor) {
     identityFailures.push("published candidate must declare registry.predecessor");
-  } else if (declaredPredecessor !== stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4")) {
+  } else if (declaredPredecessor !== immutablePredecessor) {
     identityFailures.push("published candidate registry.predecessor must match the immutable predecessor");
   }
   if (!publicationProofPath) identityFailures.push("published candidate must declare publicationProofPath");
@@ -1089,7 +1096,7 @@ function readNpmPublicationStatus(input: {
         cwd: input.cwd,
         proofPath: publicationProofPath,
         expectedVersion,
-        expectedPredecessor: stripLeadingV(readString(candidate.publishedVersionAtCandidateCut) ?? "1.0.4"),
+        expectedPredecessor: immutablePredecessor,
         expectedArtifact: legacyArtifact,
         expectedLatest: packageVersion,
         expectedReleaseCandidatePresent: registry.releaseCandidatePresent,

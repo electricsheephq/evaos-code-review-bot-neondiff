@@ -154,7 +154,7 @@ describe("beta release status", () => {
   }
 
   const npmTagCommit = "a".repeat(40);
-  const npmArtifact = { name: "neondiff", version: "1.0.5", integrity: `sha512-${Buffer.alloc(64, 0xab).toString("base64")}`, shasum: "b".repeat(40) };
+  const npmArtifact = { name: "neondiff", version: "1.0.5", previousReleasedPackageVersion: "1.0.4", integrity: `sha512-${Buffer.alloc(64, 0xab).toString("base64")}`, shasum: "b".repeat(40) };
   const npmProofPath = "docs/evidence/npm-publication-proof.json";
 
   function npmProof(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -298,6 +298,43 @@ describe("beta release status", () => {
     candidateFixture.source.candidateHeadBeforeReleaseMetadata = "c".repeat(40);
     writeFileSync(candidatePath, JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication.detail).toContain("source identity must match candidateSourceSha");
+
+    candidateFixture.version = "v1.0.6";
+    candidateFixture.packageVersion = "1.0.6";
+    candidateFixture.publishedVersionAtCandidateCut = "v1.0.5";
+    candidateFixture.source.candidateHeadBeforeReleaseMetadata = npmTagCommit;
+    candidateFixture.packageArtifact = {
+      ...npmArtifact,
+      version: "1.0.6",
+      previousReleasedPackageVersion: "1.0.5",
+      requiredForThisRelease: true,
+      state: "candidate"
+    };
+    candidateFixture.registry = {
+      state: "pending_publication",
+      latest: "1.0.5",
+      predecessor: "1.0.5",
+      releaseCandidatePresent: false
+    };
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
+    writeFileSync(join(root, "docs", "releases", "v1.0.6.md"), "# v1.0.6\n");
+    writeChangelogHead(root, "1.0.6");
+    manifestFixture.version = "v1.0.6";
+    manifestFixture.packageArtifact = { ...npmArtifact, version: "1.0.6", previousReleasedPackageVersion: "1.0.5" };
+    manifestFixture.docs = { ...manifestFixture.docs, version: "v1.0.6", releaseNotesPath: "docs/releases/v1.0.6.md" };
+    for (const channel of Object.values(manifestFixture.updateChannels) as Array<Record<string, unknown>>) {
+      channel.version = "v1.0.6";
+      channel.rollback = "git reset --hard refs/tags/v1.0.5";
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifestFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication).toMatchObject({
+      ok: false,
+      state: "candidate_pending_publication",
+      candidateReadyForPublication: true
+    });
+    candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.4";
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("previousReleasedPackageVersion must match publishedVersionAtCandidateCut");
   });
 
   it("uses the v1.0.5 candidate ledger for first-publication readiness", () => {
