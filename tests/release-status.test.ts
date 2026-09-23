@@ -344,6 +344,12 @@ describe("beta release status", () => {
     candidateFixture.registry.predecessor = "1.0.6+build.1";
     writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("immutable predecessor must be older than 1.0.6");
+    candidateFixture.publishedVersionAtCandidateCut = "v1.0.4";
+    candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.4";
+    candidateFixture.registry.latest = "1.0.4";
+    candidateFixture.registry.predecessor = "1.0.4";
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("immutable predecessor must be the approved predecessor 1.0.5");
     candidateFixture.publishedVersionAtCandidateCut = "v1.0.5";
     candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.4";
     candidateFixture.registry.latest = "1.0.5";

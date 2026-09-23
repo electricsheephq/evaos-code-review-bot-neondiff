@@ -261,6 +261,10 @@ const CHECKOUT_ISSUANCE_STATES = new Set([
 const NPM_PUBLICATION_PROOF_KIND = "neondiff.npm-publication-proof.v1";
 const NPM_PUBLICATION_PENDING_STATE = "candidate_pending_publication";
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/;
+const APPROVED_NPM_RELEASE_PREDECESSORS = new Map([
+  ["1.0.5", "1.0.4"],
+  ["1.0.6", "1.0.5"]
+]);
 const CHECKOUT_ISSUANCE_LOOKUP_KEYS = new Set([
   "neondiff_monthly",
   "neondiff_yearly",
@@ -1047,6 +1051,12 @@ function readNpmPublicationStatus(input: {
     identityFailures.push("candidate immutable predecessor must be valid semver");
   } else if (compareSemverPrecedence(packageVersion ?? "", immutablePredecessor) !== 1) {
     identityFailures.push(`candidate immutable predecessor must be older than ${packageVersion}`);
+  }
+  const approvedPredecessor = APPROVED_NPM_RELEASE_PREDECESSORS.get(packageVersion ?? "");
+  if (!approvedPredecessor) {
+    identityFailures.push(`candidate release ${packageVersion} has no approved immutable predecessor`);
+  } else if (immutablePredecessor !== approvedPredecessor) {
+    identityFailures.push(`candidate immutable predecessor must be the approved predecessor ${approvedPredecessor}`);
   }
   const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
   const declared = registryState === "published_latest" && state === "published";
