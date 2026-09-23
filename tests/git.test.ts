@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { planPullWorktreePaths, prepareBranchWorktree, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
+import { hydratePullFilePatchesFromWorktree, planPullWorktreePaths, prepareBranchWorktree, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
 
 describe("pull worktree path planning", () => {
   const roots: string[] = [];
@@ -23,6 +23,236 @@ describe("pull worktree path planning", () => {
       workRoot: join(liveCheckout, "runtime"),
       protectedCheckoutRoot: liveCheckout
     })).toThrow(/workRoot must be outside the protected live checkout/);
+  });
+
+  it("hydrates a complete exact-commit diff when the GitHub patch omits trailing context", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-complete-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "review.ts"), "before\nunchanged\ntrailing\n");
+    execFileSync("git", ["-C", sourcePath, "add", "review.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "review.ts"), "before\nchanged\ntrailing\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "review.ts", patch: "@@ -1,3 +1,3 @@\n before\n-unchanged\n+changed" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain(" trailing");
+  });
+
+  it("rejects a pull-file inventory that omits an exact worktree path", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-incomplete-inventory-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "a.ts"), "before\n");
+    writeFileSync(join(sourcePath, "b.ts"), "before\n");
+    execFileSync("git", ["-C", sourcePath, "add", "a.ts", "b.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "a.ts"), "after\n");
+    writeFileSync(join(sourcePath, "b.ts"), "after\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    await expect(hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "a.ts", patch: "truncated" }]
+    })).rejects.toThrow(/file inventory does not match the exact worktree diff/);
+  });
+
+  it("hydrates the merge-base-to-head PR diff after the base branch advances", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-merge-base-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "review.ts"), "base\nshared\n");
+    execFileSync("git", ["-C", sourcePath, "add", "review.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "common base"], { stdio: "ignore" });
+    const commonBaseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    writeFileSync(join(sourcePath, "review.ts"), "feature\nshared\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "feature head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    execFileSync("git", ["-C", sourcePath, "checkout", "--detach", commonBaseSha], { stdio: "ignore" });
+    writeFileSync(join(sourcePath, "review.ts"), "base\nadvanced\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "advance base"], { stdio: "ignore" });
+    const advancedBaseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", sourcePath, "checkout", "--detach", headSha], { stdio: "ignore" });
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha: advancedBaseSha, headSha,
+      files: [{ filename: "review.ts", patch: "truncated" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain("+feature");
+    expect(file?.patch).not.toContain("advanced");
+  });
+
+  it("hydrates renamed files with both paths so Git preserves rename semantics", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-rename-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "old.ts"), "unchanged content\n");
+    execFileSync("git", ["-C", sourcePath, "add", "old.ts"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", sourcePath, "mv", "old.ts", "new.ts"]);
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "rename"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "new.ts", previous_filename: "old.ts", status: "renamed" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain("rename from old.ts");
+    expect(file?.patch).toContain("rename to new.ts");
+    expect(file?.patch).not.toContain("new file mode");
+  });
+
+  it("fails the completeness receipt for binary diffs", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-binary-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    execFileSync("git", ["-C", sourcePath, "add", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 4]));
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "binary change"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin" }]
+    });
+    expect(file?.patch).toContain("Binary files");
+    expect(file?.patchComplete).toBe(false);
+  });
+
+  it("fails the completeness receipt when attributes force a binary blob through the text diff", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-binary-attribute-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, ".gitattributes"), "*.bin diff\n");
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    execFileSync("git", ["-C", sourcePath, "add", ".gitattributes", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), Buffer.from([0, 1, 2, 4]));
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "binary change"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin" }]
+    });
+    expect(file?.patch).not.toContain("Binary files");
+    expect(file?.patchComplete).toBe(false);
+  });
+
+  it("does not execute repository-selected text conversion while hydrating exact patches", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-textconv-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    execFileSync("git", ["-C", sourcePath, "config", "diff.lossy.textconv", "printf hidden"]);
+    writeFileSync(join(sourcePath, ".gitattributes"), "*.txt diff=lossy\n");
+    writeFileSync(join(sourcePath, "review.txt"), "original\n");
+    execFileSync("git", ["-C", sourcePath, "add", ".gitattributes", "review.txt"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "review.txt"), "exact source\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "review.txt" }]
+    });
+    expect(file?.patchComplete).toBe(true);
+    expect(file?.patch).toContain("+exact source");
+    expect(file?.patch).not.toContain("hidden");
+  });
+
+  it("fails the completeness receipt for changed Git LFS pointers", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-lfs-pointer-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    writeFileSync(join(sourcePath, "asset.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a".repeat(64) + "\nsize 100\n");
+    execFileSync("git", ["-C", sourcePath, "add", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), "version https://git-lfs.github.com/spec/v1\noid sha256:" + "b".repeat(64) + "\nsize 101\n");
+    execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin" }]
+    });
+    expect(file?.patch).toContain("git-lfs.github.com/spec/v1");
+    expect(file?.patchComplete).toBe(false);
+  });
+
+  it("fails the completeness receipt for extended Git LFS pointers", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-extended-lfs-pointer-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    execFileSync("git", ["-C", sourcePath, "commit", "--allow-empty", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    writeFileSync(join(sourcePath, "asset.bin"), "version https://git-lfs.github.com/spec/v1\next-0-example sha256:" + "a".repeat(64) + "\noid sha256:" + "b".repeat(64) + "\nsize 101\n");
+    execFileSync("git", ["-C", sourcePath, "add", "asset.bin"], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "head"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "asset.bin", status: "added" }]
+    });
+    expect(file?.patchComplete).toBe(false);
+  });
+
+  it("fails the completeness receipt for gitlink diffs", async () => {
+    const sourcePath = mkdtempSync(join(tmpdir(), "evaos-gitlink-patch-"));
+    roots.push(sourcePath);
+    execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+    execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+    execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+    execFileSync("git", ["-C", sourcePath, "commit", "--allow-empty", "-m", "base"], { stdio: "ignore" });
+    const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", sourcePath, "update-index", "--add", "--cacheinfo", `160000,${baseSha},vendor/dependency`]);
+    execFileSync("git", ["-C", sourcePath, "commit", "-m", "add gitlink"], { stdio: "ignore" });
+    const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const [file] = await hydratePullFilePatchesFromWorktree({
+      worktreePath: sourcePath, baseSha, headSha,
+      files: [{ filename: "vendor/dependency", status: "added" }]
+    });
+    expect(file?.patch).toContain("Subproject commit");
+    expect(file?.patchComplete).toBe(false);
   });
 
   it("bounds slow git without blocking the event loop", async () => {

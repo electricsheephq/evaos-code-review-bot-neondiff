@@ -15,7 +15,7 @@ import {
 import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -120,6 +120,8 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
+import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
+import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import {
   buildReviewPrompt,
   emptyReviewModelSummary,
@@ -216,6 +218,11 @@ function resolveReviewContextWindowTokens(config: BotConfig): number | undefined
 
 function resolveReviewRegistryProviderId(config: BotConfig): string {
   return config.providers?.defaultProviderId ?? config.zcode.providerId ?? "zcode-glm";
+}
+
+function reviewContextBudgetMatchesExecutionProvider(config: BotConfig): boolean {
+  return config.codexRuntime?.enabled === true ||
+    config.providers?.defaultProviderId === config.zcode.providerId;
 }
 
 function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown> {
@@ -1837,7 +1844,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     mkdirSync(evidenceDir, { recursive: true });
 
     const files = await github.listPullFiles(repo, pull.number);
-    const reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
+    let reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
     const filterImpact = buildPullFileFilterImpact(files, repoPolicy.profile);
     const validation = buildChangedSurfaceValidationReport({
       repo,
@@ -1853,6 +1860,27 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
+    if (isLcmReviewRepository(repo)) {
+      try {
+        reviewFiles = await hydratePullFilePatchesFromWorktree({
+          worktreePath: worktree.path,
+          baseSha: pull.base.sha,
+          headSha: pull.head.sha,
+          files: reviewFiles
+        });
+        writeRedactedJsonBestEffort(join(evidenceDir, "lcm-review-patch-hydration.json"), {
+          status: "complete",
+          fileCount: reviewFiles.length
+        });
+      } catch (error) {
+        reviewFiles = reviewFiles.map((file) => ({ ...file, patchComplete: false }));
+        writeRedactedJsonBestEffort(join(evidenceDir, "lcm-review-patch-hydration.json"), {
+          status: "incomplete",
+          reason: "hydration_failed",
+          error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 400)
+        });
+      }
+    }
     const reviewModeSelection = selectReviewMode({
       config,
       repo,
@@ -2118,7 +2146,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
-    const summary = buildSummary({
+    const generatedSummary = buildSummary({
       repo,
       pull,
       comments,
@@ -2127,11 +2155,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: input.dryRun,
       commandDecision
     });
+    const summary = isLcmReviewRepository(repo)
+      ? escapeOrdinaryLcmReviewBody(generatedSummary)
+      : generatedSummary;
     assertReviewOutputSafe(summary);
     for (const comment of comments) {
       assertReviewOutputSafe(comment.body);
     }
-    const walkthrough = config.walkthrough.enabled && input.dryRun
+    const generatedWalkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,
           pull,
@@ -2147,7 +2178,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
-    if (walkthrough) assertReviewOutputSafe(walkthrough.body);
+    const walkthrough = generatedWalkthrough && isLcmReviewRepository(repo)
+      ? { ...generatedWalkthrough, body: escapeOrdinaryLcmReviewBody(generatedWalkthrough.body) }
+      : generatedWalkthrough;
+    if (walkthrough) {
+      assertReviewOutputSafe(walkthrough.body);
+    }
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({
           repo,
@@ -2173,6 +2209,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(walkthrough ? { walkthrough } : {}),
       ...(enrichment ? { enrichment } : {})
     };
+
+    let assessmentBody = buildLcmReviewAssessmentBody({
+      repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
+      rawResponse: zcodeResult.rawResponse,
+      complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
+        !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
+        reviewFiles.length === files.length && lcmReviewFileInventoryIsComplete(files.length) &&
+        lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
+      droppedFindingCount: zcodeResult.droppedFromSchema.length
+    });
+    if (assessmentBody) {
+      try {
+        assertReviewOutputSafe(assessmentBody);
+      } catch {
+        assessmentBody = undefined;
+      }
+      if (assessmentBody) writeRedactedText(join(evidenceDir, "lcm-review-assessment.md"), assessmentBody);
+    }
 
     if (input.dryRun && walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
     if (input.dryRun && enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
@@ -2447,7 +2501,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       event: plan.event,
-      body: reviewBodyAfterWalkthroughPost(plan),
+      body: appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo),
       comments
     });
     try {
@@ -4256,6 +4310,7 @@ async function runSingleReviewWithContextBudget(input: {
 
   const result = input.useZCode
     ? await runConfiguredReview({
+        lcmReviewAssessment: isLcmReviewRepository(input.repo),
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
@@ -4312,6 +4367,7 @@ async function runChunkedZCodeReview(input: {
     try {
       result = input.useZCode
         ? await runConfiguredReview({
+            lcmReviewAssessment: isLcmReviewRepository(input.repo),
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
@@ -4413,6 +4469,7 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
 
 async function runConfiguredReview(input: {
   config: BotConfig;
+  lcmReviewAssessment?: boolean;
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
@@ -4422,6 +4479,7 @@ async function runConfiguredReview(input: {
   input.assertProviderConfigCurrent?.();
   const startedAt = new Date();
   const result = await runCodexReview({
+    lcmReviewAssessment: input.lcmReviewAssessment,
     cwd: input.worktreePath,
     prompt: input.prompt,
     cliPath: input.config.codexRuntime.cliPath,

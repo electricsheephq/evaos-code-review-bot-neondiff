@@ -19,6 +19,9 @@ const zcodeDelaysByPath = vi.hoisted(() => new Map<string, number>());
 const zcodeBarriersByPath = vi.hoisted(() => new Map<string, Promise<void>>());
 const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: string; beforeThrow?: () => void }>());
 const severeRawResponse = vi.hoisted(() => ({ value: "" }));
+const zcodeRawResponseOverride = vi.hoisted(() => ({ value: "" }));
+const zcodeProvenanceOverride = vi.hoisted(() => ({ attempts: 1, degradedRecovery: false }));
+const lcmHydrationControl = vi.hoisted((): { error?: Error } => ({}));
 const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
 const severeWorktreePath = vi.hoisted(() => ({ value: "" }));
 const createdReviews = vi.hoisted((): Array<{
@@ -45,6 +48,14 @@ vi.mock("../src/git.js", async (importOriginal) => {
       const path = severeWorktreePath.value || (severeCurrentWorktree.enabled ? process.cwd() : join(input.workRoot, "mock-worktree"));
       mkdirSync(path, { recursive: true });
       return { path, headSha: input.expectedHeadSha };
+    }),
+    hydratePullFilePatchesFromWorktree: vi.fn(async (input: { files: Array<{ patch?: string | null }> }) => {
+      if (lcmHydrationControl.error) throw lcmHydrationControl.error;
+      return input.files.map((file) => ({
+        ...file,
+        patch: typeof file.patch === "string" ? file.patch : "@@ -1 +1 @@\n-old\n+new",
+        patchComplete: true
+      }));
     }),
     assertGitClean: vi.fn()
   };
@@ -75,9 +86,9 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
       return {
         findings,
         droppedFromSchema: [],
-        rawResponse: JSON.stringify({ findings }),
-        attempts: 1,
-        degradedRecovery: false
+        rawResponse: zcodeRawResponseOverride.value || JSON.stringify({ findings }),
+        attempts: zcodeProvenanceOverride.attempts,
+        degradedRecovery: zcodeProvenanceOverride.degradedRecovery
       };
     }),
     runZCodeRawJson: vi.fn(async ({ prompt }: { prompt: string }) => (zcodePrompts.push(prompt), severeRawResponse.value))
@@ -173,6 +184,10 @@ describe("worker context budget preflight", () => {
     zcodeBarriersByPath.clear();
     zcodeFirstFailuresByPath.clear();
     severeRawResponse.value = "";
+    zcodeRawResponseOverride.value = "";
+    zcodeProvenanceOverride.attempts = 1;
+    zcodeProvenanceOverride.degradedRecovery = false;
+    delete lcmHydrationControl.error;
     severeCurrentWorktree.enabled = false;
     severeWorktreePath.value = "";
     createdReviews.length = 0;
@@ -1600,6 +1615,166 @@ describe("worker context budget preflight", () => {
       status: "dry_run",
       configRevision: newRevision
     });
+    state.close();
+  });
+
+  it("keeps the ordinary LCM review when exact patch hydration fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-hydration-fallback-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(431, "c".repeat(40));
+    lcmHydrationControl.error = new Error("hydrated diff exceeded the command buffer");
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "ElectricSheepHQ/LCM-X",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    const evidenceDir = join(root, "evidence", localDateFolder(), "ElectricSheepHQ__LCM-X", `pr-${pull.number}`, pull.head.sha);
+    expect(JSON.parse(readFileSync(join(evidenceDir, "lcm-review-patch-hydration.json"), "utf8"))).toMatchObject({
+      status: "incomplete",
+      reason: "hydration_failed"
+    });
+    state.close();
+  });
+
+  it("omits the LCM assessment when the provider context budget is disabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-unverified-budget-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.contextBudget = { ...config.contextBudget, enabled: false };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(432, "d".repeat(40));
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "PASS",
+        scope: "Exact pull request diff",
+        unresolved_findings: [],
+        limitations: [],
+        acceptance_evidence: ["Original provider verdict"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    state.close();
+  });
+
+  it("omits the LCM assessment after a degraded provider retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-degraded-retry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(433, "e".repeat(40));
+    zcodeProvenanceOverride.attempts = 2;
+    zcodeProvenanceOverride.degradedRecovery = true;
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "PASS",
+        scope: "Exact pull request diff",
+        unresolved_findings: [],
+        limitations: [],
+        acceptance_evidence: ["Recovered provider verdict"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    state.close();
+  });
+
+  it("omits the LCM assessment when the budget identity differs from the executing provider", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-provider-budget-mismatch-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.zcode.providerId = "builtin:zai-coding-plan";
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(434, "f".repeat(40));
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "PASS",
+        scope: "Exact pull request diff",
+        unresolved_findings: [],
+        limitations: [],
+        acceptance_evidence: ["Provider verdict with mismatched budget identity"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    state.close();
+  });
+
+  it("keeps the ordinary LCM review when the assessment fails the public-output safety gate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-unsafe-assessment-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(435, "1".repeat(40));
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings: [],
+      review_assessment: {
+        verdict: "ABSTAIN",
+        scope: "Profile proof expectations",
+        unresolved_findings: [],
+        limitations: ["Assessment output is unsafe to publish"],
+        acceptance_evidence: ["Original provider verdict"]
+      }
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/lcm-x",
+      pull,
+      dryRun: false,
+      useZCode: true
+    })).toBe("reviewed");
+
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
     state.close();
   });
 

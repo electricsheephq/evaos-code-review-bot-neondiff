@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
+import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
@@ -144,6 +145,7 @@ export async function runCodexReview(input: {
   evidenceDir: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  lcmReviewAssessment?: boolean;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
@@ -151,7 +153,12 @@ export async function runCodexReview(input: {
   const result = await runCodexStructuredOutput({
     ...input,
     artifactPrefix: "codex-review",
-    schema: CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+    schema: input.lcmReviewAssessment ? {
+      ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+      required: [...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.required, "review_assessment"],
+      properties: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties,
+        review_assessment: { anyOf: [LCM_REVIEW_ASSESSMENT_SCHEMA, { type: "null" }] } }
+    } : CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
     parse: (parsed) => {
       const { findings, dropped } = parseFindings(parsed);
       if (dropped.length > 0) {

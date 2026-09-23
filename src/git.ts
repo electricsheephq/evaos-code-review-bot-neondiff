@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
 import { redactSecrets } from "./secrets.js";
+import type { PullFilePatch } from "./types.js";
 
 export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 120_000;
 const gitMirrorTails = new Map<string, Promise<void>>();
@@ -241,6 +242,90 @@ export async function assertGitClean(worktreePath: string): Promise<void> {
   }
 }
 
+/** Replace GitHub's possibly truncated patches with complete diffs from the exact prepared worktree. */
+export async function hydratePullFilePatchesFromWorktree(input: {
+  worktreePath: string;
+  baseSha: string;
+  headSha: string;
+  files: PullFilePatch[];
+  gitCommandTimeoutMs?: number;
+}): Promise<PullFilePatch[]> {
+  const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
+  if (!/^[a-f0-9]{40}$/.test(input.baseSha) || !/^[a-f0-9]{40}$/.test(input.headSha)) {
+    throw new Error("complete patch hydration requires exact lowercase commit SHAs");
+  }
+  const actualHead = (await run(["-C", input.worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
+  if (actualHead !== input.headSha) throw new Error(`complete patch hydration head mismatch: ${actualHead} !== ${input.headSha}`);
+  await run(["-C", input.worktreePath, "rev-parse", "--verify", `${input.baseSha}^{commit}`], timeoutMs);
+  const mergeBase = (await run([
+    "-C", input.worktreePath, "merge-base", input.baseSha, input.headSha
+  ], timeoutMs)).stdout.trim();
+  if (!/^[a-f0-9]{40}$/.test(mergeBase)) {
+    throw new Error("complete patch hydration could not resolve an exact merge base");
+  }
+
+  const apiFilenames = input.files.map((file) => file.filename);
+  if (apiFilenames.some((filename) => !filename || filename.includes("\0")) ||
+      new Set(apiFilenames).size !== apiFilenames.length) {
+    throw new Error("complete patch hydration received an invalid file inventory");
+  }
+  const exactFilenames = (await run([
+    "-C", input.worktreePath, "diff", "--no-ext-diff", "--find-renames", "--name-only", "-z",
+    mergeBase, input.headSha
+  ], timeoutMs)).stdout.split("\0").filter(Boolean);
+  const sortedApiFilenames = [...apiFilenames].sort();
+  const sortedExactFilenames = [...exactFilenames].sort();
+  if (sortedApiFilenames.length !== sortedExactFilenames.length ||
+      sortedApiFilenames.some((filename, index) => filename !== sortedExactFilenames[index])) {
+    throw new Error("complete patch hydration file inventory does not match the exact worktree diff");
+  }
+
+  const hydrated: PullFilePatch[] = [];
+  for (const file of input.files) {
+    if (!file.filename || file.filename.includes("\0")) throw new Error("complete patch hydration received an invalid filename");
+    if (file.previous_filename?.includes("\0")) throw new Error("complete patch hydration received an invalid previous filename");
+    if (file.status === "renamed" && !file.previous_filename) {
+      hydrated.push({ ...file, patchComplete: false });
+      continue;
+    }
+    const pathspecs = [file.previous_filename, file.filename]
+      .filter((path): path is string => Boolean(path))
+      .map((path) => `:(literal)${path}`);
+    const patch = (await run([
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--unified=3",
+      mergeBase, input.headSha, "--", ...pathspecs
+    ], timeoutMs)).stdout;
+    const numstat = (await run([
+      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z",
+      mergeBase, input.headSha, "--", ...pathspecs
+    ], timeoutMs)).stdout;
+    const containsBinaryChange = numstat.split("\0").some((record) => /^-\t-\t/.test(record));
+    const containsGitlinkChange = /^(?:index [0-9a-f]+\.\.[0-9a-f]+ 160000|(?:new file|deleted file|old|new) mode 160000)$/m.test(patch);
+    const blobSpecs = containsGitlinkChange ? [] : [
+      ...(file.status === "added" ? [] : [`${mergeBase}:${file.previous_filename ?? file.filename}`]),
+      ...(file.status === "removed" ? [] : [`${input.headSha}:${file.filename}`])
+    ];
+    let containsUnreviewableBlob = false;
+    for (const blobSpec of blobSpecs) {
+      const blob = (await runBuffer([
+        "-C", input.worktreePath, "cat-file", "blob", blobSpec
+      ], timeoutMs)).stdout;
+      const decoded = blob.toString("utf8");
+      const isLfsPointer = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\r?\n/.test(decoded);
+      if (blob.includes(0) || !Buffer.from(decoded, "utf8").equals(blob) || isLfsPointer) {
+        containsUnreviewableBlob = true;
+        break;
+      }
+    }
+    hydrated.push({
+      ...file,
+      patch,
+      patchComplete: patch.length > 0 && !containsBinaryChange && !containsGitlinkChange && !containsUnreviewableBlob
+    });
+  }
+  return hydrated;
+}
+
 async function existsAsGitMirror(path: string, timeoutMs: number): Promise<boolean> {
   const result = await probe(["--git-dir", path, "rev-parse", "--is-bare-repository"], timeoutMs);
   return result?.stdout.trim() === "true";
@@ -332,6 +417,28 @@ function run(args: string[], timeoutMs: number): Promise<{ stdout: string; stder
         failureKind,
         timeoutMs,
         detail: stderr || stdout || error.message
+      }));
+    });
+  });
+}
+
+function runBuffer(args: string[], timeoutMs: number): Promise<{ stdout: Buffer; stderr: Buffer }> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { encoding: "buffer", maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs }, (error, stdout, stderr) => {
+      if (!error) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const processError = error as typeof error & { killed?: boolean; code?: string | number };
+      const failureKind = processError.killed
+        ? "timeout"
+        : typeof processError.code === "number"
+          ? "exit_nonzero"
+          : "spawn_error";
+      reject(new GitCommandError({
+        failureKind,
+        timeoutMs,
+        detail: (stderr.length > 0 ? stderr : stdout).toString("utf8") || error.message
       }));
     });
   });
