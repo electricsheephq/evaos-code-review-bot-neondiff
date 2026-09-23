@@ -70,6 +70,8 @@ describe("current stable package release plumbing", () => {
     expect(script).toContain('versions.includes("1.0.6")');
     expect(script).toContain('$([ "$VERSION" = "$CURRENT_VERSION" ]');
     expect(script).not.toContain('$([ "$VERSION" = "1.0.6" ]');
+    expect(script).toContain("did not converge to latest=$PREDECESSOR_VERSION");
+    expect(script).not.toContain("did not converge to latest=1.0.5");
     expect(script).toContain('rollback-current.json');
     expect(script).toContain('rollback-predecessor.json');
     expect(script).not.toContain('"rollback-$VERSION.json"');

@@ -204,7 +204,7 @@ jobs:
             fi
             sleep 5
           done
-          echo "::error::Bounded predecessor rollback did not converge to latest=1.0.5"
+          echo "::error::Bounded predecessor rollback did not converge to latest=$PREDECESSOR_VERSION"
           exit 1
 
   publish:
