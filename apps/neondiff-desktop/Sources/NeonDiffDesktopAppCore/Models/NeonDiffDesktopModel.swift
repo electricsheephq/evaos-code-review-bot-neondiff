@@ -756,6 +756,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var accountLinkTask: Task<Void, Never>?
     private var mostRecentAccountLinkTask: Task<Void, Never>?
     private var accountLinkGeneration: UInt64 = 0
+    private var byoGitHubVerificationGeneration: UInt64 = 0
+    private var byoGitHubVerificationTask: Task<Void, Never>?
     private var attemptedAutomaticAccountWorkspaceRefresh = false
     private var pendingManagedGitHubAuthorization: PendingManagedGitHubAuthorization?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
@@ -1903,6 +1905,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         pendingBYOGitHubAppId = ""
         pendingBYOGitHubAppPrivateKey = ""
         byoGitHubCredentialRevision &+= 1
+        byoGitHubVerificationGeneration &+= 1
+        byoGitHubVerificationTask?.cancel()
         isBYOGitHubVerificationInProgress = false
         isScopedReviewInProgress = false
         pendingReviewPullNumber = ""
@@ -3224,6 +3228,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         invalidateScopedReviewApproval()
+        invalidateBYOGitHubVerificationContext()
         invalidateActivationForRepositoryChange(fullReset: true)
         selectedBYOReviewRepository = repository.name
         dependencies.preferences.set(
@@ -3764,6 +3769,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubCredentialStatus = lastError ?? "Account check required"
             return
         }
+        let verificationWasInProgress = isBYOGitHubVerificationInProgress
         byoGitHubCredentialRevision &+= 1
         invalidateBYOGitHubVerificationContext()
         guard byoGitHubCredentialOnboardingAvailable else {
@@ -3787,7 +3793,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             pendingBYOGitHubAppId = appId
             byoGitHubPrivateKeyStored = true
             lastError = nil
-            byoGitHubCredentialStatus = "App ID stored; private key is in Keychain. Worker verification has not run yet."
+            byoGitHubCredentialStatus = verificationWasInProgress
+                ? "Configuration changed. Verify App access again."
+                : "App ID stored; private key is in Keychain. Worker verification has not run yet."
             logText = "Customer-owned GitHub App credentials stored. The private key was not written to config or command arguments. Worker verification remains pending."
         } catch {
             byoGitHubPrivateKeyStored = dependencies.secretStore.containsSecret(
@@ -3863,6 +3871,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubCredentialStatus = lastError ?? "App ID missing"
             return
         }
+        byoGitHubVerificationGeneration &+= 1
+        let verificationGeneration = byoGitHubVerificationGeneration
 
         let privateKey: String
         do {
@@ -3899,12 +3909,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let verificationContext = BYOGitHubVerificationContext(
             appId: appId,
             source: source,
+            accountID: selectedAccountWorkspace?.id,
+            botID: selectedBotInstallation?.id,
+            installationID: selectedBotInstallation?.githubInstallationID,
+            installationAccount: selectedBotInstallation?.githubAccountLogin,
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
             repositories: repositoryScope.map { [$0] }
                 ?? repos.filter(\.enabled).map(\.name).sorted(),
-            workspaceGeneration: workspaceContextGeneration
+            workspaceGeneration: workspaceContextGeneration,
+            verificationGeneration: verificationGeneration
         )
         var standardInput = Data(privateKey.utf8)
         let executablePath = cliPath
@@ -3917,7 +3932,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             ? "Verifying the configured repositories against the customer-owned GitHub App installation…"
             : "Verifying the selected Review Target against the customer-owned GitHub App installation…"
 
-        Task.detached {
+        byoGitHubVerificationTask = Task.detached {
             defer {
                 standardInput.resetBytes(in: 0..<standardInput.count)
             }
@@ -3933,7 +3948,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    guard self.isCurrentWorkspace(verificationContext.workspaceGeneration) else { return }
+                    guard self.isCurrentWorkspace(verificationContext.workspaceGeneration),
+                          self.byoGitHubVerificationGeneration == verificationContext.verificationGeneration
+                    else { return }
                     self.isBYOGitHubVerificationInProgress = false
                     self.byoGitHubCredentialsVerified = false
                     self.lastError = "Customer-owned GitHub App verification failed safely."
@@ -4000,6 +4017,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubCredentialStatus = lastError ?? "Review target required"
             return
         }
+        byoGitHubVerificationGeneration &+= 1
+        let verificationGeneration = byoGitHubVerificationGeneration
         let arguments = [
             "doctor", "github",
             "--config", configPath,
@@ -4009,11 +4028,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let verificationContext = BYOGitHubVerificationContext(
             appId: String(bot.appID),
             source: .existingLocalAgent,
+            accountID: selectedAccountWorkspace?.id,
+            botID: bot.id,
+            installationID: bot.githubInstallationID,
+            installationAccount: bot.githubAccountLogin,
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
             repositories: [targetRepository],
-            workspaceGeneration: workspaceContextGeneration
+            workspaceGeneration: workspaceContextGeneration,
+            verificationGeneration: verificationGeneration
         )
         let executablePath = cliPath
         let cli = dependencies.cli
@@ -4025,7 +4049,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         byoGitHubCredentialStatus =
             "Verifying current App installation access through the exact existing local agent…"
 
-        Task.detached {
+        byoGitHubVerificationTask = Task.detached {
             do {
                 let result = try await cli.run(
                     executablePath: executablePath,
@@ -4047,7 +4071,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 await MainActor.run {
                     guard self.isCurrentWorkspace(
                         verificationContext.workspaceGeneration
-                    ) else { return }
+                    ), self.byoGitHubVerificationGeneration == verificationContext.verificationGeneration
+                    else { return }
                     self.isBYOGitHubVerificationInProgress = false
                     self.byoGitHubCredentialsVerified = false
                     self.lastError =
@@ -4065,7 +4090,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         _ result: CLIRunResult,
         expectedContext: BYOGitHubVerificationContext
     ) {
-        guard isCurrentWorkspace(expectedContext.workspaceGeneration) else { return }
+        guard isCurrentWorkspace(expectedContext.workspaceGeneration),
+              byoGitHubVerificationGeneration == expectedContext.verificationGeneration
+        else { return }
         isBYOGitHubVerificationInProgress = false
         let currentContext: BYOGitHubVerificationContext?
         switch expectedContext.source {
@@ -4074,11 +4101,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 BYOGitHubVerificationContext(
                     appId: appId,
                     source: .keychainStdin,
+                    accountID: selectedAccountWorkspace?.id,
+                    botID: selectedBotInstallation?.id,
+                    installationID: selectedBotInstallation?.githubInstallationID,
+                    installationAccount: selectedBotInstallation?.githubAccountLogin,
                     credentialRevision: byoGitHubCredentialRevision,
                     cliPath: cliPath,
                     configPath: configPath,
                     repositories: repos.filter(\.enabled).map(\.name).sorted(),
-                    workspaceGeneration: workspaceContextGeneration
+                    workspaceGeneration: workspaceContextGeneration,
+                    verificationGeneration: byoGitHubVerificationGeneration
                 )
             }
         case .keychainStdinExistingBot:
@@ -4099,11 +4131,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         return BYOGitHubVerificationContext(
                             appId: storedAppID,
                             source: .keychainStdinExistingBot,
+                            accountID: selectedAccountWorkspace?.id,
+                            botID: bot.id,
+                            installationID: bot.githubInstallationID,
+                            installationAccount: bot.githubAccountLogin,
                             credentialRevision: byoGitHubCredentialRevision,
                             cliPath: cliPath,
                             configPath: configPath,
                             repositories: [targetRepository],
-                            workspaceGeneration: workspaceContextGeneration
+                            workspaceGeneration: workspaceContextGeneration,
+                            verificationGeneration: byoGitHubVerificationGeneration
                         )
                     }
                 }
@@ -4115,11 +4152,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         BYOGitHubVerificationContext(
                             appId: String(bot.appID),
                             source: .existingLocalAgent,
+                            accountID: selectedAccountWorkspace?.id,
+                            botID: bot.id,
+                            installationID: bot.githubInstallationID,
+                            installationAccount: bot.githubAccountLogin,
                             credentialRevision: byoGitHubCredentialRevision,
                             cliPath: cliPath,
                             configPath: configPath,
                             repositories: [targetRepository],
-                            workspaceGeneration: workspaceContextGeneration
+                            workspaceGeneration: workspaceContextGeneration,
+                            verificationGeneration: byoGitHubVerificationGeneration
                         )
                     }
                 }
@@ -4182,6 +4224,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
               reportedRepositories == expectedRepositories,
               report.ok,
               report.command == "doctor github",
+              report.appCredentials.appId == expectedContext.appId,
               report.appCredentials.source == expectedCredentialSource,
               report.appCredentials.appIdConfigured,
               report.appCredentials.privateKeyConfigured,
@@ -4192,8 +4235,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
                   check.skippedByPolicy == nil
                       && check.ok
                       && check.installationIdPresent
+                      && (check.installationId ?? 0) > 0
+                      && !(check.installationAccount?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                       && check.appCanReadMetadata
                       && check.appCanReadPullRequests
+                      && (expectedContext.installationID == nil
+                          || Int64(check.installationId ?? 0) == expectedContext.installationID)
+                      && (expectedContext.installationAccount == nil
+                          || check.installationAccount?.caseInsensitiveCompare(expectedContext.installationAccount!) == .orderedSame)
               })
         else {
             byoGitHubCredentialsVerified = false
@@ -4499,9 +4548,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func invalidateBYOGitHubVerificationContext() {
         invalidateScopedReviewApproval()
+        let verificationWasInProgress = isBYOGitHubVerificationInProgress
+        byoGitHubVerificationGeneration &+= 1
+        byoGitHubVerificationTask?.cancel()
+        isBYOGitHubVerificationInProgress = false
+        if verificationWasInProgress && activationState == .activationPending {
+            applyActivationEvent(.activationServiceError)
+            onboardingFlow.licenseActivation = .servicePending
+        }
         guard byoGitHubCredentialOnboardingAvailable else { return }
         byoGitHubCredentialsVerified = false
-        guard !isBYOGitHubVerificationInProgress else { return }
         if byoGitHubCredentialsStored {
             byoGitHubCredentialStatus = "Configuration changed. Verify App access again."
         }
@@ -6845,6 +6901,7 @@ private struct BYOGitHubDoctorReport: Decodable {
     let github: GitHub
 
     struct Credentials: Decodable {
+        let appId: String?
         let appIdConfigured: Bool
         let privateKeyConfigured: Bool
         let source: String
@@ -6862,6 +6919,8 @@ private struct BYOGitHubDoctorReport: Decodable {
         let visibilityResult: String?
         let skippedByPolicy: String?
         let installationIdPresent: Bool
+        let installationId: Int?
+        let installationAccount: String?
         let appCanReadMetadata: Bool
         let appCanReadPullRequests: Bool
 
@@ -6871,6 +6930,8 @@ private struct BYOGitHubDoctorReport: Decodable {
             case visibilityResult = "visibility_result"
             case skippedByPolicy
             case installationIdPresent = "installation_id_present"
+            case installationId = "installation_id"
+            case installationAccount = "installation_account"
             case appCanReadMetadata = "app_can_read_metadata"
             case appCanReadPullRequests = "app_can_read_pull_requests"
         }
@@ -6886,11 +6947,16 @@ private struct BYOGitHubVerificationContext: Equatable, Sendable {
 
     let appId: String
     let source: CredentialSource
+    let accountID: String?
+    let botID: String?
+    let installationID: Int64?
+    let installationAccount: String?
     let credentialRevision: UInt64
     let cliPath: String
     let configPath: String
     let repositories: [String]
     let workspaceGeneration: UInt64
+    let verificationGeneration: UInt64
 }
 
 private struct ScopedReviewApproval: Equatable, Sendable {
