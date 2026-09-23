@@ -44,6 +44,7 @@ function baseArgs(currentPath: string, predecessorPath: string): string[] {
     "--predecessor-rollback", "true",
     "--provenance-recovery", "false",
     "--latest-version", "1.0.6",
+    "--current-version", "1.0.6",
     "--target-version", "1.0.5",
     "--expected-predecessor", "1.0.5",
     "--current-metadata", currentPath,
@@ -67,6 +68,35 @@ describe("predecessor rollback release policy", () => {
         action: "predecessor_dist_tag_rollback",
         bounded: true,
         command: 'npm dist-tag add "neondiff@1.0.5" latest'
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the 1.0.5 to 1.0.4 rollback until 1.0.6 exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-rollback-prerelease-transition-"));
+    try {
+      const currentPath = join(root, "current.json");
+      const predecessorPath = join(root, "predecessor.json");
+      writeFileSync(currentPath, JSON.stringify(metadata("1.0.5", "a".repeat(40))));
+      writeFileSync(predecessorPath, JSON.stringify(metadata("1.0.4", "b".repeat(40))));
+      const args = baseArgs(currentPath, predecessorPath);
+      for (const [name, value] of [
+        ["--latest-version", "1.0.5"],
+        ["--current-version", "1.0.5"],
+        ["--target-version", "1.0.4"],
+        ["--expected-predecessor", "1.0.4"],
+        ["--current-tag-commit", "a".repeat(40)],
+        ["--predecessor-tag-commit", "b".repeat(40)]
+      ]) args.splice(args.indexOf(name) + 1, 1, value);
+      const result = run(root, ...args);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        currentVersion: "1.0.5",
+        targetVersion: "1.0.4",
+        mutationRequired: true,
+        command: 'npm dist-tag add "neondiff@1.0.4" latest'
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

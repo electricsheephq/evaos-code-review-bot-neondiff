@@ -65,7 +65,9 @@ describe("current stable package release plumbing", () => {
     const script = rollback?.steps?.map((step) => step.run ?? "").join("\n") ?? "";
     expect(rollback?.if).toContain("predecessor_rollback");
     expect(script).toContain("verify-predecessor-rollback");
-    expect(script).toContain('npm dist-tag add "neondiff@1.0.5" latest');
+    expect(script).toContain('npm dist-tag add "neondiff@$PREDECESSOR_VERSION" latest');
+    expect(script).toContain("npm view neondiff versions --json --prefer-online");
+    expect(script).toContain('versions.includes("1.0.6")');
     expect(script).toContain('rollback-current.json');
     expect(script).toContain('rollback-predecessor.json');
     expect(script).not.toContain('"rollback-$VERSION.json"');
@@ -73,6 +75,8 @@ describe("current stable package release plumbing", () => {
     expect(script).toContain("confirmation-only");
     expect(script).toContain("mutation_required");
     expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.mutation_required");
+    expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.current_version");
+    expect(read(".github/workflows/publish-npm.yml")).toContain("steps.rollback_plan.outputs.predecessor_version");
     expect(script).toContain("bounded");
     expect(read(".github/workflows/publish-npm.yml")).toContain('CANDIDATE_LEDGER="docs/release-candidates/$RELEASE_TAG.json"');
     expect(stepNames.indexOf("Install exact script-free rollback dependencies")).toBeGreaterThan(stepNames.indexOf("Setup rollback Node.js"));

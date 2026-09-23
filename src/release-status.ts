@@ -1045,7 +1045,7 @@ function readNpmPublicationStatus(input: {
   const immutablePredecessor = artifactPredecessor ?? publishedPredecessor;
   if (!isSemver(immutablePredecessor)) {
     identityFailures.push("candidate immutable predecessor must be valid semver");
-  } else if (immutablePredecessor === packageVersion || !isVersionAtLeast(expectedVersion, `v${immutablePredecessor}`)) {
+  } else if (compareSemverPrecedence(packageVersion ?? "", immutablePredecessor) !== 1) {
     identityFailures.push(`candidate immutable predecessor must be older than ${packageVersion}`);
   }
   const pending = registryState === "pending_publication" && state === NPM_PUBLICATION_PENDING_STATE;
@@ -1405,6 +1405,47 @@ function isSemver(version: string): boolean {
   const coreParts = core.split(".");
   if (coreParts.length !== 3 || !coreParts.every(isSemverNumericIdentifier)) return false;
   return prerelease === undefined || isDotSeparatedPrerelease(prerelease);
+}
+
+function compareSemverPrecedence(left: string, right: string): -1 | 0 | 1 | undefined {
+  const parse = (value: string): { core: string[]; prerelease?: string[] } | undefined => {
+    if (!isSemver(value)) return undefined;
+    const buildIndex = value.indexOf("+");
+    const withoutBuild = buildIndex === -1 ? value : value.slice(0, buildIndex);
+    const prereleaseIndex = withoutBuild.indexOf("-");
+    const core = (prereleaseIndex === -1 ? withoutBuild : withoutBuild.slice(0, prereleaseIndex)).split(".");
+    const prerelease = prereleaseIndex === -1 ? undefined : withoutBuild.slice(prereleaseIndex + 1).split(".");
+    return { core, prerelease };
+  };
+  const compareNumeric = (leftValue: string, rightValue: string): -1 | 0 | 1 => {
+    if (leftValue.length !== rightValue.length) return leftValue.length < rightValue.length ? -1 : 1;
+    if (leftValue === rightValue) return 0;
+    return leftValue < rightValue ? -1 : 1;
+  };
+  const leftVersion = parse(left);
+  const rightVersion = parse(right);
+  if (!leftVersion || !rightVersion) return undefined;
+  for (let index = 0; index < 3; index += 1) {
+    const order = compareNumeric(leftVersion.core[index], rightVersion.core[index]);
+    if (order !== 0) return order;
+  }
+  if (!leftVersion.prerelease && !rightVersion.prerelease) return 0;
+  if (!leftVersion.prerelease) return 1;
+  if (!rightVersion.prerelease) return -1;
+  const length = Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftIdentifier = leftVersion.prerelease[index];
+    const rightIdentifier = rightVersion.prerelease[index];
+    if (leftIdentifier === undefined) return -1;
+    if (rightIdentifier === undefined) return 1;
+    if (leftIdentifier === rightIdentifier) continue;
+    const leftNumeric = isAllAsciiDigits(leftIdentifier);
+    const rightNumeric = isAllAsciiDigits(rightIdentifier);
+    if (leftNumeric && rightNumeric) return compareNumeric(leftIdentifier, rightIdentifier);
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftIdentifier < rightIdentifier ? -1 : 1;
+  }
+  return 0;
 }
 
 function isDotSeparatedPrerelease(value: string): boolean {

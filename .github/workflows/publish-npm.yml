@@ -100,19 +100,33 @@ jobs:
             exit 1
           fi
           npm view neondiff dist-tags --json --prefer-online > rollback-channel.json
+          npm view neondiff versions --json --prefer-online > rollback-versions.json
           LATEST_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags.latest ?? "")' rollback-channel.json)"
           QUARANTINE_VERSION="$(node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(tags["release-candidate"] ?? "")' rollback-channel.json)"
-          { [ "$LATEST_VERSION" = "1.0.6" ] || [ "$LATEST_VERSION" = "1.0.5" ]; } || {
-            echo "::error::Rollback requires npm latest to be 1.0.6 or the already-converged predecessor 1.0.5"
+          ROLLBACK_PAIR_JSON="$(node -e '
+            const versions = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+            if (!Array.isArray(versions) || !versions.every((value) => typeof value === "string")) process.exit(1);
+            const currentVersion = versions.includes("1.0.6") ? "1.0.6" : "1.0.5";
+            const predecessorVersion = currentVersion === "1.0.6" ? "1.0.5" : "1.0.4";
+            if (!versions.includes(currentVersion) || !versions.includes(predecessorVersion)) process.exit(1);
+            process.stdout.write(JSON.stringify({ currentVersion, predecessorVersion }));
+          ' rollback-versions.json)" || {
+            echo "::error::Registry versions do not provide an approved immutable rollback pair"
+            exit 1
+          }
+          CURRENT_VERSION="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).currentVersion)' "$ROLLBACK_PAIR_JSON")"
+          PREDECESSOR_VERSION="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).predecessorVersion)' "$ROLLBACK_PAIR_JSON")"
+          { [ "$LATEST_VERSION" = "$CURRENT_VERSION" ] || [ "$LATEST_VERSION" = "$PREDECESSOR_VERSION" ]; } || {
+            echo "::error::Rollback requires npm latest to be the selected current version or its already-converged predecessor"
             exit 1
           }
           CONFIRMATION_ONLY=false
-          if [ "$LATEST_VERSION" = "1.0.5" ]; then CONFIRMATION_ONLY=true; fi
-          npm view neondiff@1.0.6 name version dist --json --prefer-online > rollback-current.json
-          npm view neondiff@1.0.5 name version dist --json --prefer-online > rollback-predecessor.json
-          CURRENT_TAG_COMMIT="$(git rev-list -n 1 v1.0.6)"
-          PREDECESSOR_TAG_COMMIT="$(git rev-list -n 1 v1.0.5)"
-          for VERSION in 1.0.6 1.0.5; do
+          if [ "$LATEST_VERSION" = "$PREDECESSOR_VERSION" ]; then CONFIRMATION_ONLY=true; fi
+          npm view "neondiff@$CURRENT_VERSION" name version dist --json --prefer-online > rollback-current.json
+          npm view "neondiff@$PREDECESSOR_VERSION" name version dist --json --prefer-online > rollback-predecessor.json
+          CURRENT_TAG_COMMIT="$(git rev-list -n 1 "v$CURRENT_VERSION")"
+          PREDECESSOR_TAG_COMMIT="$(git rev-list -n 1 "v$PREDECESSOR_VERSION")"
+          for VERSION in "$CURRENT_VERSION" "$PREDECESSOR_VERSION"; do
             npm view "neondiff@$VERSION" dist.attestations.url --json --prefer-online > "rollback-$VERSION-attestation-url.json"
             ATTESTATION_URL="$(node -e 'const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(typeof value === "string" ? value : "")' "rollback-$VERSION-attestation-url.json")"
             test "$ATTESTATION_URL" = "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@$VERSION" || {
@@ -121,7 +135,7 @@ jobs:
             }
             curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 3 --retry-all-errors --retry-max-time 120 "$ATTESTATION_URL" > "rollback-$VERSION-attestations.json"
             METADATA_PATH="rollback-current.json"
-            if [ "$VERSION" = "1.0.5" ]; then METADATA_PATH="rollback-predecessor.json"; fi
+            if [ "$VERSION" = "$PREDECESSOR_VERSION" ]; then METADATA_PATH="rollback-predecessor.json"; fi
             INTEGRITY="$(node -e 'const value = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(value.dist?.integrity ?? "")' "$METADATA_PATH")"
             node scripts/verify-npm-provenance.mjs \
               --attestations "rollback-$VERSION-attestations.json" \
@@ -136,13 +150,13 @@ jobs:
           done
           node --input-type=module -e '
             import { readFileSync, writeFileSync } from "node:fs";
-            for (const version of ["1.0.6", "1.0.5"]) {
-              const metadataPath = `rollback-${version === "1.0.6" ? "current" : "predecessor"}.json`;
+            for (const [role, version] of [["current", process.argv[1]], ["predecessor", process.argv[2]]]) {
+              const metadataPath = `rollback-${role}.json`;
               const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
               const provenance = JSON.parse(readFileSync(`rollback-${version}-provenance.json`, "utf8"));
-              writeFileSync(`rollback-${version}-verified.json`, `${JSON.stringify({ name: metadata.name, version: metadata.version, dist: metadata.dist, provenance: { ...provenance, verified: true, shasum: metadata.dist?.shasum } })}\n`);
+              writeFileSync(`rollback-${role}-verified.json`, `${JSON.stringify({ name: metadata.name, version: metadata.version, dist: metadata.dist, provenance: { ...provenance, verified: true, shasum: metadata.dist?.shasum } })}\n`);
             }
-          '
+          ' "$CURRENT_VERSION" "$PREDECESSOR_VERSION"
           ROLLBACK_POLICY_JSON="$(node scripts/npm-release-policy.mjs verify-predecessor-rollback \
             --event-name workflow_dispatch \
             --github-ref "$GITHUB_REF" \
@@ -150,37 +164,42 @@ jobs:
             --confirmation-only "$CONFIRMATION_ONLY" \
             --latest-version "$LATEST_VERSION" \
             --quarantine-version "$QUARANTINE_VERSION" \
-            --target-version 1.0.5 \
-            --expected-predecessor 1.0.5 \
-            --current-metadata rollback-1.0.6-verified.json \
-            --predecessor-metadata rollback-1.0.5-verified.json \
+            --current-version "$CURRENT_VERSION" \
+            --target-version "$PREDECESSOR_VERSION" \
+            --expected-predecessor "$PREDECESSOR_VERSION" \
+            --current-metadata rollback-current-verified.json \
+            --predecessor-metadata rollback-predecessor-verified.json \
             --current-tag-commit "$CURRENT_TAG_COMMIT" \
             --predecessor-tag-commit "$PREDECESSOR_TAG_COMMIT")"
           printf '%s\n' "$ROLLBACK_POLICY_JSON"
           MUTATION_REQUIRED="$(node -e 'const value = JSON.parse(process.argv[1]); process.stdout.write(value.mutationRequired === true ? "true" : "false")' "$ROLLBACK_POLICY_JSON")"
           echo "mutation_required=$MUTATION_REQUIRED" >> "$GITHUB_OUTPUT"
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "predecessor_version=$PREDECESSOR_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Guarded predecessor dist-tag rollback
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           MUTATION_REQUIRED: ${{ steps.rollback_plan.outputs.mutation_required }}
+          CURRENT_VERSION: ${{ steps.rollback_plan.outputs.current_version }}
+          PREDECESSOR_VERSION: ${{ steps.rollback_plan.outputs.predecessor_version }}
         run: |
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA" || { echo "::error::Protected main changed before rollback confirmation"; exit 1; }
           npm view neondiff dist-tags --json --prefer-online > rollback-pre-mutation-channel.json
           if [ "$MUTATION_REQUIRED" = "false" ]; then
-            node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== "1.0.5" || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json || { echo "::error::Rollback confirmation state changed"; exit 1; }
-            echo "previous predecessor rollback confirmed at latest=1.0.5"
+            node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== process.argv[2] || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json "$PREDECESSOR_VERSION" || { echo "::error::Rollback confirmation state changed"; exit 1; }
+            echo "previous predecessor rollback confirmed at latest=$PREDECESSOR_VERSION"
             exit 0
           fi
           test "$MUTATION_REQUIRED" = "true" || { echo "::error::Rollback mutation plan is invalid"; exit 1; }
-          node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== "1.0.6" || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json || { echo "::error::Rollback precondition changed immediately before mutation"; exit 1; }
+          node -e 'const tags = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (tags.latest !== process.argv[2] || (tags["release-candidate"] ?? "") !== "") process.exit(1)' rollback-pre-mutation-channel.json "$CURRENT_VERSION" || { echo "::error::Rollback precondition changed immediately before mutation"; exit 1; }
           # The policy and precondition checks above authorize this one bounded mutation only.
-          npm dist-tag add "neondiff@1.0.5" latest
+          npm dist-tag add "neondiff@$PREDECESSOR_VERSION" latest
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
             OBSERVED_LATEST="$(npm view neondiff dist-tags.latest --json --prefer-online 2>/dev/null || true)"
-            if [ "$OBSERVED_LATEST" = '"1.0.5"' ] || [ "$OBSERVED_LATEST" = "1.0.5" ]; then
-              echo "bounded predecessor rollback converged at latest=1.0.5"
+            if [ "$OBSERVED_LATEST" = "\"$PREDECESSOR_VERSION\"" ] || [ "$OBSERVED_LATEST" = "$PREDECESSOR_VERSION" ]; then
+              echo "bounded predecessor rollback converged at latest=$PREDECESSOR_VERSION"
               exit 0
             fi
             sleep 5

@@ -338,12 +338,35 @@ describe("beta release status", () => {
     candidateFixture.registry.predecessor = "9.9.9";
     writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("immutable predecessor must be older than 1.0.6");
+    candidateFixture.publishedVersionAtCandidateCut = "v1.0.6+build.1";
+    candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.6+build.1";
+    candidateFixture.registry.latest = "1.0.6+build.1";
+    candidateFixture.registry.predecessor = "1.0.6+build.1";
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("immutable predecessor must be older than 1.0.6");
     candidateFixture.publishedVersionAtCandidateCut = "v1.0.5";
     candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.4";
     candidateFixture.registry.latest = "1.0.5";
     candidateFixture.registry.predecessor = "1.0.5";
     writeFileSync(join(root, "docs", "release-candidates", "v1.0.6.json"), JSON.stringify(candidateFixture));
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6" }).npmPublication.detail).toContain("previousReleasedPackageVersion must match publishedVersionAtCandidateCut");
+
+    candidateFixture.version = "v1.0.6-beta.1";
+    candidateFixture.packageVersion = "1.0.6-beta.1";
+    candidateFixture.publishedVersionAtCandidateCut = "v1.0.6-beta.2";
+    candidateFixture.packageArtifact.version = "1.0.6-beta.1";
+    candidateFixture.packageArtifact.previousReleasedPackageVersion = "1.0.6-beta.2";
+    candidateFixture.registry.latest = "1.0.6-beta.2";
+    candidateFixture.registry.predecessor = "1.0.6-beta.2";
+    writeFileSync(join(root, "docs", "release-candidates", "v1.0.6-beta.1.json"), JSON.stringify(candidateFixture));
+    writeFileSync(join(root, "docs", "releases", "v1.0.6-beta.1.md"), "# v1.0.6-beta.1\n");
+    writeChangelogHead(root, "1.0.6-beta.1");
+    manifestFixture.version = "v1.0.6-beta.1";
+    manifestFixture.packageArtifact = { ...npmArtifact, version: "1.0.6-beta.1", previousReleasedPackageVersion: "1.0.6-beta.2" };
+    manifestFixture.docs = { ...manifestFixture.docs, version: "v1.0.6-beta.1", releaseNotesPath: "docs/releases/v1.0.6-beta.1.md" };
+    for (const channel of Object.values(manifestFixture.updateChannels) as Array<Record<string, unknown>>) channel.version = "v1.0.6-beta.1";
+    writeFileSync(manifestPath, JSON.stringify(manifestFixture));
+    expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6-beta.1" }).npmPublication.detail).toContain("immutable predecessor must be older than 1.0.6-beta.1");
   });
 
   it("uses the v1.0.5 candidate ledger for first-publication readiness", () => {
