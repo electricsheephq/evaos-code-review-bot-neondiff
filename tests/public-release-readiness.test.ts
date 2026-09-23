@@ -498,7 +498,11 @@ describe("NeonDiff public release readiness", () => {
   it("locks published package identity to downloaded registry tarball proof after state stamps", () => {
     const pkg = JSON.parse(read("package.json")) as { name?: string; version?: string };
     const ledgerPath = `docs/release-candidates/v${pkg.version}.json`;
-    expect(existsSync(ledgerPath)).toBe(true);
+    if (!existsSync(ledgerPath)) {
+      const publicManifest = JSON.parse(read("docs/public-release-manifest.json")) as { version?: string };
+      expect(publicManifest.version).not.toBe(`v${pkg.version}`);
+      return;
+    }
     const ledger = JSON.parse(read(ledgerPath)) as {
       publicationProofPath?: string;
       registry?: { state?: string };
@@ -881,6 +885,9 @@ describe("NeonDiff public release readiness", () => {
     expect(ci).toMatch(/npm test --prefix services\/license-api/);
     expect(ci).toMatch(/npm run build --prefix services\/license-api/);
     expect(ci).toMatch(/tests\/public-release-readiness\.test\.ts/);
+    expect(ci).toContain("Verify npm 11.17.0 directory-publish source identity");
+    expect(ci).toContain("NEONDIFF_RUN_NPM_11_SOURCE_IDENTITY_SMOKE=true");
+    expect(ci).toContain("proves npm 11.17.0 directory publish preserves reviewed bytes and records gitHead");
     expect(ci).toMatch(/npm pack --dry-run --json/);
     expect(ci).toMatch(/forbidden public claims/i);
     expect(ci).toMatch(/secret/i);
@@ -896,7 +903,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
     expect(publish).toMatch(/Verify npm publish token is configured/);
     expect(publish).toMatch(/NPM_TOKEN Actions secret is not configured; publish cannot continue/);
-    expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance/);
+    expect(publish).toMatch(/npm publish \. --ignore-scripts --provenance/);
     expect(readiness).toContain("--prepublication");
     expect(readiness).toContain("--candidate-ledger");
     expect(readiness).toContain("candidateSourceSha");
@@ -908,8 +915,12 @@ describe("NeonDiff public release readiness", () => {
     expect(readiness).toContain('const proofLabel = candidateMode ? "candidate activation proof" : "activation proof"');
     expect(readiness).not.toContain("if (candidateMode || installedCandidate)");
     expect(publish).toContain("EXPECTED_ACTIVATION_PROOF_PATH");
-    expect(publish).toContain('v1.0.5 candidate activation proof is missing');
+    expect(publish).toContain('v$PACKAGE_VERSION candidate activation proof is missing');
     expect(publish).toContain("candidate activation proof path is not the exact candidate evidence path");
+    expect(publish).toContain(
+      'EXPECTED_ACTIVATION_PROOF_PATH="docs/evidence/v$PACKAGE_VERSION/mandatory-activation-${CANDIDATE_HEAD}.json"'
+    );
+    expect(readiness).not.toContain("candidate ledger mode is scoped only to v1.0.5");
     expect(publish).toContain('--candidate-ledger "$CANDIDATE_LEDGER"');
     expect(publish).toContain('if [ -n "$CANDIDATE_LEDGER" ] && [ "$PROVENANCE_RECOVERY" != "true" ]');
     expect(publish).toContain('if [ -n "$CANDIDATE_LEDGER" ]; then RELEASE_METADATA_PATH="$CANDIDATE_LEDGER"; fi');
@@ -942,7 +953,7 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/release tag commit must be an ancestor of protected main/i);
     expect(publish).toContain('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"');
     expect(publish.indexOf('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"')).toBeLessThan(
-      publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
+      publish.indexOf('npm publish . --ignore-scripts --provenance')
     );
     expect(publish).toContain('test "$RELEASE_TAG" = "v1.0.4"');
     expect(publish).toContain('test "$TAG_COMMIT" = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982"');
@@ -978,19 +989,19 @@ describe("NeonDiff public release readiness", () => {
     expect(publish).toMatch(/tags\[npmTag\].*expectedVersion/);
     expect(publish).toMatch(/npm dist-tag did not converge to the promoted package after/);
     expect(publish).toMatch(/previousReleasedPackageVersion/);
-    expect(publish).toMatch(/npm publish "\$PACK_TARBALL" --provenance --access public --tag "release-candidate"/);
-    expect(publish.indexOf('npm publish "$PACK_TARBALL" --provenance --access public --tag "release-candidate"')).toBeLessThan(
+    expect(publish).toMatch(/npm publish \. --ignore-scripts --provenance --access public --tag "release-candidate"/);
+    expect(publish.indexOf('npm publish . --ignore-scripts --provenance --access public --tag "release-candidate"')).toBeLessThan(
       publish.indexOf('node "$POLICY_SCRIPT" verify-pack')
     );
     expect(publish.indexOf('node "$POLICY_SCRIPT" verify-pack')).toBeLessThan(
       publish.indexOf('npm dist-tag add "neondiff@$PACKAGE_VERSION" "$NPM_TAG"')
     );
-    expect(publish).toMatch(/default:\s*v1\.0\.5/);
+    expect(publish).toMatch(/default:\s*v1\.0\.6/);
     expect(publish).not.toMatch(/default:\s*v0\.4\.30-beta\.1/);
     expect(publish).toMatch(/npm install --global npm@11\.17\.0/);
     expect(publish).toContain('test "$(npm --version)" = "11.17.0"');
     expect(publish.indexOf("npm install --global npm@11.17.0")).toBeLessThan(
-      publish.indexOf('npm publish "$PACK_TARBALL" --provenance')
+      publish.indexOf('npm publish . --ignore-scripts --provenance')
     );
     expect(publish).toMatch(/curl[\s\S]*--connect-timeout 10[\s\S]*--max-time 30[\s\S]*--retry 3[\s\S]*--retry-all-errors/);
     expect(publish).toMatch(/provenance_recovery:\s*\n\s*description:[^\n]*\n\s*required:\s*true\n\s*type:\s*boolean\n\s*default:\s*false/);

@@ -509,16 +509,16 @@ jobs:
               if (typeof proofPath !== "string") process.exit(1);
               process.stdout.write(proofPath);
             ' "$CANDIDATE_LEDGER")" || {
-              echo "::error::v1.0.5 candidate activation proof path is missing"
+              echo "::error::v$PACKAGE_VERSION candidate activation proof path is missing"
               exit 1
             }
-            EXPECTED_ACTIVATION_PROOF_PATH="docs/evidence/v1.0.5/mandatory-activation-${CANDIDATE_HEAD}.json"
+            EXPECTED_ACTIVATION_PROOF_PATH="docs/evidence/v$PACKAGE_VERSION/mandatory-activation-${CANDIDATE_HEAD}.json"
             test "$ACTIVATION_PROOF_PATH" = "$EXPECTED_ACTIVATION_PROOF_PATH" || {
-              echo "::error::v1.0.5 candidate activation proof path is not the exact candidate evidence path"
+              echo "::error::v$PACKAGE_VERSION candidate activation proof path is not the exact candidate evidence path"
               exit 1
             }
             test -f "$ACTIVATION_PROOF_PATH" || {
-              echo "::error::v1.0.5 candidate activation proof is missing"
+              echo "::error::v$PACKAGE_VERSION candidate activation proof is missing"
               exit 1
             }
           else

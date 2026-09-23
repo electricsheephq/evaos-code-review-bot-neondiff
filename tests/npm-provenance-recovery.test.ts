@@ -1,5 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -376,6 +378,102 @@ printf '%s\n' '[{"filename":"neondiff-1.0.6.tgz"}]'
       if (mismatch) expect(result.stderr).toContain("directory publish repack differs from reviewed tarball");
     }
   });
+
+  it.runIf(process.env.NEONDIFF_RUN_NPM_11_SOURCE_IDENTITY_SMOKE === "true")(
+    "proves npm 11.17.0 directory publish preserves reviewed bytes and records gitHead",
+    async () => {
+      expect(spawnSync("npm", ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("11.17.0");
+
+      const root = mkdtempSync(join(tmpdir(), "neondiff-npm-source-identity-"));
+      roots.push(root);
+      const fixture = join(root, "fixture");
+      const reviewedPackDir = join(root, "reviewed-pack");
+      const extracted = join(root, "extracted");
+      mkdirSync(fixture);
+      mkdirSync(reviewedPackDir);
+      mkdirSync(extracted);
+      const fixtureSource = "export const sourceIdentity = 'tag-checkout';\n";
+      writeFileSync(join(fixture, "package.json"), `${JSON.stringify({
+        name: "neondiff-source-identity-fixture",
+        version: "1.0.6",
+        files: ["index.js"]
+      }, null, 2)}\n`);
+      writeFileSync(join(fixture, "index.js"), fixtureSource);
+      for (const args of [
+        ["init"],
+        ["config", "user.email", "fixture@neondiff.invalid"],
+        ["config", "user.name", "NeonDiff fixture"],
+        ["add", "package.json", "index.js"],
+        ["commit", "-m", "fixture"],
+        ["tag", "-a", "v1.0.6", "-m", "fixture v1.0.6"]
+      ]) {
+        const result = spawnSync("git", args, { cwd: fixture, encoding: "utf8" });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      }
+      const expectedGitHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).stdout.trim();
+      expect(expectedGitHead).toMatch(/^[0-9a-f]{40}$/);
+
+      const pack = spawnSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", reviewedPackDir], {
+        cwd: fixture,
+        encoding: "utf8"
+      });
+      expect(pack.status, `${pack.stdout}\n${pack.stderr}`).toBe(0);
+      const [packResult] = JSON.parse(pack.stdout) as Array<{ filename?: string }>;
+      expect(packResult?.filename).toBe("neondiff-source-identity-fixture-1.0.6.tgz");
+      const reviewedTarball = readFileSync(join(reviewedPackDir, packResult.filename ?? ""));
+
+      let publishedPayload: Record<string, unknown> | undefined;
+      const registry = createServer((request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on("end", () => {
+          if (request.method === "PUT") {
+            publishedPayload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+            response.writeHead(201, { "content-type": "application/json" });
+            response.end('{"ok":true,"id":"neondiff-source-identity-fixture","rev":"1-fixture"}');
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end('{"username":"fixture"}');
+        });
+      });
+      await new Promise<void>((resolveListen) => registry.listen(0, "127.0.0.1", resolveListen));
+      const port = (registry.address() as AddressInfo).port;
+      const registryUrl = `http://127.0.0.1:${port}/`;
+      const userConfig = join(root, "fixture.npmrc");
+      writeFileSync(userConfig, `registry=${registryUrl}\n//127.0.0.1:${port}/:_authToken=fixture-token\n`);
+
+      const publish = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolvePublish, rejectPublish) => {
+        const child = spawn("npm", [
+          "publish", ".", "--ignore-scripts", "--provenance=false", "--access", "public",
+          "--tag", "release-candidate", "--registry", registryUrl, "--userconfig", userConfig
+        ], { cwd: fixture, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" } });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+        child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+        child.on("error", rejectPublish);
+        child.on("close", (code) => resolvePublish({ code, stdout, stderr }));
+      });
+      await new Promise<void>((resolveClose, rejectClose) => registry.close((error) => error ? rejectClose(error) : resolveClose()));
+      expect(publish.code, `${publish.stdout}\n${publish.stderr}`).toBe(0);
+
+      const versions = publishedPayload?.versions as Record<string, Record<string, unknown>> | undefined;
+      const metadata = versions?.["1.0.6"];
+      expect(metadata?.gitHead).toBe(expectedGitHead);
+      expect(metadata?._npmVersion).toBe("11.17.0");
+      const attachments = publishedPayload?._attachments as Record<string, { data?: string }> | undefined;
+      const attachment = attachments?.["neondiff-source-identity-fixture-1.0.6.tgz"];
+      expect(typeof attachment?.data).toBe("string");
+      const publishedTarball = Buffer.from(attachment?.data ?? "", "base64");
+      expect(publishedTarball.equals(reviewedTarball)).toBe(true);
+      const publishedTarballPath = join(root, "published.tgz");
+      writeFileSync(publishedTarballPath, publishedTarball);
+      const extraction = spawnSync("tar", ["-xzf", publishedTarballPath, "-C", extracted], { encoding: "utf8" });
+      expect(extraction.status, extraction.stderr).toBe(0);
+      expect(readFileSync(join(extracted, "package", "index.js"), "utf8")).toBe(fixtureSource);
+    }
+  );
 
   it("only continues v1.0.5 from its existing release-candidate package", () => {
     const block = extractBlock("V105_EXISTING_PACKAGE_CONTINUATION");
