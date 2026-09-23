@@ -154,7 +154,7 @@ describe("beta release status", () => {
   }
 
   const npmTagCommit = "a".repeat(40);
-  const npmArtifact = { name: "neondiff", version: "1.0.5", previousReleasedPackageVersion: "1.0.4", integrity: `sha512-${Buffer.alloc(64, 0xab).toString("base64")}`, shasum: "b".repeat(40) };
+  const npmArtifact = { name: "neondiff", version: "1.0.5", integrity: `sha512-${Buffer.alloc(64, 0xab).toString("base64")}`, shasum: "b".repeat(40) };
   const npmProofPath = "docs/evidence/npm-publication-proof.json";
 
   function npmProof(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -239,7 +239,7 @@ describe("beta release status", () => {
     writeFileSync(join(root, "docs", "release-candidates", "v1.0.5.json"), JSON.stringify({
       version: "v1.0.5", packageVersion: "1.0.5", state: "published", publishedVersionAtCandidateCut: "v1.0.4", tagCommit: npmTagCommit,
       candidateSourceSha: npmTagCommit, source: { candidateHeadBeforeReleaseMetadata: npmTagCommit },
-      publicationProofPath: proofPath, packageArtifact: npmArtifact,
+      publicationProofPath: proofPath, packageArtifact: { ...npmArtifact, previousReleasedPackageVersion: "1.0.4" },
       registry: { state: "published_latest", latest: "1.0.5", predecessor: "1.0.4", releaseCandidatePresent: false }
     }));
     writeFileSync(join(root, "public-release.json"), JSON.stringify({
@@ -279,7 +279,7 @@ describe("beta release status", () => {
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.5" }).npmPublication).toMatchObject({ ok: false, candidateReadyForPublication: false });
     candidateFixture.candidateSourceSha = npmTagCommit;
     candidateFixture.source = { candidateHeadBeforeReleaseMetadata: npmTagCommit };
-    candidateFixture.packageArtifact = { ...npmArtifact, requiredForThisRelease: true, state: "candidate" };
+    candidateFixture.packageArtifact = { ...npmArtifact, previousReleasedPackageVersion: "1.0.4", requiredForThisRelease: true, state: "candidate" };
     candidateFixture.registry.latest = "1.0.4";
     candidateFixture.registry.predecessor = "1.0.4";
     candidateFixture.registry.releaseCandidatePresent = false;
