@@ -7,50 +7,54 @@ CLI help, package metadata, and release notes instead of inventing new wording.
 ## Short Copy
 
 NeonDiff is source-available commercial software, not open-source software.
-The current npm CLI (v1.0.x) requires active API-backed activation for every
-repository visibility. Private, internal, public, commercial,
-proprietary, hosted, marketplace, binary redistribution, and auto-updates all
-remain inside the paid entitlement boundary of the current CLI.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free,
+with no NeonDiff license key, including company-owned public repositories.
+Private, internal, and unknown-visibility repositories require an active
+NeonDiff license; unknown or unreadable visibility fails closed. The npm CLI
+1.0.x requires API-backed activation for every repository.
 
-Coming with the native app: public open-source repository review will be free
-with no NeonDiff Activation Key, while private, internal, and commercial review
-will require an active entitlement. This managed public-free/private-paid model
-ships with the native NeonDiff app and the managed GitHub App broker (#614) and
-is not enforced by the current CLI, which requires activation for every
-repository (a local visibility flag would trust the client's own claim).
-
-Repository review requires a paid NeonDiff support license: $1/month or $10/year for
-individuals, or $100/year for organizations. Individual plans include a 7-day
-trial, organization plans include a 30-day trial, and legacy lifetime licenses
-remain honored for existing holders but are no longer sold. NeonDiff support
-tiers do not include hosted model credits, unlimited SaaS inference, or bundled
-provider tokens.
+Paid licenses are flat, with no per-seat pricing: Solo is $9/mo or $90/yr for
+one developer, and Team is $290/yr per GitHub organization. Solo plans include
+a 7-day trial, Team plans include a 30-day trial, and existing subscribers keep
+their current price. Legacy lifetime licenses remain honored for existing
+holders but are no longer sold. Licenses do not include hosted model credits,
+unlimited SaaS inference, or bundled provider tokens: you bring your own
+provider key or local model.
 
 ## Allowed Without A Paid License
 
 - Inspecting the source.
 - Forking the repository to evaluate NeonDiff or propose changes.
 - Submitting GitHub issues and pull requests.
+- From 1.1.0, reviewing repositories that GitHub reports as public through the
+  supported distribution (the npm CLI, the GitHub Action, and the Mac app).
 
 ## Requires A Paid License
 
-- Reviewing public or private repositories through the supported distribution.
-- Reviewing internal, proprietary, client, or commercial code.
-- Using NeonDiff in a company, agency, consulting, or paid-support workflow.
+- Reviewing private, internal, or unknown-visibility repositories, including
+  proprietary, client, or commercial code.
+- Using NeonDiff on private repositories in a company, agency, consulting, or
+  paid-support workflow.
 - Shipping NeonDiff binaries, installers, update channels, marketplace
   packages, or hosted services.
 - Enabling private-repo entitlement or auto-updates.
 
 ## Supported Distribution Policy
 
-The supported distribution pins the canonical production license API, requires
-live activation for public/private/internal/unknown repository work, and grants
-zero offline cache authority in v1.0.5. User or legacy config cannot disable
-enforcement, restore a public-free path, redirect the API, or enable grace: a
-local visibility flag would trust the client's own claim, so the managed
-public-free path is deferred to the native app and the server-side GitHub App
-broker (#614), which verify repository visibility rather than trusting local
-config.
+The supported distribution pins the canonical production license API and grants
+zero offline cache authority. From 1.1.0 its official policy sets
+`publicReposFree: true`: a review cycle on a repository whose GitHub-reported
+visibility is `public` is admitted without a license call, and every other
+visibility requires live activation. User or legacy config cannot disable
+enforcement for private work, redirect the API, or enable grace. The npm CLI
+1.0.x requires live activation for public, private, internal, and unknown
+repository work.
+
+Visibility comes from GitHub's own repository metadata, read with the
+installation or workflow token at review time. A source-available client can be
+patched to skip any local check, so the free public path is a product decision,
+not an enforcement boundary; private entitlement stays enforced by the license
+API.
 
 This boundary applies to the official supported package and future official
 desktop distribution. Public source, forks, caches, clones, edited installed
@@ -67,19 +71,15 @@ private repository entitlement.
 
 | Repo visibility | NeonDiff entitlement | Provider configured | License gate result | Next blocking layer |
 | --- | --- | --- | --- | --- |
-| public | none | yes | block before checkout, provider call, or post | license blocked |
-| public | none | no | block before checkout, provider call, or post | license blocked |
+| public | none | yes | allow (1.1.0+); block before checkout, provider call, or post on 1.0.x | provider output may still fail normally |
+| public | none | no | allow the license gate (1.1.0+); provider setup still blocks | provider blocked |
 | public | active covering entitlement | yes | allow | provider output may still fail normally |
 | private | none | yes | block before checkout, provider call, or post | license blocked |
 | private | active private entitlement | yes | allow | provider output may still fail normally |
 | private | expired or revoked entitlement | yes | block before checkout, provider call, or post | license blocked |
 | unknown | any | yes | fail closed before checkout, provider call, or post | visibility/license blocked |
 
-This matrix reflects the current CLI (v1.0.x), which blocks every visibility
-without activation. The native app and the managed GitHub App broker (#614)
-will allow public open-source review with no Activation Key once server-side
-visibility verification ships; that public-free path is not enforced by the
-current CLI.
+Unknown or unreadable visibility is never treated as public.
 
 For the managed native path, private entitlement is bound to the authenticated
 broker device and exact GitHub-selected repository. The raw Activation Key is
@@ -101,12 +101,14 @@ logs.
 Use:
 
 - "source-available commercial software"
-- "the current CLI (v1.0.x) requires API-backed activation for every repository review"
-- "public open-source review will be free in the native app (managed broker #614); not enforced by the current CLI"
-- "private and commercial repository review requires a paid NeonDiff license"
-- "$1/month or $10/year individual support license"
-- "$100/year organization support license"
-- "7-day individual trial and 30-day organization trial"
+- "review of repositories that GitHub reports as public is free (NeonDiff 1.1.0 and later)"
+- "private, internal, and unknown-visibility repositories require an active NeonDiff license"
+- "private repository review requires a paid NeonDiff license"
+- "the npm CLI 1.0.x requires API-backed activation for every repository"
+- "Solo: $9/mo or $90/yr for one developer"
+- "Team: $290/yr per GitHub organization, no per-seat pricing"
+- "7-day Solo trial and 30-day Team trial"
+- "existing subscribers keep their current price"
 - "legacy lifetime licenses remain honored but are no longer sold"
 - "bring your own provider key or local model"
 - "local worker; current-head, secret-redacted review evidence"
@@ -138,15 +140,13 @@ Avoid:
 
 CLI setup/help copy should say:
 
-> NeonDiff is source-available commercial software. Supported public, private,
-> internal, and commercial repository review requires an active API-backed
-> NeonDiff license. Individual support tiers are $1/month or
-> $10/year, organization support is $100/year, trials are 7 days for individuals
-> and 30 days for organizations, and legacy lifetime licenses remain honored but
-> are no longer sold; provider/model costs stay external through BYOK or local
-> providers. Coming with the native app: public open-source review will be free
-> with no Activation Key via the managed GitHub App broker (#614); the current
-> CLI still requires activation for every repository.
+> NeonDiff is source-available commercial software. From 1.1.0, review of
+> repositories that GitHub reports as public is free with no license key.
+> Private, internal, and unknown-visibility repositories require an active
+> API-backed NeonDiff license: Solo $9/mo or $90/yr, Team $290/yr per GitHub
+> organization, with a 7-day Solo trial and a 30-day Team trial. Legacy
+> lifetime licenses remain honored but are no longer sold; provider/model costs
+> stay external through BYOK or local providers.
 
 Private-repo failure copy should say:
 

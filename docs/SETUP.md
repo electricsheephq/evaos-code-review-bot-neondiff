@@ -22,20 +22,18 @@ for the support-tier pricing contract.
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- NeonDiff license key for repository review (the current CLI requires
-  activation for every repository; public open-source review will be free in the
-  native app)
+- a NeonDiff license key for private, internal, or unknown-visibility
+  repositories (from 1.1.0, repositories that GitHub reports as public need no
+  key; the npm CLI 1.0.x requires activation for every repository)
 
-The current CLI (v1.0.x) requires API-backed activation for every repository
-(public, private, internal, and unknown); unknown visibility fails closed, and
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
-the tier. Coming with the native app: public open-source repositories will be
-free with no NeonDiff Activation Key, while private, internal, and commercial
-repositories will require an active entitlement (managed GitHub App broker #614;
-not enforced by the current CLI). Support
-licenses cost $1/month or $10/year for
-individuals, or $100/year for organizations. Individual plans include a 7-day
-trial, organization plans include a 30-day trial, and legacy lifetime licenses
+the tier. From 1.1.0, review of repositories that GitHub reports as public is
+free, with no license key. Private, internal, and unknown-visibility
+repositories require an active NeonDiff license, and unknown visibility fails
+closed. The npm CLI 1.0.x requires API-backed activation for every repository.
+Paid licenses are Solo at $9/mo or $90/yr for one developer and Team at $290/yr
+per GitHub organization. Solo includes a 7-day trial and Team a 30-day trial;
+existing subscribers keep their current price, and legacy lifetime licenses
 remain honored for existing holders but are no longer sold. Provider/model costs
 remain external through your own provider key or local model; NeonDiff does not
 include hosted model credits, unlimited SaaS inference, or bundled provider tokens.
@@ -150,10 +148,11 @@ OpenAI-compatible endpoint examples. The provider registry stores metadata such
 as provider id, base URL, model id, timeout, retry policy, and an API-key
 environment variable name; it must not store the API key itself.
 
-Every supported repository review requires a live NeonDiff entitlement. The
-supported distribution pins `https://neondiff-license.fly.dev`, enables
-enforcement, disables the public-free path, and grants no offline cache
-authority. Legacy v1.0.3 fields still load for upgrade recovery but cannot
+Every private, internal, or unknown-visibility repository review requires a
+live NeonDiff entitlement; from 1.1.0, repositories that GitHub reports as
+public need none. The supported distribution pins
+`https://neondiff-license.fly.dev`, enables enforcement for private work, and
+grants no offline cache authority. Legacy v1.0.3 fields still load for upgrade recovery but cannot
 weaken this effective policy.
 
 Use the `file` storage backend and pipe one `nd_live_...` key through bounded

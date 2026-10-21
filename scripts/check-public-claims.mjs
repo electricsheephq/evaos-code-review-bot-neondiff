@@ -15,22 +15,27 @@ const paths = [
   "docs/releases/v1.0.0.md"
 ];
 
-// Licensing framing (owner ruling; technical-merit resolution 2026-07-16). The
-// SHIPPED CLI (v1.0.x) requires API-backed activation for EVERY repository — a
-// local publicReposFree flag would trust the client's own visibility claim, the
-// exact bypass the #614 server-side broker exists to stop. So public-free is the
-// TARGET, gated on the native app + managed GitHub App broker (#614), and must be
-// announced as upcoming — never asserted as current CLI behavior. Website copy
-// migration is owned by website issue #52. These required claims guard that the
-// docs state current CLI truth AND mark the public-free target correctly.
+// Licensing framing (PM decision 2026-10-22, reversing the 2026-07-16 ruling).
+// From 1.1.0 the official policy sets publicReposFree: true, so a review cycle on
+// a repository whose GitHub-reported visibility is public is admitted without a
+// license call (src/license-admission.ts). The old ruling deferred this to a
+// server-side broker (#614) because a local flag trusts the client; but a
+// source-available client can always be patched, so the broker adds no real
+// enforcement for public repos, and free public review is distribution.
+// Private, internal, and unknown visibility still require live activation.
+// These required claims keep the docs on that truth, the 1.0.x caveat, and the
+// current flat prices.
 const required = [
   /source-available/i,
-  /public open-source repositor(?:y|ies) will be free/i,
+  /repositor(?:y|ies) that GitHub reports as public (?:is |for )free/i,
+  /private, internal, and unknown-visibility repositor(?:y|ies) (?:require|need)/i,
   /requires (?:live |active |mandatory )?API-backed activation for every repository/i,
-  /private.*commercial.*paid|paid.*private.*commercial/i,
-  /\$100\/(?:year|yr)/i,
+  /\$9\/mo/,
+  /\$90\/(?:year|yr)/i,
+  /\$290\/(?:year|yr)/i,
   /7-day trial/i,
   /30-day trial/i,
+  /existing subscribers keep their current price/i,
   /legacy lifetime licenses? remain honored/i,
   /org_yearly_support/i,
   /--license-key-stdin true/,
@@ -46,7 +51,8 @@ const forbiddenClaims = [
   /\bproduction-ready\b/i,
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,
-  /\bpublic launch is complete\b/i
+  /\bpublic launch is complete\b/i,
+  /\bfree for private repo/i
 ];
 
 let failed = false;

@@ -6,30 +6,35 @@ NeonDiff is source-available commercial software. The source is available for
 inspection, contribution, and self-hosted evaluation, but this repository is not
 published under an open-source license.
 
-Supported review of public, private, internal, or unknown repositories requires
-an active API-backed NeonDiff license.
+Review of repositories that GitHub reports as public is free. Review of private,
+internal, or unknown-visibility repositories requires an active NeonDiff license.
 
 ## Source Evaluation Grant
 
 You may inspect, copy, and modify NeonDiff source for evaluation and contribution.
-This grant does not authorize supported repository review, redistribution, or a
-hosted service without an active NeonDiff entitlement or written permission.
+This grant does not authorize redistribution or a hosted service without written
+permission.
 
-## Paid Supported Review And Commercial Use
+## Free Review Of Public Repositories
+
+You may use the supported distribution (the npm CLI, the GitHub Action, and the
+Mac app) to review repositories that GitHub reports as public, without a license
+key, including for commercial and company-owned public repositories. You supply
+your own model provider account and key, and you are responsible for its costs
+and terms.
+
+## Paid License
 
 You need an active paid NeonDiff license for:
 
-- reviewing public repositories through the supported distribution;
-- reviewing private, internal, or otherwise non-public repositories;
-- reviewing commercial or proprietary code;
-- using NeonDiff in a company, client, agency, or consulting workflow;
+- reviewing private, internal, or otherwise non-public repositories, including
+  in a company, client, agency, or consulting workflow;
 - distributing NeonDiff binaries, installers, hosted services, marketplace
   packages, or managed update channels; and
-- enabling paid-support, private-repo entitlement, or auto-update features.
+- paid-support and private-repository entitlement features.
 
-Repository entitlement checks are implemented separately from pricing.
-Exact prices, support tiers, and marketplace terms live in the product/pricing
-trackers and public purchase surfaces.
+Repository entitlement checks are implemented separately from pricing. Current
+prices and terms are published at https://www.neondiff.com/#pricing.
 
 ## Redistribution And Public Claims
 
