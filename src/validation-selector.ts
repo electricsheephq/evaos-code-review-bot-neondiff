@@ -253,6 +253,7 @@ function proofLines(text: string): ProofLine[] {
   const headings: Array<{ level: number; index: number }> = [];
   const parents: Array<{ indent: number; index: number }> = [];
   let leadIn: number | undefined;
+  let listLeadIn: number | undefined;
   let afterBlank = false;
   return text.split("\n").map((line, index) => {
     const start = offset;
@@ -267,6 +268,7 @@ function proofLines(text: string): ProofLine[] {
       headings.push({ level, index });
       parents.length = 0;
       leadIn = undefined;
+      listLeadIn = undefined;
       afterBlank = false;
       return { start, text: line, governing: ancestors };
     }
@@ -277,7 +279,8 @@ function proofLines(text: string): ProofLine[] {
     if (LIST_ITEM.test(line)) {
       const indent = line.search(/\S/);
       while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
-      if (leadIn !== undefined) governing.push(leadIn);
+      if (listLeadIn !== undefined) governing.push(listLeadIn);
+      if (leadIn !== undefined && leadIn !== listLeadIn) governing.push(leadIn);
       governing.push(...parents.map((parent) => parent.index));
       parents.push({ indent, index });
     } else {
@@ -285,6 +288,8 @@ function proofLines(text: string): ProofLine[] {
       if (afterBlank) leadIn = undefined;
       parents.length = 0;
       if (leadIn !== undefined) governing.push(leadIn);
+      // Any prose line introduces the list that follows it, colon or not ("Previous validation").
+      listLeadIn = index;
       if (/:[*_`]*$/.test(line.trimEnd())) leadIn = index;
     }
     afterBlank = false;
