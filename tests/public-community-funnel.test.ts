@@ -121,7 +121,7 @@ describe("NeonDiff public community funnel", () => {
     }
   });
 
-  it("public Mac setup names the held background PR lane and exact live authority", () => {
+  it("public Mac setup names automatic background reviews and exact native live authority", () => {
     const surfaces = [
       read("README.md"),
       read("docs/SETUP.md"),
@@ -132,7 +132,8 @@ describe("NeonDiff public community funnel", () => {
 
     for (const text of surfaces) {
       const normalized = text.replace(/\s+/g, " ");
-      expect(normalized).toMatch(/background PR review lane (?:is|remains) held/i);
+      expect(normalized).toMatch(/background worker reviews new pull requests on the repositories you enrolled/i);
+      expect(normalized).toMatch(/in dry-run mode it writes them to local evidence instead/i);
       expect(normalized).toMatch(
         /native live PR posting.*exact scoped `?review-pr`?.*dry review.*explicit same-head confirmation/i
       );
@@ -154,7 +155,7 @@ describe("NeonDiff public community funnel", () => {
     );
     expect(launchd).toContain("worktreeCleanup.enabled");
     expect(normalizedLaunchd).toMatch(
-      /disable .*worktreeCleanup.*issue enrichment.*sole live operation/i
+      /switch .*--dry-run false.*automatic PR posting.*maintenance.*approved/i
     );
   });
 

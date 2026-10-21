@@ -5250,12 +5250,12 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.gates).toContainEqual({
       name: "daemon_heartbeat_recent",
       ok: true,
-      detail: "fresh; age 1000ms; max 120000ms; event daemon_cycle_complete; cycle 5; review lane held"
+      detail: "fresh; age 1000ms; max 120000ms; event daemon_cycle_complete; cycle 5; review lane active"
     });
     expect(status.database.skippedCount).toBe(16);
   });
 
-  it("keeps held daemon liveness healthy without claiming background PR authority", () => {
+  it("requires the active background PR lane while keeping liveness separate", () => {
     const statusFor = (reviewLane: "held" | "active" | "unknown") => buildReleaseStatus({
       repo: {
         branch: "main",
@@ -5276,27 +5276,27 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       now: new Date("2026-07-01T00:00:00.000Z")
     });
 
-    const held = statusFor("held");
-    expect(held.ok).toBe(true);
-    expect(held.gates).toContainEqual({
+    const active = statusFor("active");
+    expect(active.ok).toBe(true);
+    expect(active.gates).toContainEqual({
       name: "background_pr_lane",
       ok: true,
-      detail: "held; live PR posts require separate exact scoped review-pr proof"
+      detail: "active; reviews enrolled repositories; dry run writes local evidence without posting"
     });
-    expect(held.gates).toContainEqual(expect.objectContaining({
+    expect(active.gates).toContainEqual(expect.objectContaining({
       name: "daemon_heartbeat_recent",
       ok: true,
-      detail: expect.stringContaining("review lane held")
+      detail: expect.stringContaining("review lane active")
     }));
 
-    for (const reviewLane of ["active", "unknown"] as const) {
+    for (const reviewLane of ["held", "unknown"] as const) {
       const status = statusFor(reviewLane);
       expect(status.ok).toBe(false);
       expect(status.gates).toContainEqual({
         name: "background_pr_lane",
         ok: false,
-        detail: reviewLane === "active"
-          ? "active background PR lane is not permitted; use exact scoped review-pr"
+        detail: reviewLane === "held"
+          ? "held; automatic background PR reviews are paused"
           : "unknown background PR lane; wait for a classified heartbeat"
       });
     }
@@ -7248,7 +7248,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         cycle: 5,
         event: "daemon_cycle_complete",
         dryRun: false,
-        reviewLane: "held",
+        reviewLane: "active",
         activeCycle: 6,
         activeStartedAt: "2026-06-30T23:59:00.000Z",
         activeAgeMs: 60_000
@@ -7260,7 +7260,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.gates).toContainEqual({
       name: "daemon_heartbeat_recent",
       ok: true,
-      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5; review lane held"
+      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5; review lane active"
     });
   });
 
@@ -7301,7 +7301,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(held.heartbeat).toMatchObject({ status: "fresh", reviewLane: "held" });
     expect(held.gates).toContainEqual(expect.objectContaining({
       name: "background_pr_lane",
-      ok: true
+      ok: false
     }));
 
     const writer = new DatabaseSync(dbPath);
@@ -7330,7 +7330,7 @@ function freshHeartbeat() {
     cycle: 5,
     event: "daemon_cycle_complete",
     dryRun: false,
-    reviewLane: "held" as const
+    reviewLane: "active" as const
   };
 }
 

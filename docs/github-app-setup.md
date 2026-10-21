@@ -224,11 +224,13 @@ returned head SHA, and requires explicit confirmation before a live post pinned
 to both. Any transport failure revokes approval and requires a new dry review.
 Daemon-wide start stays blocked for a multi-repository worker.
 
-For the signed BYO Mac LaunchAgent, the background PR review lane remains held.
+The background worker reviews new pull requests on the repositories you
+enrolled and posts its reviews; in dry-run mode it writes them to local
+evidence instead.
 A heartbeat proves service liveness only; issue-enrichment success requires
 lane-specific result evidence. The independently admitted issue-enrichment lane
-may run, but neither its admission nor the heartbeat supplies review authority.
-Native live PR posting uses only the exact scoped `review-pr` dry review plus
+may also run; neither its admission nor the heartbeat authorizes a PR post.
+One-off native live PR posting outside the background worker uses only the exact scoped `review-pr` dry review plus
 explicit same-head confirmation; installing, starting, or restarting the
 background service cannot manufacture that approval.
 

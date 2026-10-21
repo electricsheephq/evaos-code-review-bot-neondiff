@@ -106,7 +106,7 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                 }
                 throw error
             }
-            return "Installed and started the Keychain-backed background worker with its PR review lane held. Live PR posts still require an exact scoped dry review and same-head confirmation."
+            return "Installed and started the Keychain-backed background worker. The background worker reviews new pull requests on the repositories you enrolled and posts its reviews; in dry-run mode it writes them to local evidence instead. One-off native live PR posts outside the background worker still require an exact scoped dry review and same-head confirmation."
         }.value
     }
 

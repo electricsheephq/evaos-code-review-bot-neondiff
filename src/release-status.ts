@@ -432,7 +432,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     },
     {
       name: "background_pr_lane",
-      ok: reviewLane === "held",
+      ok: reviewLane === "active",
       detail: describeBackgroundPrLane(reviewLane)
     }
   ];
@@ -3532,10 +3532,10 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
 
 function describeBackgroundPrLane(reviewLane: DaemonReviewLane | "unknown"): string {
   if (reviewLane === "held") {
-    return "held; live PR posts require separate exact scoped review-pr proof";
+    return "held; automatic background PR reviews are paused";
   }
   if (reviewLane === "active") {
-    return "active background PR lane is not permitted; use exact scoped review-pr";
+    return "active; reviews enrolled repositories; dry run writes local evidence without posting";
   }
   return "unknown background PR lane; wait for a classified heartbeat";
 }

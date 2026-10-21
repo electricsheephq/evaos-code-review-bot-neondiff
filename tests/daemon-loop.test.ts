@@ -613,7 +613,7 @@ describe("daemon cycle resilience", () => {
     ]));
   });
 
-  it("pins the raw daemon to the held PR lane without an argv override", () => {
+  it.each([false, true])("routes the raw daemon to active reviews and enrichment (scheduler=%s)", async (reviewSchedulerEnabled) => {
     const cliSource = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
     const start = cliSource.indexOf("async function runRawDaemon");
     const end = cliSource.indexOf("\nasync function resolveCLIReviewRuntimeCredentials", start);
@@ -621,8 +621,36 @@ describe("daemon cycle resilience", () => {
     expect(end).toBeGreaterThan(start);
 
     const rawDaemonSource = cliSource.slice(start, end);
-    expect(rawDaemonSource).toContain('reviewLane: "held"');
+    expect(rawDaemonSource).toContain('reviewLane: "active"');
     expect(rawDaemonSource).not.toMatch(/args\[(?:"|')review-lane(?:"|')\]/);
+    expect(rawDaemonSource).toContain('const dryRun = args["dry-run"] !== "false"');
+
+    const reviewLane = rawDaemonSource.match(/reviewLane: "(active|held)"/)![1] as "active" | "held";
+    const stdout: string[] = [];
+    const review = vi.fn(async () => successfulRunOnceResult());
+    const enrichment = vi.fn(async () => successfulIssueEnrichmentCycleResult());
+    const result = await runDaemonCycle({
+      cycle: 1,
+      dryRun: true,
+      reviewLane,
+      pilotRepos: ["owner/repo"],
+      monitoredRepos: ["owner/repo"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: review,
+      retryProviderCooldownsImpl: async () => successfulRetryResult(),
+      issueEnrichmentCycleImpl: enrichment,
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(review).toHaveBeenCalledWith({ dryRun: true, configPath: undefined });
+    expect(enrichment).toHaveBeenCalledWith({ dryRun: true, configPath: undefined });
+    expect(stdout.map((line) => JSON.parse(line).event)).not.toContain("daemon_review_lane_held");
   });
 
   it("starts issue enrichment while the review batch is still unresolved", async () => {
