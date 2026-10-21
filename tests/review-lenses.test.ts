@@ -422,7 +422,7 @@ function inertIssueEnrichmentState() {
 
 function inertIssueEnrichmentGithub() {
   return {
-    canPostAsApp: () => false,
+    canPost: () => false,
     listIssuesForEnrichment: async () => [],
     upsertIssueComment: async () => ({ action: "created" as const, id: 1 })
   };

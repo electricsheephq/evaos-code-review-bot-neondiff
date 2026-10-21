@@ -17,7 +17,7 @@ describe("walkthrough comment posting", () => {
 
     const result = await postWalkthroughComment({
       github: {
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async () => {
           throw new Error("GitHub API 502 bad gateway for /issues/comments");
         }
@@ -44,7 +44,7 @@ describe("walkthrough comment posting", () => {
 
     const result = await postWalkthroughComment({
       github: {
-        canPostAsApp: () => false,
+        canPost: () => false,
         upsertIssueComment: async () => {
           throw new Error("should not be called");
         }

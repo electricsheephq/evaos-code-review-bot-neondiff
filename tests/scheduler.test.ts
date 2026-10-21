@@ -2260,7 +2260,7 @@ describe("provider-aware review scheduler", () => {
         ...githubFromMap(new Map([
           ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
         ])),
-        canPostAsApp: () => false,
+        canPost: () => false,
         upsertIssueComment: async () => {
           upsertCalls += 1;
           throw new Error("should not upsert without App credentials");
@@ -2300,7 +2300,7 @@ describe("provider-aware review scheduler", () => {
         ...githubFromMap(new Map([
           ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
         ])),
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async () => {
           throw new Error("GitHub API 500");
         }
@@ -5224,7 +5224,7 @@ function githubFromMap(
     listIssueComments: async (repo, issueNumber) => commentsByPull.get(`${repo}#${issueNumber}`) ?? [],
     ...(statusCalls
       ? {
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async (input: StatusCommentCall) => {
             statusCalls.push(input);
             return { action: statusCalls.filter((call) => call.marker === input.marker).length === 1 ? "created" as const : "updated" as const, id: statusCalls.length };

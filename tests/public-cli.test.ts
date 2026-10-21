@@ -1647,8 +1647,8 @@ exit 1
               app_slug: "customer-review-app",
               app_can_read_metadata: true,
               app_can_read_pull_requests: true,
-              license_gate_decision: "active_public_entitlement_required",
-              pre_checkout_gate_result: "blocked_until_entitlement_proof",
+              license_gate_decision: "public_free_allowed",
+              pre_checkout_gate_result: "allowed",
               openPullCount: 0
             }
           ]
@@ -1849,7 +1849,7 @@ exit 1
         app_can_read_metadata: true,
         app_can_read_pull_requests: false,
         github_api_error_class: "resource_not_accessible",
-        license_gate_decision: "active_public_entitlement_required",
+        license_gate_decision: "public_free_allowed",
         pre_checkout_gate_result: "blocked_before_checkout"
       });
       expect(output.github.readChecks[0]).not.toHaveProperty("openPullCount");

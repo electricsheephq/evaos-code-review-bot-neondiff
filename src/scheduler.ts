@@ -110,7 +110,7 @@ export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
-  canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
+  canPost?: ReviewStatusCommentGithub["canPost"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
   listPullFiles?(repo: string, pullNumber: number): Promise<PullFilePatch[]>;
@@ -2152,7 +2152,7 @@ function pullForQueueJobWithoutLive(job: ReviewQueueJobRecord): PullRequestSumma
 }
 
 function isReviewStatusCommentGithub(github: SchedulerGitHubApi): github is SchedulerGitHubApi & ReviewStatusCommentGithub {
-  return typeof github.canPostAsApp === "function" && typeof github.upsertIssueComment === "function";
+  return typeof github.canPost === "function" && typeof github.upsertIssueComment === "function";
 }
 
 function ensureReviewerSessionForLeasedJob(input: {

@@ -128,7 +128,7 @@ describe("Codex CLI review runtime", () => {
       CODEX_HOME: "/Users/test/.codex",
       HTTPS_PROXY: "https://proxy.invalid",
       GITHUB_TOKEN: "must-not-pass",
-      OPENAI_API_KEY: "must-not-pass",
+      OPENAI_API_KEY: "fixture-openai-key",
       EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH: "/private/key.pem"
     });
 
@@ -137,7 +137,9 @@ describe("Codex CLI review runtime", () => {
       USER: "test",
       PATH: "/usr/bin:/bin",
       CODEX_HOME: "/Users/test/.codex",
-      HTTPS_PROXY: "https://proxy.invalid"
+      HTTPS_PROXY: "https://proxy.invalid",
+      OPENAI_API_KEY: "fixture-openai-key",
+      CODEX_API_KEY: "fixture-openai-key"
     });
   });
 

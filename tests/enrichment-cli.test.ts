@@ -491,7 +491,7 @@ describe("build-enrichment-comment issue CLI", () => {
       const parsed = JSON.parse(stdout);
 
       expect(parsed.summary).toMatchObject({ wouldComment: 1, posted: 0, failed: 0 });
-      expect(parsed.status.blockers).toContain("github_app_credentials_required_for_live_issue_comments");
+      expect(parsed.status.blockers).not.toContain("github_app_credentials_required_for_live_issue_comments");
       expect(requests).toContainEqual(expect.objectContaining({
         method: "GET",
         path: "/repos/owner/issue-repo/issues/17",

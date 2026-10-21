@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { createPrivateKey } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { readCiPullContext, buildCiConfig } from "./ci-mode.js";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
@@ -475,7 +476,7 @@ async function main(): Promise<void> {
     }
     const issueEnrichment = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: github.canPostAsApp(),
+      canPost: github.canPost(),
       issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
     const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
@@ -720,7 +721,7 @@ async function main(): Promise<void> {
       durableQueue,
       issueEnrichment: buildIssueEnrichmentStatus({
         config,
-        canPostAsApp: github.canPostAsApp(),
+        canPost: github.canPost(),
         checkedAt: release.checkedAt
       }),
       issueEnrichmentRuntime
@@ -783,7 +784,7 @@ async function main(): Promise<void> {
       durableQueue,
       issueEnrichment: buildIssueEnrichmentStatus({
         config,
-        canPostAsApp: github.canPostAsApp(),
+        canPost: github.canPost(),
         checkedAt: now.toISOString()
       }),
       issueEnrichmentRuntime,
@@ -1322,7 +1323,7 @@ async function main(): Promise<void> {
       config,
       reader: github,
       dryRun,
-      canPostAsApp: github.canPostAsApp(),
+      canPost: github.canPost(),
       ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {}),
       includeExisting: args["include-existing"] === "true",
       ...(args.since ? { since: parseCanonicalIsoTimestamp(parseSingleArg(args.since, "--since"), "--since").toISOString() } : {})
@@ -1375,7 +1376,7 @@ async function main(): Promise<void> {
       throw new Error(`license ${licenseAdmission.decision.status}: ${licenseAdmission.decision.detail}`);
     }
     const github = new GitHubApi(config.github);
-    const liveStatus = buildIssueEnrichmentStatus({ config, canPostAsApp: github.canPostAsApp() });
+    const liveStatus = buildIssueEnrichmentStatus({ config, canPost: github.canPost() });
     const statusBlockers = dryRun
       ? liveStatus.blockers.filter((blocker) => !DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker))
       : liveStatus.blockers;
@@ -1449,7 +1450,7 @@ async function main(): Promise<void> {
         listIssueCommentsForEnrichment: (requestedRepo, issueNumber) => github.listIssueCommentsForEnrichment(requestedRepo, issueNumber),
         getIssueOrPull: (requestedRepo, issueNumber) =>
           github.getIssueOrPull(requestedRepo, issueNumber, { tolerateUnreadable: true }),
-        canPostAsApp: () => github.canPostAsApp(),
+        canPost: () => github.canPost(),
         upsertIssueComment: (input) => github.upsertIssueComment(input)
       };
       const cycleInput = {
@@ -2105,6 +2106,13 @@ async function main(): Promise<void> {
   }
 
   if (command === "run-once" || command === "review-pr") {
+    const ci = command === "review-pr" && args.ci !== undefined && parseBooleanArg(args.ci, "--ci");
+    const ciContext = ci ? readCiPullContext() : undefined;
+    const ciConfig = ciContext ? buildCiConfig(loadConfig(), ciContext) : undefined;
+    if (ciContext) {
+      args.repo = ciContext.repo;
+      args.pr = String(ciContext.pullNumber);
+    }
     if (command === "review-pr" && (!args.repo || !args.pr)) {
       console.log(JSON.stringify({
         ok: false,
@@ -2115,8 +2123,8 @@ async function main(): Promise<void> {
       return;
     }
     const repo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
-    const dryRun = args["dry-run"] !== "false";
-    if (command === "review-pr" && !dryRun && args.confirm !== "true") {
+    const dryRun = ci ? args["dry-run"] === "true" : args["dry-run"] !== "false";
+    if (command === "review-pr" && !ci && !dryRun && args.confirm !== "true") {
       console.log(JSON.stringify({
         ok: false,
         command: "review-pr",
@@ -2127,7 +2135,11 @@ async function main(): Promise<void> {
       return;
     }
     let reviewPrExpectedHeadSha: string | undefined;
-    if (command === "review-pr" && !dryRun) {
+    if (ciContext && ciConfig) {
+      reviewPrExpectedHeadSha = ciContext.headSha ?? (await new GitHubApi(ciConfig.github).getPull(ciContext.repo, ciContext.pullNumber)).head.sha;
+      if (!/^[a-f0-9]{40}$/i.test(reviewPrExpectedHeadSha)) throw new Error("CI pull request head SHA is invalid");
+    }
+    if (command === "review-pr" && !ci && !dryRun) {
       const configPath = args.config ? parseSingleArg(args.config, "--config") : undefined;
       if (!configPath) {
         console.log(JSON.stringify({
@@ -2172,7 +2184,7 @@ async function main(): Promise<void> {
       }
     }
     if (command === "review-pr") {
-      const config = loadConfig(args.config);
+      const config = ciConfig ?? loadConfig(args.config);
       const allowedRepoError = validateReviewPrRepoAllowed(config, repo!);
       if (allowedRepoError) {
         console.log(JSON.stringify({
@@ -2185,7 +2197,7 @@ async function main(): Promise<void> {
         return;
       }
     }
-    const useZCode = args.zcode !== "false";
+    const useZCode = !ci && args.zcode !== "false";
     const expectedConfigRevision = args["expected-config-revision"]
       ? parseSingleArg(args["expected-config-revision"], "--expected-config-revision")
       : undefined;
@@ -2205,7 +2217,7 @@ async function main(): Promise<void> {
       }
       throw error;
     }
-    if (command === "review-pr" && !expectedConfigRevision) {
+    if (command === "review-pr" && !ci && !expectedConfigRevision) {
       console.log(JSON.stringify({
         ok: false,
         command: "review-pr",
@@ -2215,7 +2227,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    if (command === "review-pr" && !useZCode) {
+    if (command === "review-pr" && !ci && !useZCode) {
       console.log(JSON.stringify({
         ok: false,
         command: "review-pr",
@@ -2232,26 +2244,27 @@ async function main(): Promise<void> {
       runtimeGitHubCredentials,
       () => runOnceCliCommand({
         options: {
-          configPath: args.config,
+          configPath: ci ? undefined : args.config,
+          ...(ciConfig ? { ciConfig } : {}),
           dryRun,
           repo,
           pullNumber,
           useZCode,
           expectedHeadSha: reviewPrExpectedHeadSha,
-          expectedConfigRevision,
+          expectedConfigRevision: ci ? undefined : expectedConfigRevision,
           processedHeadPolicy:
-            command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
+            command === "review-pr" && !ci && !dryRun && reviewPrExpectedHeadSha
               ? "approved_dry_run"
               : command === "review-pr" && dryRun
                 ? "refresh_dry_run"
                 : "normal"
         },
         commandName: command,
-        admitImpl: async () => {
+        ...(command === "review-pr" ? {} : { admitImpl: async () => {
           const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
           if (!admission) throw new Error("review commands require production license admission");
           return admission;
-        }
+        } })
       })
     );
     console.log(result.output);
@@ -3305,7 +3318,7 @@ async function buildDoctorGithubReport(
     config: requestedRepo
       ? scopeDoctorIssueEnrichmentConfig(config, monitoredRepos)
       : config,
-    canPostAsApp: appCredentialsConfigured,
+    canPost: github.canPost(),
     issueReadChecks
   });
   const ok = appCredentialsConfigured && activeRepoChecks > 0 && readChecks.every((check) => check.ok) && issueEnrichment.ok;
@@ -4499,6 +4512,8 @@ interface ParsedArgs {
 }
 
 main().catch((error: unknown) => {
-  console.error(redactSecrets(error instanceof Error ? error.message : String(error)));
+  const message = redactSecrets(error instanceof Error ? error.message : String(error));
+  if (process.argv.includes("--ci")) console.log(JSON.stringify({ ok: false, command: "review-pr", error: message }));
+  else console.error(message);
   process.exitCode = 1;
 });

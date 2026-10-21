@@ -100,7 +100,7 @@ vi.mock("../src/github.js", async (importOriginal) => {
   return {
     ...actual,
     GitHubApi: class {
-      canPostAsApp(): boolean {
+      canPost(): boolean {
         return true;
       }
 
@@ -642,7 +642,7 @@ describe("worker context budget preflight", () => {
     const github = {
       getPull: async () => pull,
       listPullFiles: async () => files,
-      canPostAsApp: () => true,
+      canPost: () => true,
       createReview: async (input: typeof createdReviews[number]) => {
         createdReviews.push(input);
         return { html_url: `https://github.test/review/${createdReviews.length}`, id: createdReviews.length };
@@ -1638,6 +1638,8 @@ describe("worker context budget preflight", () => {
 
     expect(createdReviews).toHaveLength(1);
     expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
+    // LCM-X requires its assessment marker to be the final body content, so no attribution footer.
+    expect(createdReviews[0]?.body).not.toContain("Reviewed by [NeonDiff]");
     const evidenceDir = join(root, "evidence", localDateFolder(), "ElectricSheepHQ__LCM-X", `pr-${pull.number}`, pull.head.sha);
     expect(JSON.parse(readFileSync(join(evidenceDir, "lcm-review-patch-hydration.json"), "utf8"))).toMatchObject({
       status: "incomplete",
@@ -3084,7 +3086,7 @@ async function runOwnerPolicyReview(input: {
         user: { login: "100yenadmin", type: "User" }
       };
     },
-    canPostAsApp: () => false
+    canPost: () => false
   } as unknown as GitHubApi;
 
   let result: Awaited<ReturnType<typeof reviewPull>> | undefined;
@@ -3290,6 +3292,6 @@ function githubForPull(pull: PullRequestSummary, files: Array<{
   return {
     getPull: async () => pull,
     listPullFiles: async () => files,
-    canPostAsApp: () => false
+    canPost: () => false
   } as unknown as GitHubApi;
 }

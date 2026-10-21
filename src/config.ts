@@ -466,7 +466,7 @@ const DEFAULT_CONFIG: BotConfig = {
     keychainAccount: OFFICIAL_LICENSE_KEYCHAIN_ACCOUNT,
     requestTimeoutMs: 10_000,
     offlineGraceMs: 0,
-    publicReposFree: false,
+    publicReposFree: true,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: true
   },

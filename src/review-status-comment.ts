@@ -18,7 +18,7 @@ export type ReviewStatusCommentState =
   | "failed";
 
 export interface ReviewStatusCommentGithub {
-  canPostAsApp(): boolean;
+  canPost(): boolean;
   upsertIssueComment(input: {
     repo: string;
     issueNumber: number;
@@ -136,7 +136,7 @@ export async function postReviewStatusComment(input: {
 }): Promise<ReviewStatusCommentPostResult> {
   if (!input.enabled) return { posted: false, reason: "disabled", state: input.state };
   if (input.dryRun) return { posted: false, reason: "dry_run", state: input.state };
-  if (!input.github.canPostAsApp()) return { posted: false, reason: "missing_app_credentials", state: input.state };
+  if (!input.github.canPost()) return { posted: false, reason: "missing_app_credentials", state: input.state };
 
   let comment: ReturnType<typeof buildReviewStatusComment>;
   try {

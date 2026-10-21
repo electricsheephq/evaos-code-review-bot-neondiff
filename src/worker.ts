@@ -119,7 +119,7 @@ import {
 } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
-import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
+import { appendReviewAttribution, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import {
@@ -248,6 +248,7 @@ function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown>
 
 export interface RunOnceOptions {
   configPath?: string;
+  ciConfig?: BotConfig;
   dryRun: boolean;
   repo?: string;
   pullNumber?: number;
@@ -449,7 +450,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     }
     config = loaded.config;
   } else {
-    config = loadConfig(options.configPath);
+    config = options.ciConfig ?? loadConfig(options.configPath);
   }
   const reviewApprovalRevision = buildReviewApprovalRevision({
     configRevision: options.expectedConfigRevision,
@@ -488,8 +489,10 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   });
   if (admittedRepos.length === 0) return result;
 
-  const licenseAdmission = await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
   const github = new GitHubApi(config.github);
+  const licenseAdmission = options.explicitPullReview
+    ? await resolveScopedReviewAdmission(config, github, options.explicitPullReview.repo)
+    : await resolveReviewDiscoveryAdmission(config, options.licenseAdmission);
   const state = new ReviewStateStore(config.statePath);
   const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   try {
@@ -1070,7 +1073,7 @@ async function syncRetryReviewStatusComment(input: {
 
 function isReviewStatusCommentGithub(github: GitHubApi): github is GitHubApi & ReviewStatusCommentGithub {
   const candidate = github as Partial<ReviewStatusCommentGithub>;
-  return typeof candidate.canPostAsApp === "function" && typeof candidate.upsertIssueComment === "function";
+  return typeof candidate.canPost === "function" && typeof candidate.upsertIssueComment === "function";
 }
 
 function retryStatusCommentState(
@@ -1492,11 +1495,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     { explicitPullReview: input.explicitPullReview }
   )) return "skipped_canary";
   if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
-  const visibility = visibilityFromPullSummary(pull);
+  const scopedAdmission = input.licenseAdmission.operation === "review_cycle";
+  const visibility = scopedAdmission
+    ? visibilityFromRepositorySummary(await github.getRepo(repo))
+    : visibilityFromPullSummary(pull);
   const visibilityDecision = authorizeAdmissionForVisibility(
     input.licenseAdmission,
     visibility,
-    "review_discovery"
+    scopedAdmission ? "review_cycle" : "review_discovery"
   );
   if (!visibilityDecision.ok) {
     recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
@@ -2452,13 +2458,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         postIssueComment: config.walkthrough.postIssueComment,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
+      // LCM review bodies must end with their terminal assessment marker, so they carry no footer.
+      if (!isLcmReviewRepository(repo)) plan.walkthrough.body = appendReviewAttribution(plan.walkthrough.body, buildReviewProviderMetadata(config).model);
       assertReviewOutputSafe(plan.walkthrough.body);
     }
     if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
     if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);
 
     const reviewGithub = new GitHubApi(config.github);
-    const walkthroughPostAttempted = Boolean(plan.walkthrough?.postIssueComment && reviewGithub.canPostAsApp());
+    const walkthroughPostAttempted = Boolean(plan.walkthrough?.postIssueComment && reviewGithub.canPost());
     plan.walkthroughComment = await postWalkthroughComment({
       github: reviewGithub,
       repo,
@@ -2471,7 +2479,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       if (lifecycleResult) return lifecycleResult;
     }
     const enrichmentPostAttempted = Boolean(
-      config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPostAsApp()
+      config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPost()
     );
     plan.enrichmentComment = await postEnrichmentComment({
       enabled: config.enrichment?.enabled === true,
@@ -2501,7 +2509,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       event: plan.event,
-      body: appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo),
+      body: isLcmReviewRepository(repo)
+        ? appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo)
+        : appendReviewAttribution(appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo), buildReviewProviderMetadata(config).model),
       comments
     });
     try {
@@ -2631,6 +2641,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (ensembleEvidencePromise) await ensembleEvidencePromise;
     releaseReviewCapacity();
   }
+}
+
+async function resolveScopedReviewAdmission(config: BotConfig, github: GitHubApi, repo: string): Promise<ProductionLicenseAdmission> {
+  const visibility = visibilityFromRepositorySummary(await github.getRepo(repo));
+  const result = await requireActiveProductionLicense({ operation: "review_cycle", config: config.license!, repo, visibility });
+  if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+  return result.admission;
 }
 
 async function resolveReviewDiscoveryAdmission(
@@ -2900,7 +2917,7 @@ export async function buildLicenseGateForPull(input: {
 
 function visibilityFromRepositorySummary(repoMetadata: RepositorySummary): "public" | "private" | "unknown" {
   if (repoMetadata.private || repoMetadata.visibility === "private" || repoMetadata.visibility === "internal") return "private";
-  if (repoMetadata.visibility === "public") return "public";
+  if (repoMetadata.visibility === "public" || repoMetadata.private === false) return "public";
   return "unknown";
 }
 
@@ -4963,7 +4980,7 @@ async function recordAndAcknowledgeCommandDecision(input: {
     }
   }
 
-  if (input.acknowledge !== false && input.config.commands.acknowledge && input.github.canPostAsApp()) {
+  if (input.acknowledge !== false && input.config.commands.acknowledge && input.github.canPost()) {
     await input.github.upsertIssueComment({
       repo: input.repo,
       issueNumber: input.pull.number,

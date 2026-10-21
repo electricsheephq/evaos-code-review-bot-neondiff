@@ -41,7 +41,7 @@ describe("review status comment", () => {
       enabled: true,
       dryRun: false,
       github: {
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async (input) => {
           calls.push({ marker: input.marker, body: input.body });
           return { action: "created", id: 123, html_url: "https://github.test/comment/123" };
@@ -62,7 +62,7 @@ describe("review status comment", () => {
 
   it("does not post when disabled, in dry-run, or without App credentials", async () => {
     const github = {
-      canPostAsApp: () => false,
+      canPost: () => false,
       upsertIssueComment: async () => {
         throw new Error("should not post");
       }
@@ -105,7 +105,7 @@ describe("review status comment", () => {
       enabled: true,
       dryRun: false,
       github: {
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async () => {
           upsertCalls += 1;
           throw new Error("should not upsert invalid marker identity");

@@ -8,7 +8,7 @@ const officialValues = {
   enabled: true,
   apiBaseUrl: OFFICIAL_LICENSE_API_BASE_URL,
   offlineGraceMs: 0,
-  publicReposFree: false,
+  publicReposFree: true,
   privateReposRequireEntitlement: true,
   updateEntitlementRequiresLicense: true,
   keychainService: OFFICIAL_LICENSE_KEYCHAIN_SERVICE,
@@ -61,7 +61,7 @@ function policyDiagnostics(input: LicenseConfig): LicensePolicyDiagnostic[] {
     "the supported distribution locks the Keychain account identity"
   );
   addDiagnostic(diagnostics, "offlineGraceMs", input.offlineGraceMs, officialValues.offlineGraceMs, "offline cache authority is disabled in v1.0.4");
-  addDiagnostic(diagnostics, "publicReposFree", input.publicReposFree, officialValues.publicReposFree, "all repository work requires activation");
+  addDiagnostic(diagnostics, "publicReposFree", input.publicReposFree, officialValues.publicReposFree, "GitHub-public repository reviews are free; other work requires activation");
   addDiagnostic(
     diagnostics,
     "privateReposRequireEntitlement",

@@ -226,12 +226,16 @@ export class GitHubApi {
     this.privateKey = options.privateKey ?? (options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined);
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
-    this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
+    this.botLogin = options.botLogin ?? (!this.canPostAsApp() && this.token ? "github-actions[bot]" : DEFAULT_BOT_LOGIN);
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
   canPostAsApp(): boolean {
     return Boolean(this.appId && this.privateKey);
+  }
+
+  canPost(): boolean {
+    return this.canPostAsApp() || Boolean(this.token);
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
@@ -567,10 +571,10 @@ export class GitHubApi {
     if (!/^[0-9a-f]{40}$/i.test(input.headSha)) {
       throw new Error("headSha must be a 40-character hexadecimal commit SHA");
     }
-    if (!this.canPostAsApp()) {
-      throw new Error("GitHub App credentials are required before posting reviews.");
+    if (!this.canPost()) {
+      throw new Error("GitHub App credentials or a token are required before posting reviews.");
     }
-    const token = await this.getInstallationToken(input.repo);
+    const token = (await this.getReadToken(input.repo))!;
     return this.request<{ html_url?: string; id: number }>(`/repos/${input.repo}/pulls/${input.pullNumber}/reviews`, {
       method: "POST",
       token,
@@ -594,10 +598,10 @@ export class GitHubApi {
     marker: string;
     body: string;
   }): Promise<{ action: "created" | "updated"; html_url?: string; id: number }> {
-    if (!this.canPostAsApp()) {
-      throw new Error("GitHub App credentials are required before posting comments.");
+    if (!this.canPost()) {
+      throw new Error("GitHub App credentials or a token are required before posting comments.");
     }
-    const token = await this.getInstallationToken(input.repo);
+    const token = (await this.getReadToken(input.repo))!;
     const existing = await this.findIssueCommentByMarker(input.repo, input.issueNumber, input.marker, token);
     if (existing) {
       const updated = await this.request<{ html_url?: string; id: number }>(

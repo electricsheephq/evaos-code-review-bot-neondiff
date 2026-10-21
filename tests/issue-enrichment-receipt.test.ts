@@ -28,7 +28,7 @@ describe("issue-enrichment receipt classifier", () => {
     ["resolved undefined", { kind: "result", result: undefined }, { ok: false, code: "malformed_summary", reason: "malformed_summary" }],
     ["thrown undefined", { kind: "thrown", error: undefined }, { ok: false, code: "cycle_failed", reason: "unknown_failure" }],
     ["lease", { kind: "result", result: result({ summary: counts({ workerSkipped: 1 }) }) }, { ok: true, code: "lease_skipped" }],
-    ["disabled", { kind: "result", result: result({ status: buildIssueEnrichmentStatus({ config: { issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG }, canPostAsApp: false }) }) }, { ok: true, code: "disabled" }],
+    ["disabled", { kind: "result", result: result({ status: buildIssueEnrichmentStatus({ config: { issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG }, canPost: false }) }) }, { ok: true, code: "disabled" }],
     ["blocked", { kind: "result", result: result({ ok: false, status: { state: "blocked", blockers: ["github_app_issues_permission_required"] } }) }, { ok: false, code: "blocked" }],
     ["ignored dry-run blocker", { kind: "result", result: result({ dryRun: true, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] } }) }, { ok: true, code: "no_candidates" }],
     ["read failure before ignored blocker", { kind: "result", result: result({ ok: false, dryRun: true, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] }, summary: counts({ reposScanned: 1, readFailures: 1 }) }) }, { ok: false, reason: "read_failure" }],

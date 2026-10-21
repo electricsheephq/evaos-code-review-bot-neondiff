@@ -36,6 +36,8 @@ const CODEX_ENV_ALLOWLIST = [
   "PATH",
   "SHELL",
   "CODEX_HOME",
+  "CODEX_API_KEY",
+  "OPENAI_API_KEY",
   "TMPDIR",
   "TMP",
   "TEMP",
@@ -101,6 +103,7 @@ export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
     const value = source[key];
     if (typeof value === "string" && value.length > 0) env[key] = value;
   }
+  if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) env.CODEX_API_KEY = env.OPENAI_API_KEY;
   return env;
 }
 
