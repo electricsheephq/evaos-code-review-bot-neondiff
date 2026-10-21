@@ -27,7 +27,7 @@ describe("portable defaults and supported LaunchAgent example", () => {
       skillRoot: join(homedir(), ".neondiff", "skills")
     });
     expect(config.zcode.appConfigPath).toBe(join(homedir(), ".zcode", "v2", "config.json"));
-    expect(config.codexRuntime).toMatchObject({ enabled: false, model: "gpt-5.6-luna" });
+    expect(config.codexRuntime).toMatchObject({ enabled: false, model: "gpt-6.1-sol" });
   });
 
   it("uses an external portable root when the offline eval API has no output override", () => {

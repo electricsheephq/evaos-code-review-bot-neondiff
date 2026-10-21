@@ -1,3 +1,4 @@
+import { isPublicRepoAuthorBlocked, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
@@ -68,6 +69,7 @@ import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
   recordFailedReview,
+  recordPublicRepoAuthorGateSkip,
   classifyProviderError,
   recordProviderRateLimitCooldownIfNeeded,
   providerCooldownDurationMs,
@@ -205,9 +207,13 @@ export async function runScheduledCycleWithDeps(input: {
     }
     result.pullsSeen += pulls.length;
     const admittedPulls = pulls.filter((pull) => {
+      if (recordPublicRepoAuthorGateSkip({ config, state: input.state, repo, pull })) {
+        result.skippedPolicy += 1;
+        return false;
+      }
       const decision = authorizeAdmissionForVisibility(
         input.licenseAdmission!,
-        schedulerPullVisibility(pull),
+        visibilityFromPullSummary(pull),
         "review_discovery"
       );
       if (decision.ok) return true;
@@ -354,12 +360,6 @@ export async function runScheduledCycleWithDeps(input: {
   return result;
 }
 
-function schedulerPullVisibility(pull: PullRequestSummary): "public" | "private" | "unknown" {
-  const repo = pull.base.repo;
-  if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
-  if (repo.private === false || repo.visibility === "public") return "public";
-  return "unknown";
-}
 
 /**
  * Runs the scheduled, default-off outcome observation pass at the tail of a daemon cycle (#357, deepened
@@ -1397,6 +1397,12 @@ async function runLeasedQueueJob(input: {
     return "failed";
   }
 
+  if (recordPublicRepoAuthorGateSkip({ ...input, repo: input.job.repo, pull })) {
+    updateQueueJobAfterReviewStatus({ ...input, pull, status: "untrusted_author_public_repo", now });
+    updateReviewerSessionJobAfterReviewStatus({ ...input, status: "untrusted_author_public_repo", now });
+    return "untrusted_author_public_repo";
+  }
+
   if (isClosedPull(pull)) {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
@@ -1627,7 +1633,7 @@ async function syncReviewStatusComment(input: {
   onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
-  if (!isReviewStatusCommentGithub(input.github)) return;
+  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
   const result = await postReviewStatusComment({
     enabled: input.config.reviewStatusComment?.enabled ?? false,
     dryRun: input.dryRun,
@@ -1769,6 +1775,7 @@ function reviewResultStatusCommentState(
       return "provider_deferred";
     case "skipped_context_budget":
       return "skipped";
+    case "untrusted_author_public_repo":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -1965,6 +1972,7 @@ function readinessStateForReviewResult(
       return "stale";
     case "skipped_closed":
       return "closed";
+    case "untrusted_author_public_repo":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_command_stop":
@@ -2007,6 +2015,8 @@ function readinessReasonForReviewResult(
       return "stale_head";
     case "skipped_closed":
       return processed?.error ?? "closed_or_merged_before_review";
+    case "untrusted_author_public_repo":
+      return status;
     case "skipped_draft":
       return "draft_pr";
     case "skipped_canary":
@@ -2220,6 +2230,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_capacity":
       updateReviewerSessionJobFromQueueStatus(input, "assigned");
       return;
+    case "untrusted_author_public_repo":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -2369,6 +2380,10 @@ function updateQueueJobAfterReviewStatus(input: {
           : `unexpected_scheduler_review_status=${input.status}`,
         now: input.now
       });
+      return;
+    case "untrusted_author_public_repo":
+      input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "blocked_on_proof",
+        lastError: input.status, now: input.now });
       return;
     case "skipped_draft":
       input.state.updateReviewQueueJobState({
@@ -2645,6 +2660,9 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
     case "skipped_consumed_authorization":
       result.failed += 1;
       result.queue.failedQueueJobs += 1;
+      break;
+    case "untrusted_author_public_repo":
+      result.skippedPolicy += 1;
       break;
     case "skipped_draft":
       result.skippedDraft += 1;

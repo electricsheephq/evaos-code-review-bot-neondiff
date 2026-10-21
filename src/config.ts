@@ -247,7 +247,21 @@ export interface ReviewSchedulerConfig {
   backgroundPriority: number;
 }
 
+export const PUBLIC_REPO_AUTHOR_ASSOCIATIONS = [
+  "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"
+] as const;
+export interface PublicRepoAuthorGateConfig {
+  mode: "auto" | "on" | "off";
+  allowedAssociations: string[];
+  allowedLogins: string[];
+}
+export const DEFAULT_PUBLIC_REPO_AUTHOR_GATE: PublicRepoAuthorGateConfig = {
+  mode: "auto", allowedAssociations: ["OWNER", "MEMBER", "COLLABORATOR"],
+  allowedLogins: ["dependabot[bot]", "renovate[bot]"]
+};
+
 export interface ReviewGateConfig {
+  publicRepoAuthorGate?: PublicRepoAuthorGateConfig;
   /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
   maxInlineComments: number;
   /** The public GitHub event selection policy; defaults to trusted owner authorization only. */
@@ -389,6 +403,7 @@ const DEFAULT_CONFIG: BotConfig = {
     publicDisplay: buildPublicConfidencePolicy()
   },
   reviewGate: {
+    publicRepoAuthorGate: DEFAULT_PUBLIC_REPO_AUTHOR_GATE,
     maxInlineComments: 25,
     reviewEventPolicy: {
       mode: "trusted_command_only"
@@ -599,12 +614,12 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   codexRuntime: {
     enabled: false,
-    cliPath: "/usr/local/bin/codex",
-    model: "gpt-5.6-luna",
-    reasoningEffort: "max",
+    cliPath: "codex",
+    model: "gpt-6.1-sol",
+    reasoningEffort: "high",
     timeoutMs: 600_000,
     maxOutputBytes: 20 * 1024 * 1024,
-    contextWindowTokens: 128_000
+    contextWindowTokens: 500_000
   },
   github: {}
 };
@@ -619,6 +634,11 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     && isRecord(fromFile.github)
     && Object.prototype.hasOwnProperty.call(fromFile.github, "privateKey")) {
     throw new Error("config files must not contain github.privateKey; use the bounded runtime stdin channel");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.publicRepoAuthorGate !== undefined) {
+    const gate = fromFile.reviewGate.publicRepoAuthorGate;
+    validatePublicRepoAuthorGateConfig(isRecord(gate) ? { ...DEFAULT_PUBLIC_REPO_AUTHOR_GATE, ...gate } : gate,
+      "config.reviewGate.publicRepoAuthorGate");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
   merged.github = { ...merged.github };
@@ -797,8 +817,8 @@ function validateConfig(config: BotConfig): void {
   config.codexRuntime = codexRuntime;
   validateBoolean(codexRuntime.enabled, "config.codexRuntime.enabled");
   validateNonEmptyString(codexRuntime.cliPath, "config.codexRuntime.cliPath");
-  if (codexRuntime.enabled && !isAbsolute(codexRuntime.cliPath)) {
-    throw new Error("config.codexRuntime.cliPath must be absolute when enabled");
+  if (codexRuntime.enabled && codexRuntime.cliPath !== "codex" && !isAbsolute(codexRuntime.cliPath)) {
+    throw new Error("config.codexRuntime.cliPath must be codex or absolute when enabled");
   }
   validateNonEmptyString(codexRuntime.model, "config.codexRuntime.model");
   if (!["low", "medium", "high", "xhigh", "max"].includes(codexRuntime.reasoningEffort)) {
@@ -903,6 +923,7 @@ function validatePublicCommandsConfig(value: unknown, label: string): void {
 
 function validateReviewGateConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.publicRepoAuthorGate !== undefined) validatePublicRepoAuthorGateConfig(value.publicRepoAuthorGate, `${label}.publicRepoAuthorGate`);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
   validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
   if (value.requestChangesConfidenceFloors !== undefined) {
@@ -934,6 +955,20 @@ function validateReviewGateConfig(value: unknown, label: string): void {
     }
   }
   if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
+}
+
+function validatePublicRepoAuthorGateConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!["mode", "allowedAssociations", "allowedLogins"].includes(key)) throw new Error(`${label} has unknown key "${key}"`);
+  }
+  if (!["auto", "on", "off"].includes(value.mode as string)) throw new Error(`${label}.mode must be auto, on, or off`);
+  if (!Array.isArray(value.allowedAssociations) || value.allowedAssociations.some(
+    (entry) => !(PUBLIC_REPO_AUTHOR_ASSOCIATIONS as readonly unknown[]).includes(entry)
+  )) throw new Error(`${label}.allowedAssociations must contain GitHub author associations`);
+  if (!Array.isArray(value.allowedLogins) || value.allowedLogins.some(
+    (entry) => typeof entry !== "string" || !entry.trim() || entry !== entry.trim()
+  )) throw new Error(`${label}.allowedLogins must contain non-empty exact logins`);
 }
 
 function validateReviewEventPolicyConfig(value: unknown, label: string): void {

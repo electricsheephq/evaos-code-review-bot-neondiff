@@ -7,6 +7,7 @@ import {
   buildCodexExecInvocation,
   buildCodexRuntimeEnv,
   CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+  parseCodexUsage,
   runCodexReview,
   runCodexStructuredOutput
 } from "../src/codex-runtime.js";
@@ -19,6 +20,30 @@ afterEach(() => {
 });
 
 describe("Codex CLI review runtime", () => {
+  it.each([
+    ["model: gpt-6.1-sol\nreasoning effort: high\ntokens used\n43 305\n", 43305],
+    ["tokens used\n1 234 567\n", 1234567],
+    ["tokens used\nmalformed\n", null],
+    ["tokens used\n12x34\n", null],
+    ["tokens used\n9007199254740992\n", null],
+    ["", null]
+  ])("parses bounded usage metadata from stderr", (stderr, tokensUsed) => {
+    expect(parseCodexUsage(stderr as string, { model: "gpt-6.1-sol", reasoningEffort: "high" }, 123))
+      .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed, durationMs: 123 });
+  });
+  it("records runtime-reported model and effort with safe configured fallbacks", () => {
+    expect(parseCodexUsage("model: gpt-6-sol\nreasoning effort: xhigh\ntokens used\n123\n",
+      { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9)).toEqual({ model: "gpt-6-sol", reasoningEffort: "xhigh", tokensUsed: 123, durationMs: 9 });
+    expect(parseCodexUsage("model: raw prompt text\nreasoning effort: ultra\ntokens used\n12 34\n",
+      { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9)).toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9 });
+  });
+  it("defaults to PATH-resolved Sol 6.1/high with 500000 context tokens", () => {
+    expect(loadConfigFromObject({ codexRuntime: { enabled: true } }).codexRuntime).toMatchObject({
+      cliPath: "codex", model: "gpt-6.1-sol", reasoningEffort: "high", contextWindowTokens: 500000
+    });
+    expect(() => loadConfigFromObject({ codexRuntime: { enabled: true, cliPath: "./codex" } })).toThrow();
+    expect(() => loadConfigFromObject({ codexRuntime: { reasoningEffort: "ultra" } })).toThrow();
+  });
   it("requests an original LCM assessment only when the repository opts in", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-"));
     temporaryRoots.push(root);
@@ -54,28 +79,28 @@ describe("Codex CLI review runtime", () => {
     }
   });
 
-  it("is opt-in and accepts Luna with Max reasoning", () => {
+  it("is opt-in and accepts Sol 6.1 with high reasoning", () => {
     expect(loadConfigFromObject({}).codexRuntime?.enabled).toBe(false);
     const config = loadConfigFromObject({
       codexRuntime: {
         enabled: true,
         cliPath: "/Users/test/.local/bin/codex",
-        model: "gpt-5.6-luna",
-        reasoningEffort: "max",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "high",
         timeoutMs: 300_000,
         maxOutputBytes: 20 * 1024 * 1024,
-        contextWindowTokens: 128_000
+        contextWindowTokens: 500_000
       }
     });
     expect(config.codexRuntime).toMatchObject({
       enabled: true,
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max"
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high"
     });
     expect(buildReviewProviderMetadata(config)).toMatchObject({
       providerId: "codex-cli-oauth",
       adapter: "codex-cli",
-      model: "gpt-5.6-luna"
+      model: "gpt-6.1-sol"
     });
   });
 
@@ -83,8 +108,8 @@ describe("Codex CLI review runtime", () => {
     const invocation = buildCodexExecInvocation({
       cliPath: "/Users/test/.local/bin/codex",
       cwd: "/private/tmp/review-worktree",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
       schemaPath: "/private/tmp/evidence/schema.json",
       outputPath: "/private/tmp/evidence/result.json"
     });
@@ -100,8 +125,8 @@ describe("Codex CLI review runtime", () => {
       "--disable", "multi_agent",
       "--disable", "multi_agent_v2",
       "-c", "approval_policy=\"never\"",
-      "-c", "model_reasoning_effort=\"max\"",
-      "--model", "gpt-5.6-luna",
+      "-c", "model_reasoning_effort=\"high\"",
+      "--model", "gpt-6.1-sol",
       "--sandbox", "read-only",
       "--cd", "/private/tmp/review-worktree",
       "--output-schema", "/private/tmp/evidence/schema.json",
@@ -150,8 +175,8 @@ describe("Codex CLI review runtime", () => {
       cwd: join(root, "worktree"),
       prompt: "Return one fixture finding.",
       cliPath: "/Users/test/.local/bin/codex",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
       evidenceDir,
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024
@@ -179,6 +204,9 @@ describe("Codex CLI review runtime", () => {
       }
     });
 
+    expect(JSON.parse(readFileSync(join(evidenceDir, "codex-usage.json"), "utf8"))).toEqual({
+      model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: expect.any(Number)
+    });
     expect(result.findings).toHaveLength(1);
     expect(result.droppedFromSchema).toEqual([]);
     expect(JSON.parse(readFileSync(join(evidenceDir, "codex-review-schema.json"), "utf8"))).toHaveProperty("properties.findings");
@@ -188,8 +216,8 @@ describe("Codex CLI review runtime", () => {
       cwd: join(root, "worktree"),
       prompt: "Return no findings.",
       cliPath: "/Users/test/.local/bin/codex",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
       evidenceDir: join(root, "changed-evidence"),
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024
@@ -200,6 +228,7 @@ describe("Codex CLI review runtime", () => {
         return { stdout: "", stderr: "", status: 0, signal: null };
       }
     })).rejects.toThrow("codex_runtime_unsafe_write_attempt");
+    expect(JSON.parse(readFileSync(join(root, "changed-evidence", "codex-usage.json"), "utf8"))).toMatchObject({ tokensUsed: null });
   });
 
   it("supports a named strict structured result without weakening the read-only runtime", async () => {
@@ -210,8 +239,8 @@ describe("Codex CLI review runtime", () => {
       cwd: join(root, "worktree"),
       prompt: "Return the fixture classification.",
       cliPath: "/Users/test/.local/bin/codex",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
       evidenceDir,
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024,
@@ -262,8 +291,8 @@ describe("Codex CLI review runtime", () => {
       cwd: join(root, "worktree"),
       prompt: "unused",
       cliPath: "/Users/test/.local/bin/codex",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
       evidenceDir: join(root, "evidence"),
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024,
@@ -291,8 +320,8 @@ describe("Codex CLI review runtime", () => {
       cwd: join(root, "worktree"),
       prompt: "Return the fixture result.",
       cliPath: "/Users/test/.local/bin/codex",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
       evidenceDir,
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024
@@ -323,11 +352,11 @@ describe("Codex CLI review runtime", () => {
       codexRuntime: {
         enabled: true,
         cliPath: "/Users/test/.local/bin/codex",
-        model: "gpt-5.6-luna",
-        reasoningEffort: "max",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "high",
         timeoutMs: 300_000,
         maxOutputBytes: 20 * 1024 * 1024,
-        contextWindowTokens: 128_000
+        contextWindowTokens: 500_000
       }
     });
 

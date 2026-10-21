@@ -296,15 +296,17 @@ only. See [docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
 {
   "codexRuntime": {
     "enabled": true,
-    "cliPath": "/absolute/path/to/codex",
-    "model": "gpt-5.6-luna",
-    "reasoningEffort": "max",
+    "cliPath": "codex",
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "high",
     "timeoutMs": 600000,
     "maxOutputBytes": 20971520,
-    "contextWindowTokens": 128000
+    "contextWindowTokens": 500000
   }
 }
 ```
+
+The default `cliPath: "codex"` resolves through the worker's `PATH`; explicit absolute paths also work.
 
 This is an execution-backend choice, not a license or GitHub authorization
 bypass. The same activation, current-head, dry-run, line-placement, redaction,

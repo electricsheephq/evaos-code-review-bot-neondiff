@@ -95,6 +95,22 @@ export const CODEX_REVIEW_FINDINGS_JSON_SCHEMA = {
   }
 } as const;
 
+export function parseCodexUsage(
+  stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number
+): { model: string; reasoningEffort: CodexReasoningEffort; tokensUsed: number | null; durationMs: number } {
+  const model = /^model:[ \t]*(gpt-[a-z0-9._-]+)[ \t]*$/m.exec(stderr)?.[1];
+  const effort = /^reasoning effort:[ \t]*(low|medium|high|xhigh|max)[ \t]*$/m.exec(stderr)?.[1];
+  const rawTokens = /^tokens used[ \t]*\r?\n([0-9][0-9 ]*)[ \t]*\r?$/m.exec(stderr)?.[1]?.trim();
+  const tokens = rawTokens && /^(?:[0-9]+|[0-9]{1,3}(?: [0-9]{3})+)$/.test(rawTokens)
+    ? Number(rawTokens.replaceAll(" ", "")) : NaN;
+  return {
+    model: model && !containsSecretLikeText(model) ? model : redactSecrets(fallback.model),
+    reasoningEffort: (effort ?? fallback.reasoningEffort) as CodexReasoningEffort,
+    tokensUsed: Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : null,
+    durationMs
+  };
+}
+
 export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of CODEX_ENV_ALLOWLIST) {
@@ -219,7 +235,12 @@ export async function runCodexStructuredOutput<T>(input: {
   };
   const captureWorktreeState = dependencies.captureWorktreeState ?? captureGitWorktreeState;
   const before = captureWorktreeState(input.cwd);
+  const startedAt = Date.now();
   const result = await (dependencies.runProcess ?? runCodexProcess)(invocation);
+  if (input.artifactPrefix === "codex-review") {
+    writeSecureFileSync(join(input.evidenceDir, "codex-usage.json"),
+      `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt), null, 2)}\n`);
+  }
   const after = captureWorktreeState(input.cwd);
   const stdout = redactSecrets(result.stdout);
   const stderr = redactSecrets(result.stderr);

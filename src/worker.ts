@@ -1,3 +1,4 @@
+import { isPublicRepoAuthorBlocked, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -347,6 +348,7 @@ export type ReviewPullResult =
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
+  | "untrusted_author_public_repo"
   | "skipped_license_gate"
   | "skipped_command_stop"
   | "skipped_command_explain"
@@ -369,6 +371,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "failed":
     case "skipped_draft":
     case "skipped_canary":
+    case "untrusted_author_public_repo":
     case "skipped_policy":
     case "skipped_license_gate":
     case "skipped_command_stop":
@@ -621,6 +624,7 @@ export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, stat
     case "skipped_canary":
       result.skippedCanary += 1;
       return;
+    case "untrusted_author_public_repo":
     case "skipped_policy":
       result.skippedPolicy += 1;
       return;
@@ -1048,7 +1052,7 @@ async function syncRetryReviewStatusComment(input: {
   status: RetryFailedHeadResult["status"];
   dryRun: boolean;
 }): Promise<void> {
-  if (!isReviewStatusCommentGithub(input.github)) return;
+  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
   const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.headSha);
   const state = retryStatusCommentState(input.status, processed?.status, processed?.error);
   if (!state) return;
@@ -1108,6 +1112,7 @@ function retryStatusCommentState(
       return "provider_deferred";
     case "skipped_draft":
     case "skipped_canary":
+    case "untrusted_author_public_repo":
     case "skipped_policy":
     case "skipped_license_gate":
     case "skipped_command_stop":
@@ -1296,6 +1301,9 @@ function retryQueuePatchForStatus(input: {
         sessionJobState: "skipped",
         sessionProcessedStatus: "skipped"
       };
+    case "untrusted_author_public_repo":
+      return { state: "blocked_on_proof", lastError: input.status,
+        sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
     case "skipped_license_gate":
       return {
         state: "blocked_on_proof",
@@ -1400,6 +1408,7 @@ export function restoreFailedRetryRowIfNeeded(input: {
   );
   if (current?.status === "posted") return;
   if (current?.status === "failed") return;
+  if (current?.status === "skipped" && current.error === "untrusted_author_public_repo") return;
 
   const restoreAsProviderCooldown =
     input.retryTarget.previousStatus === "skipped" &&
@@ -1480,6 +1489,24 @@ export interface ReviewPullInput {
   licenseAdmission?: ProductionLicenseAdmission;
 }
 
+export function recordPublicRepoAuthorGateSkip(input: {
+  config: BotConfig; state: ReviewStateStore; repo: string; pull: PullRequestSummary;
+}, visibility = visibilityFromPullSummary(input.pull)): boolean {
+  if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility)) return false;
+  const reason = "untrusted_author_public_repo";
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
+  mkdirSync(evidenceDir, { recursive: true });
+  writeRedactedJson(join(evidenceDir, "author-gate.json"), { reason, visibility });
+  // Preserve an existing posted review as historical truth.
+  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status !== "posted") {
+    input.state.recordProcessed({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
+      status: "skipped", error: reason });
+    input.state.recordReviewReadiness({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
+      state: "skipped", reason });
+  }
+  return true;
+}
+
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
   const repoPolicy = resolveRepoProfile(config, repo);
@@ -1493,6 +1520,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   )) return "skipped_canary";
   if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
   const visibility = visibilityFromPullSummary(pull);
+  if (recordPublicRepoAuthorGateSkip({ config, state, repo, pull }, visibility)) return "untrusted_author_public_repo";
   const visibilityDecision = authorizeAdmissionForVisibility(
     input.licenseAdmission,
     visibility,
@@ -2774,7 +2802,7 @@ async function postDirectReviewCompletedStatusComment(input: {
   processed: { reviewUrl?: string };
   now: Date;
 }): Promise<boolean> {
-  if (!isReviewStatusCommentGithub(input.github)) return false;
+  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return false;
   const result = await postReviewStatusComment({
     enabled: input.config.reviewStatusComment?.enabled ?? false,
     dryRun: input.dryRun,
@@ -2904,12 +2932,6 @@ function visibilityFromRepositorySummary(repoMetadata: RepositorySummary): "publ
   return "unknown";
 }
 
-function visibilityFromPullSummary(pull: PullRequestSummary): "public" | "private" | "unknown" {
-  const repo = pull.base.repo;
-  if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
-  if (repo.visibility === "public" || repo.private === false) return "public";
-  return "unknown";
-}
 
 async function getRepoVisibilityForLicenseGate(github: GitHubApi, repo: string): Promise<"public" | "private" | "unknown"> {
   const now = Date.now();
