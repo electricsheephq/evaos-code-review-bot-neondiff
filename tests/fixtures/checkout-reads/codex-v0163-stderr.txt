@@ -1,0 +1,10 @@
+OpenAI Codex v0.163.0
+exec
+/bin/zsh -lc 'env | cut -d= -f1 | sort' in /fixture/repo
+ succeeded in 0ms:
+CODEX_SANDBOX_NETWORK_DISABLED
+
+codex
+Fixture: captured env-policy probe exec block, path sanitized; variable names only.
+tokens used
+23 517

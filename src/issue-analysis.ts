@@ -12,6 +12,7 @@ import {
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { writeSecureFileSync } from "./temp-files.js";
+import type { DroppedFinding, FindingEvidenceRef } from "./types.js";
 
 export const ISSUE_ANALYSIS_SCHEMA_VERSION = 3;
 
@@ -771,29 +772,32 @@ export function assertIssueAnalysisSourceRefs(input: {
     if (source.repo.toLowerCase() !== expectedRepo || source.sha.toLowerCase() !== expectedSha) {
       throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] identity mismatch`);
     }
-    const candidate = resolve(workspaceRoot, source.path);
-    let resolvedPath: string;
-    try {
-      resolvedPath = realpathSync(candidate);
-    } catch {
-      throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] path does not exist`);
+    const failure = verifySourceRef(workspaceRoot, source);
+    if (failure) {
+      const messages = { path_missing: "path does not exist", path_escapes: "path escapes workspace",
+        non_canonical: "path is not canonical", range_out_of_bounds: "line range is out of bounds",
+        excerpt_mismatch: "excerpt does not match source" };
+      throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] ${messages[failure]}`);
     }
+  }
+}
+
+/** Verify one PR-head source citation; invalid references never fail the whole review. */
+export function verifySourceRef(workspacePath: string, source: FindingEvidenceRef): Exclude<DroppedFinding["evidenceFailure"], "malformed" | undefined> | null {
+  try {
+    const workspaceRoot = realpathSync(workspacePath);
+    const resolvedPath = realpathSync(resolve(workspaceRoot, source.path));
     const relativePath = relative(workspaceRoot, resolvedPath);
-    if (!relativePath || relativePath.startsWith("..") || resolve(workspaceRoot, relativePath) !== resolvedPath) {
-      throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] path escapes workspace`);
-    }
-    if (relativePath.replaceAll("\\", "/") !== source.path.replace(/^\.\//, "")) {
-      throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] path is not canonical`);
-    }
+    if (!relativePath || relativePath.startsWith("..") || resolve(workspaceRoot, relativePath) !== resolvedPath) return "path_escapes";
+    if (relativePath.replaceAll("\\", "/") !== source.path.replace(/^\.\//, "")) return "non_canonical";
     const lines = readFileSync(resolvedPath, "utf8").replace(/\r\n?/g, "\n").split("\n");
-    if (source.endLine > lines.length) {
-      throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] line range is out of bounds`);
-    }
+    if (!Number.isInteger(source.startLine) || source.startLine < 1 || !Number.isInteger(source.endLine) ||
+      source.endLine < source.startLine || source.endLine > lines.length) return "range_out_of_bounds";
     const selected = lines.slice(source.startLine - 1, source.endLine).join("\n");
     const excerpt = source.excerpt.replace(/\r\n?/g, "\n").trim();
-    if (!excerpt || !selected.includes(excerpt)) {
-      throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] excerpt does not match source`);
-    }
+    return excerpt && selected.includes(excerpt) ? null : "excerpt_mismatch";
+  } catch {
+    return "path_missing";
   }
 }
 

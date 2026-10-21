@@ -79,6 +79,7 @@
     "codexRuntime": {
       "type": "object",
       "properties": {
+        "checkoutReads": { "type": "boolean", "default": false },
         "enabled": { "type": "boolean", "default": false },
         "cliPath": { "type": "string", "pattern": "\\S", "default": "codex" },
         "model": { "type": "string", "pattern": "\\S", "default": "gpt-6.1-sol" },

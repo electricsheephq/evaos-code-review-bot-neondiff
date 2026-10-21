@@ -1984,6 +1984,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pull,
       files: filesForPrompt,
+      ...(config.codexRuntime?.enabled && config.codexRuntime.checkoutReads === true ? { checkoutAccess: "shell_read_only" as const } : {}),
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(reviewLensContext.packet ? { reviewLensPacket: reviewLensContext.packet } : {}),
@@ -2153,7 +2154,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
       files: reviewFiles,
-      droppedFromSchema: zcodeResult.droppedFromSchema,
+      droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
       repoMemoryFalsePositives: repoMemory.falsePositives,
@@ -4332,7 +4333,7 @@ async function runReviewWithContextBudget(input: {
           execution.result.degradedRecovery,
           input.config.reviewGate?.retryDegradedConfidencePenalty
         ),
-        dropped: execution.result.droppedFromSchema,
+        dropped: [...execution.result.droppedFromSchema, ...(execution.result.droppedFromEvidence ?? [])],
         runtime: execution.result.runtime
       };
     }
@@ -4421,6 +4422,7 @@ async function runChunkedZCodeReview(input: {
   const startedAt = new Date();
   const findings: ZCodeReviewResult["findings"] = [];
   const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
+  const droppedFromEvidence: NonNullable<ZCodeReviewResult["droppedFromEvidence"]> = [];
   const rawResponses: Array<{ index: number; rawResponse: string }> = [];
   const modelSummaries: ReviewModelSummary[] = [];
   const runtimeNotes: string[] = [`Context budget chunked review executed in ${input.contextBudget.chunks.length} chunks.`];
@@ -4493,6 +4495,7 @@ async function runChunkedZCodeReview(input: {
       .map((finding) => ({ ...finding, reason: "chunk_path_mismatch" }));
     findings.push(...chunkFindings);
     droppedFromSchema.push(...result.droppedFromSchema, ...droppedCrossChunkFindings);
+    droppedFromEvidence.push(...(result.droppedFromEvidence ?? []));
     rawResponses.push({ index: chunk.index, rawResponse: result.rawResponse });
     if (result.summary) modelSummaries.push(result.summary);
     attempts += result.attempts;
@@ -4513,6 +4516,7 @@ async function runChunkedZCodeReview(input: {
       findings,
       summary: mergeReviewModelSummaries(modelSummaries),
       droppedFromSchema,
+      ...(input.config.codexRuntime?.checkoutReads === true ? { droppedFromEvidence } : {}),
       rawResponse: JSON.stringify({ findings, chunks: rawResponses }),
       attempts,
       degradedRecovery,
@@ -4562,6 +4566,7 @@ async function runConfiguredReview(input: {
   const startedAt = new Date();
   const result = await runCodexReview({
     lcmReviewAssessment: input.lcmReviewAssessment,
+    checkoutReads: input.config.codexRuntime.checkoutReads === true,
     cwd: input.worktreePath,
     prompt: input.prompt,
     cliPath: input.config.codexRuntime.cliPath,

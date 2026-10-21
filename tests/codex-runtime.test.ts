@@ -133,6 +133,8 @@ describe("Codex CLI review runtime", () => {
       "-c", "approval_policy=\"never\"",
       "-c", "model_reasoning_effort=\"high\"",
       "--model", "gpt-6.1-sol",
+      "-c", 'shell_environment_policy.inherit="core"',
+      "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","*TOKEN*","*PASSWORD*","*CREDENTIAL*","*AUTH*"]',
       "--sandbox", "read-only",
       "--cd", "/private/tmp/review-worktree",
       "--output-schema", "/private/tmp/evidence/schema.json",

@@ -113,6 +113,7 @@ export interface BotConfig {
   providers?: ProviderRegistryConfig;
   codexRuntime?: {
     enabled: boolean;
+    checkoutReads?: boolean;
     cliPath: string;
     model: string;
     reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
@@ -620,6 +621,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   codexRuntime: {
     enabled: false,
+    checkoutReads: false,
     cliPath: "codex",
     model: "gpt-6.1-sol",
     reasoningEffort: "high",
@@ -650,6 +652,9 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     const gate = fromFile.reviewGate.priorThreadSuppression;
     validatePriorThreadSuppressionConfig(isRecord(gate) ? { enabled: true, ...gate } : gate,
       "config.reviewGate.priorThreadSuppression");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.codexRuntime) && fromFile.codexRuntime.checkoutReads !== undefined) {
+    validateBoolean(fromFile.codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
   merged.github = { ...merged.github };
@@ -827,6 +832,7 @@ function validateConfig(config: BotConfig): void {
   const codexRuntime = config.codexRuntime ?? DEFAULT_CONFIG.codexRuntime!;
   config.codexRuntime = codexRuntime;
   validateBoolean(codexRuntime.enabled, "config.codexRuntime.enabled");
+  if (codexRuntime.checkoutReads !== undefined) validateBoolean(codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
   validateNonEmptyString(codexRuntime.cliPath, "config.codexRuntime.cliPath");
   if (codexRuntime.enabled && codexRuntime.cliPath !== "codex" && !isAbsolute(codexRuntime.cliPath)) {
     throw new Error("config.codexRuntime.cliPath must be codex or absolute when enabled");

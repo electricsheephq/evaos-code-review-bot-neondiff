@@ -426,3 +426,15 @@ Untrusted PRs record `untrusted_author_public_repo` in local state and
 `author-gate.json`, without a model call or GitHub post. Codex reviews write
 `codex-usage.json` with model, reasoning effort, tokens used (null when unavailable),
 and elapsed milliseconds. This evidence does not establish live posting or cost.
+
+## Codex checkout reads
+
+`codexRuntime.checkoutReads` is a boolean, default `false`. With Codex enabled,
+`true` allows read-only PR-head checkout inspection and requires verbatim evidence
+for claims outside changed lines. Unverified citations drop only their finding;
+empty evidence is allowed for diff-only claims. Citations stay in local evidence.
+Every Codex call filters its shell environment to core variables and excludes
+secret-named variables. Every review writes a bounded, detect-only
+`codex-commands.json` audit; flagged commands do not fail the review.
+A review fails closed if the model quotes secret-like text, including in a citation.
+Human-format stderr can imitate exec blocks, so this audit cannot establish execution with certainty.

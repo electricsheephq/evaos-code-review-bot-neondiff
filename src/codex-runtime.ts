@@ -5,6 +5,8 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
+import { verifySourceRef } from "./issue-analysis.js";
+import type { DroppedFinding } from "./types.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import { parseReviewModelSummary, type ZCodeReviewResult } from "./zcode.js";
@@ -98,6 +100,69 @@ export const CODEX_REVIEW_FINDINGS_JSON_SCHEMA = {
   }
 } as const;
 
+export const CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA = {
+  ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+  properties: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties,
+    findings: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties.findings,
+      items: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties.findings.items,
+        required: [...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties.findings.items.required, "evidence"],
+        properties: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties.findings.items.properties,
+          evidence: { type: "array", maxItems: 5, items: {
+            type: "object", additionalProperties: false, required: ["path", "startLine", "endLine", "excerpt"],
+            properties: { path: { type: "string", minLength: 1 }, startLine: { type: "integer", minimum: 1 },
+              endLine: { type: "integer", minimum: 1 }, excerpt: { type: "string", minLength: 1, maxLength: 1_000 } }
+          } }
+        }
+      }
+    }
+  }
+} as const;
+
+/** Detect-only: human-format output can imitate exec blocks; this is not execution proof. */
+export function parseCodexCommands(stderr: string, echoedPrompt?: string): {
+  commands: Array<{ command: string; cwd: string; exitStatus: number | null; flagged: boolean }>;
+  counts: { total: number; flagged: number; blocksSeen: number; blocksRecorded: number };
+  truncated: boolean;
+} {
+  const commands: Array<{ command: string; cwd: string; exitStatus: number | null; flagged: boolean }> = [];
+  const redacted = redactSecrets(stderr).replace(/\r\n/g, "\n");
+  const echo = echoedPrompt === undefined ? undefined : `user\n${redactSecrets(echoedPrompt).replace(/\r\n/g, "\n")}`;
+  const echoAt = echo === undefined ? -1 : redacted.indexOf(echo);
+  const lines = (echo === undefined ? redacted : echoAt < 0 ? "" : redacted.slice(echoAt + echo.length)).split("\n");
+  let blocksSeen = 0, flaggedCount = 0;
+  for (let i = 0; i + 2 < lines.length; i++) {
+    if (lines[i] !== "exec") continue;
+    const header = lines[i + 1]!;
+    const split = header.lastIndexOf(" in /");
+    const status = /^[ \t]*(succeeded|exited (-?\d+)) in [^\n]*:/.exec(lines[i + 2]!);
+    if (split <= 0 || !status) continue;
+    const wrapped = header.slice(0, split);
+    const command = /^(?:\/(?:usr\/)?bin\/)?(?:bash|zsh|sh) -[a-z]*c (['"])(.*)\1$/.exec(wrapped)?.[2] ?? wrapped;
+    const flagged = /[>`]|\$\(|[<>=]\(|(^|[^&])&([^&]|$)/.test(command) || command.split(/&&|\|\||[;|\n]/).some((part) => {
+      const [program, ...args] = (part.trim().match(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g) ?? [])
+        .map(arg => arg.replace(/^(['"])(.*)\1$/, "$2"));
+      if (!["cat", "sed", "nl", "head", "tail", "wc", "ls", "find", "rg", "grep", "git"].includes(program ?? "")) return true;
+      if (program === "git") return args.some(arg => /^(?:-c|--exec-path|--upload-pack)/.test(arg)) ||
+        !["show", "diff", "log", "blame", "grep", "ls-files", "rev-parse", "status"].includes(args[0] ?? "") ||
+        (args[0] === "grep" && args.some(arg => /^(?:-O|--open-files-in-pager)/.test(arg)));
+      if (program === "rg") return args.some(arg => /^--(?:pre|pre-glob|hostname-bin)(?:=|$)/.test(arg));
+      if (program === "sed") {
+        const scriptIndex = args[1] === "-e" ? 2 : 1;
+        return args[0] !== "-n" || !/^(?:\d+|\$)?(?:,(?:\d+|\$))?p$/.test(args[scriptIndex] ?? "") ||
+          args.slice(scriptIndex + 1).some(arg => arg.startsWith("-"));
+      }
+      return program === "find" && args.some(arg => /^-(?:exec|execdir|ok|okdir|delete|fprint.*|fprintf|fls)(?:$|[+;])/.test(arg));
+    });
+    blocksSeen++;
+    if (flagged) flaggedCount++;
+    if (commands.length < 200) commands.push({ command: command.slice(0, 300), cwd: header.slice(split + 4).slice(0, 300),
+      exitStatus: status[1] === "succeeded" ? 0 : Number(status[2]), flagged });
+    i += 2;
+  }
+  return { commands, counts: { total: blocksSeen, flagged: flaggedCount, blocksSeen, blocksRecorded: commands.length },
+    truncated: blocksSeen > commands.length };
+}
+
 export function parseCodexUsage(
   stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number
 ): { model: string; reasoningEffort: CodexReasoningEffort; tokensUsed: number | null; durationMs: number } {
@@ -154,6 +219,8 @@ export function buildCodexExecInvocation(input: {
       "-c", "approval_policy=\"never\"",
       "-c", `model_reasoning_effort=\"${input.reasoningEffort}\"`,
       "--model", input.model,
+      "-c", 'shell_environment_policy.inherit="core"',
+      "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","*TOKEN*","*PASSWORD*","*CREDENTIAL*","*AUTH*"]',
       "--sandbox", "read-only",
       "--cd", input.cwd,
       "--output-schema", input.schemaPath,
@@ -174,31 +241,41 @@ export async function runCodexReview(input: {
   timeoutMs: number;
   maxOutputBytes: number;
   lcmReviewAssessment?: boolean;
+  checkoutReads?: boolean;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
 } = {}): Promise<ZCodeReviewResult> {
+  const schema = input.checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
+  const droppedFromEvidence: DroppedFinding[] = [];
   const result = await runCodexStructuredOutput({
     ...input,
     artifactPrefix: "codex-review",
     schema: input.lcmReviewAssessment ? {
-      ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
-      required: [...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.required, "review_assessment"],
-      properties: { ...CODEX_REVIEW_FINDINGS_JSON_SCHEMA.properties,
+      ...schema,
+      required: [...schema.required, "review_assessment"],
+      properties: { ...schema.properties,
         review_assessment: { anyOf: [LCM_REVIEW_ASSESSMENT_SCHEMA, { type: "null" }] } }
-    } : CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+    } : schema,
     parse: (parsed) => {
       const { findings, dropped } = parseFindings(parsed);
       if (dropped.length > 0) {
         throw new Error(`${dropped.length} finding(s) failed NeonDiff validation`);
       }
-      return { findings, summary: parseReviewModelSummary(parsed, findings.length) };
+      const verifiedFindings = input.checkoutReads ? findings.filter((finding) => {
+        const failure = finding.evidenceMalformed ? "malformed" : (finding.evidence ?? []).map((ref) => verifySourceRef(input.cwd, ref)).find(Boolean);
+        if (!failure) return true;
+        droppedFromEvidence.push({ ...finding, reason: "evidence_unverified", evidenceFailure: failure });
+        return false;
+      }) : findings.map(({ evidence, evidenceMalformed, ...finding }) => finding);
+      return { findings: verifiedFindings, summary: parseReviewModelSummary(parsed, verifiedFindings.length) };
     }
   }, dependencies);
   return {
     findings: result.value.findings,
     summary: result.value.summary,
     droppedFromSchema: [],
+    ...(input.checkoutReads ? { droppedFromEvidence } : {}),
     rawResponse: result.rawResponse,
     attempts: 1,
     degradedRecovery: false
@@ -264,6 +341,11 @@ export async function runCodexStructuredOutput<T>(input: {
   const stderr = redactSecrets(result.stderr);
   writeSecureFileSync(join(input.evidenceDir, `${input.artifactPrefix}-stdout.txt`), stdout);
   writeSecureFileSync(join(input.evidenceDir, `${input.artifactPrefix}-stderr.txt`), stderr);
+  if (input.artifactPrefix === "codex-review") {
+    try {
+      writeSecureFileSync(join(input.evidenceDir, "codex-commands.json"), `${JSON.stringify(parseCodexCommands(stderr, input.prompt), null, 2)}\n`);
+    } catch { /* Audit is detect-only and must never fail a review. */ }
+  }
 
   if (before !== after) {
     throw new Error("codex_runtime_unsafe_write_attempt: checkout state changed during read-only review");
