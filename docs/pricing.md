@@ -16,6 +16,8 @@ credits, unlimited SaaS inference, or bundled provider tokens.
 Prices are flat: no per-seat charges. Each license activates one review worker
 machine, and every developer whose pull requests that worker reviews is covered;
 Team covers the private repositories of one GitHub organization.
+One license covers one GitHub organization or user account in CI, across all
+its repositories.
 
 | Plan | Price | Best For | Private Repos | Commercial Use | Auto-Updates | Provider Credits |
 | --- | ---: | --- | --- | --- | --- | --- |

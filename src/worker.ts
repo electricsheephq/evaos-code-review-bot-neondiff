@@ -37,6 +37,7 @@ import {
 import { GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
+import { activateCiLicenseForReview } from "./ci-mode.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -2684,7 +2685,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
 async function resolveScopedReviewAdmission(config: BotConfig, github: GitHubApi, repo: string): Promise<ProductionLicenseAdmission> {
   const visibility = visibilityFromRepositorySummary(await github.getRepo(repo));
-  const result = await requireActiveProductionLicense({ operation: "review_cycle", config: config.license!, repo, visibility });
+  const machineId = await activateCiLicenseForReview(config, repo, visibility);
+  const result = await requireActiveProductionLicense({ operation: "review_cycle", config: config.license!, repo, visibility, machineId });
   if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
   return result.admission;
 }

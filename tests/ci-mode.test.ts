@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCiConfig, readCiPullContext } from "../src/ci-mode.js";
+import { buildCiConfig, ciLicenseMachineId, readCiPullContext } from "../src/ci-mode.js";
 import { runOnce } from "../src/worker.js";
 import { loadConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
@@ -117,6 +117,150 @@ describe("CI review", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+});
+
+describe("CI owner license admission", () => {
+  const fakeKey = ["nd", "live", "ci_fake_license_1173"].join("_");
+  const conflict = "this license is active for a different GitHub organization or account; deactivate it there or use another license";
+
+  function fixture(repo = "owner/first", ownerId: string | undefined = "123") {
+    const env = {
+      ...context({ pull_request: { number: 1, head: { sha } } }),
+      GITHUB_REPOSITORY: repo,
+      GITHUB_REPOSITORY_OWNER_ID: ownerId,
+      NEONDIFF_LICENSE_KEY_FILE: ""
+    };
+    env.NEONDIFF_LICENSE_KEY_FILE = join(env.RUNNER_TEMP, "license.key");
+    writeFileSync(env.NEONDIFF_LICENSE_KEY_FILE, fakeKey + "\n", { mode: 0o600 });
+    const ciConfig = buildCiConfig(loadConfig(), readCiPullContext(env), env);
+    return { env, ciConfig, options: {
+      ciConfig, repo, pullNumber: 1, explicitPullReview: { repo, pullNumber: 1 },
+      expectedHeadSha: sha, dryRun: true, useZCode: false
+    } };
+  }
+
+  function apiDouble() {
+    let seatOwner: string | undefined;
+    const requests: { path: string; repo: string; machineId: string }[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const path = new URL(String(url)).pathname;
+      requests.push({ path, repo: body.repo, machineId: body.machineId });
+      if (path.endsWith("/activate") && (!seatOwner || seatOwner === body.machineId)) seatOwner = body.machineId;
+      if (seatOwner !== body.machineId) return new Response(JSON.stringify({ status: "seat_exhausted", detail: fakeKey }), { status: 409 });
+      return new Response(JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true, updateEntitlement: true }));
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    return { requests, fetchImpl };
+  }
+
+  function github(visibility: string | undefined = "private") {
+    vi.spyOn(GitHubApi.prototype, "getRepo").mockResolvedValue({ visibility } as any);
+    // A draft stops immediately after real admission, without checkout/provider/posting.
+    vi.spyOn(GitHubApi.prototype, "getPull").mockResolvedValue({ number: 1, draft: true, head: { sha } } as any);
+  }
+
+  function captureOutput() {
+    const captured: string[] = [];
+    for (const method of ["log", "warn", "error"] as const) vi.spyOn(console, method).mockImplementation((...args) => { captured.push(args.map(String).join(" ")); });
+    return captured;
+  }
+
+  async function rejectedReview(options: Parameters<typeof runOnce>[0]) {
+    const message = await runOnce(options).then(() => "unexpected success", (error: Error) => error.message);
+    expect(message).not.toBe("unexpected success");
+    expect(message).not.toContain(fakeKey);
+    return message;
+  }
+
+  it("hashes the numeric owner ID deterministically into a 43-character thumbprint", () => {
+    const id = ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: "123" });
+    expect(id).toBe("-WeFVQbDOhHofRAh-kU-0dNlD1Rfw4e4lv9mZFr-jaM");
+    expect(id).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(id).toBe(ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: "123", GITHUB_REPOSITORY_OWNER: "renamed" }));
+    expect(id).not.toBe(ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: "124" }));
+    for (const value of [undefined, "", "0", "-1", "1.2", "1e3", " 123", "123\n", "user"]) {
+      expect(ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: value })).toBeUndefined();
+    }
+  });
+
+  it("activates then validates two fresh runs under one owner, refusing a different owner", async () => {
+    const output = captureOutput(); github();
+    const { requests } = apiDouble();
+    for (const repo of ["owner/first", "renamed/second"]) {
+      const { ciConfig, env, options } = fixture(repo);
+      expect(ciConfig.license).toMatchObject({ storageBackend: "file", keyPath: env.NEONDIFF_LICENSE_KEY_FILE, cachePath: join(env.RUNNER_TEMP, "neondiff-ci/license/cache.json") });
+      expect(await runOnce(options)).toMatchObject({ skippedDraft: 1, failed: 0 });
+      expect(readFileSync(ciConfig.license!.cachePath, "utf8")).not.toContain(fakeKey);
+      expect(readFileSync(env.NEONDIFF_LICENSE_KEY_FILE, "utf8")).toBe(fakeKey + "\n");
+    }
+    expect(requests.map((r) => r.path)).toEqual(["/v1/license/activate", "/v1/license/validate", "/v1/license/activate", "/v1/license/validate"]);
+    expect(new Set(requests.map((r) => r.machineId))).toEqual(new Set([ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: "123" })]));
+    expect(requests.map((r) => r.repo)).toEqual(["owner/first", "owner/first", "renamed/second", "renamed/second"]);
+    const other = fixture("other/repo", "124");
+    expect(await rejectedReview(other.options)).toContain(conflict);
+    expect(requests.map((r) => r.path).slice(4)).toEqual(["/v1/license/activate"]);
+    expect(existsSync(other.ciConfig.license!.cachePath)).toBe(false);
+    expect(output.join("\n")).not.toContain(fakeKey);
+  });
+
+  it("makes no license call or key read for a public repo, even with an unsafe file and no owner ID", async () => {
+    const output = captureOutput(); github("public");
+    const { fetchImpl } = apiDouble();
+    const { env, options } = fixture("owner/public");
+    env.GITHUB_REPOSITORY_OWNER_ID = undefined;
+    options.ciConfig = buildCiConfig(loadConfig(), readCiPullContext(env), env);
+    chmodSync(env.NEONDIFF_LICENSE_KEY_FILE, 0o644);
+    expect(await runOnce(options)).toMatchObject({ skippedDraft: 1, failed: 0 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(output.join("\n")).not.toContain(fakeKey);
+  });
+
+  it("fails closed for private/internal/unknown repos without the file variable, ignoring raw-key env input", async () => {
+    const output = captureOutput(); const { fetchImpl } = apiDouble();
+    const metadata = vi.spyOn(GitHubApi.prototype, "getRepo");
+    vi.stubEnv("NEONDIFF_LICENSE_KEY", fakeKey);
+    for (const visibility of ["private", "internal", undefined]) {
+      metadata.mockResolvedValue({ visibility } as any);
+      const { env, options } = fixture();
+      env.NEONDIFF_LICENSE_KEY_FILE = "";
+      options.ciConfig = buildCiConfig(loadConfig(), readCiPullContext(env), env);
+      expect(await rejectedReview(options)).toMatch(/NEONDIFF_LICENSE_KEY_FILE/);
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(output.join("\n")).not.toContain(fakeKey);
+  });
+
+  it.each(["unsafe-mode", "symlink", "missing-file", "missing-owner"])("refuses %s before license traffic", async (failure) => {
+    const output = captureOutput(); github(); const { fetchImpl } = apiDouble();
+    const { env, options } = fixture();
+    let expected = /license secret/;
+    if (failure === "unsafe-mode") chmodSync(env.NEONDIFF_LICENSE_KEY_FILE, 0o644);
+    if (failure === "symlink") {
+      symlinkSync(env.NEONDIFF_LICENSE_KEY_FILE, join(env.RUNNER_TEMP, "symlink.key"));
+      env.NEONDIFF_LICENSE_KEY_FILE = join(env.RUNNER_TEMP, "symlink.key");
+    }
+    if (failure === "missing-file") { env.NEONDIFF_LICENSE_KEY_FILE += ".missing"; expected = /NEONDIFF_LICENSE_KEY_FILE/; }
+    if (failure === "missing-owner") { env.GITHUB_REPOSITORY_OWNER_ID = undefined; expected = /GITHUB_REPOSITORY_OWNER_ID/; }
+    options.ciConfig = buildCiConfig(loadConfig(), readCiPullContext(env), env);
+    expect(await rejectedReview(options)).toMatch(expected);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(output.join("\n")).not.toContain(fakeKey);
+  });
+
+  it("fails unknown visibility closed even with a live entitlement", async () => {
+    const output = captureOutput(); github("unknown"); const { requests } = apiDouble(); const { options } = fixture();
+    expect(await rejectedReview(options)).toMatch(/visibility is unknown/);
+    expect(requests.map((r) => r.path)).toEqual(["/v1/license/activate", "/v1/license/validate"]);
+    expect(output.join("\n")).not.toContain(fakeKey);
+  });
+
+  it("redacts a submitted key from activation network errors and captured output", async () => {
+    const output = captureOutput(); github(); const { options } = fixture();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network " + fakeKey); }));
+    expect(await rejectedReview(options)).toContain("network");
+    expect(output.join("\n")).not.toContain(fakeKey);
+  });
 });
 
 
