@@ -23,6 +23,7 @@
   },
   "_reviewGateComment": "Deterministic post-model gate plus public review-event selection. trusted_command_only is the safe default; automatic is explicit legacy compatibility only. See docs/neondiff-config.md.",
   "reviewGate": {
+    "priorThreadSuppression": { "enabled": true },
     "maxInlineComments": 25,
     "reviewEventPolicy": {
       "mode": "trusted_command_only"

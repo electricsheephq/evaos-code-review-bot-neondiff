@@ -640,7 +640,7 @@ export class GitHubApi {
     }
   }
 
-  private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
+  isBotAuthoredComment(comment: IssueCommentSummary): boolean {
     return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
   }
 

@@ -55,6 +55,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { collectAnsweredThreads, type AnsweredThread } from "./prior-thread-suppression.js";
 import { buildFindingFingerprint } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
@@ -2129,6 +2130,26 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       zcodeResult.degradedRecovery,
       config.reviewGate?.retryDegradedConfidencePenalty
     );
+    const priorThreadsEnabled = config.reviewGate?.priorThreadSuppression?.enabled ?? true;
+    let answeredThreads: AnsweredThread[] | undefined;
+    const priorThreadEvidence = {
+      enabled: priorThreadsEnabled, commentsRead: 0, ownRoots: 0, answeredRoots: 0,
+      suppressedFindings: 0, matches: [] as Array<{ findingTitle: string | undefined; threadId: number | undefined }>,
+      errorClass: undefined as string | undefined
+    };
+    if (priorThreadsEnabled) {
+      try {
+        const priorComments = await github.listPullReviewComments(repo, pull.number);
+        priorThreadEvidence.commentsRead = priorComments.length;
+        const isOwn = (comment: (typeof priorComments)[number]) => github.isBotAuthoredComment(comment);
+        priorThreadEvidence.ownRoots = priorComments.filter((comment) => comment.in_reply_to_id == null && isOwn(comment)).length;
+        answeredThreads = collectAnsweredThreads(priorComments, isOwn);
+        priorThreadEvidence.answeredRoots = answeredThreads.length;
+      } catch (error) {
+        answeredThreads = undefined;
+        priorThreadEvidence.errorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
       files: reviewFiles,
@@ -2136,6 +2157,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
       repoMemoryFalsePositives: repoMemory.falsePositives,
+      answeredThreads,
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
       ...(config.reviewGate?.requestChangesConfidenceFloors
         ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
@@ -2144,6 +2166,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
         : {})
     });
+    priorThreadEvidence.matches = gate.dropped.filter((finding) => finding.reason === "prior_thread_answered")
+      .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId }));
+    priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
+    writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.

@@ -199,6 +199,46 @@ describe("worker context budget preflight", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it.each(["answered", "throws", "missing", "disabled"])("prior threads: %s posts and records fail-open evidence", async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-prior-threads-")); roots.push(root);
+    const config = minimalConfig(root);
+    if (mode === "disabled") config.reviewGate = { maxInlineComments: 25, reviewEventPolicy: { mode: "trusted_command_only" },
+      priorThreadSuppression: { enabled: false } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1164, "a".repeat(40));
+    const file = pullFile("src/prior-threads.ts", 20);
+    const candidate = finding(file.filename, "Rollback loses saved records");
+    zcodeFindingsByPath.set(file.filename, [candidate]);
+    const comments = [
+      { id: 42, path: file.filename, line: 1, body: `**P2: ${candidate.title}**\n\n${candidate.body}`,
+        user: { login: "evaos-code-review-bot[bot]", type: "Bot" } },
+      { id: 43, in_reply_to_id: 42, user: { login: "human", type: "User" } }
+    ];
+    const listPullReviewComments = vi.fn(async () => {
+      if (mode === "throws") throw new TypeError("injected comment read failure");
+      return comments;
+    });
+    const github = githubForPull(pull, [file]);
+    if (mode !== "missing") Object.assign(github, { listPullReviewComments,
+      isBotAuthoredComment: (comment: typeof comments[number]) => comment.user.type === "Bot" && comment.user.login === "evaos-code-review-bot[bot]" });
+    try {
+      expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
+      expect(createdReviews).toHaveLength(1);
+      expect(createdReviews[0]?.comments).toHaveLength(mode === "answered" ? 0 : 1);
+      const path = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha, "prior-threads.json");
+      const evidence = JSON.parse(readFileSync(path, "utf8"));
+      if (mode === "answered") {
+        expect(evidence).toMatchObject({ commentsRead: 2, ownRoots: 1, answeredRoots: 1, suppressedFindings: 1,
+          matches: [{ findingTitle: candidate.title, threadId: 42 }] });
+      } else if (mode === "disabled") {
+        expect(listPullReviewComments).not.toHaveBeenCalled();
+        expect(evidence).toMatchObject({ enabled: false, commentsRead: 0, suppressedFindings: 0 });
+      } else {
+        expect(evidence).toMatchObject({ errorClass: "TypeError", suppressedFindings: 0, matches: [] });
+      }
+    } finally { state.close(); }
+  });
+
   it("completes a scoped dry run over an existing activation baseline", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-scoped-baseline-override-"));
     roots.push(root);

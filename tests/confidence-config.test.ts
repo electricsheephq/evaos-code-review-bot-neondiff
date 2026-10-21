@@ -268,3 +268,15 @@ function calibratedPublicDisplay() {
     minWilsonLowerBound: 0.95
   };
 }
+
+
+describe("prior-thread suppression config", () => {
+  it("defaults on, permits disabling and rejects malformed objects and unknown keys", () => {
+    expect(loadConfigFromObject({}).reviewGate?.priorThreadSuppression).toEqual({ enabled: true });
+    expect(loadConfigFromObject({ reviewGate: { priorThreadSuppression: { enabled: false } } }).reviewGate?.priorThreadSuppression)
+      .toEqual({ enabled: false });
+    for (const value of [false, null, { enabled: "true" }, { enabled: true, extra: true }]) {
+      expect(() => loadConfigFromObject({ reviewGate: { priorThreadSuppression: value } })).toThrow(/priorThreadSuppression/);
+    }
+  });
+});

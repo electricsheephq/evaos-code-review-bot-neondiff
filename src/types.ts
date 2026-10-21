@@ -32,6 +32,7 @@ export interface Finding {
 export interface DroppedFinding extends Partial<Finding> {
   reason: string;
   fingerprint?: string;
+  threadId?: number;
 }
 
 export interface PullFilePatch {
@@ -57,6 +58,8 @@ export interface PullReviewComment {
   line?: number | null;
   original_line?: number | null;
   in_reply_to_id?: number | null;
+  commit_id?: string;
+  created_at?: string;
   body?: string | null;
   user?: {
     login: string;

@@ -1,4 +1,5 @@
 import { validateFindingLocations } from "./diff.js";
+import { matchPriorThread, type AnsweredThread } from "./prior-thread-suppression.js";
 import {
   buildFindingFingerprint,
   decideReviewEvent,
@@ -49,6 +50,7 @@ export function applyDeterministicReviewGate(input: {
   maxInlineComments?: number;
   repoMemoryFalsePositiveFingerprints?: string[];
   repoMemoryFalsePositives?: RepoMemoryFalsePositiveEntry[];
+  answeredThreads?: AnsweredThread[];
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
   categoryPrecisionFloors?: CategoryPrecisionFloors;
@@ -60,7 +62,14 @@ export function applyDeterministicReviewGate(input: {
     input.repoMemoryFalsePositiveFingerprints ?? [],
     input.repoMemoryFalsePositives ?? []
   );
-  const normalized = normalizeFindingsForReview(repoMemoryFiltered.findings, {
+  const priorThreadDrops: DroppedFinding[] = [];
+  const priorThreadFiltered = repoMemoryFiltered.findings.filter((finding) => {
+    const thread = matchPriorThread(finding, input.answeredThreads ?? []);
+    if (!thread) return true;
+    priorThreadDrops.push({ ...finding, reason: "prior_thread_answered", threadId: thread.id });
+    return false;
+  });
+  const normalized = normalizeFindingsForReview(priorThreadFiltered, {
     maxInlineComments: input.maxInlineComments,
     publicConfidencePolicy: input.publicConfidencePolicy
   });
@@ -73,6 +82,7 @@ export function applyDeterministicReviewGate(input: {
     ...(input.droppedFromSchema ?? []),
     ...located.dropped,
     ...repoMemoryFiltered.dropped,
+    ...priorThreadDrops,
     ...normalized.dropped
   ].map((finding) => sanitizeDroppedFinding(finding, input.publicConfidencePolicy));
   const comments = normalized.comments;

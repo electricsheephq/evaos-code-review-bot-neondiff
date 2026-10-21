@@ -262,6 +262,7 @@ export const DEFAULT_PUBLIC_REPO_AUTHOR_GATE: PublicRepoAuthorGateConfig = {
 
 export interface ReviewGateConfig {
   publicRepoAuthorGate?: PublicRepoAuthorGateConfig;
+  priorThreadSuppression?: { enabled: boolean };
   /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
   maxInlineComments: number;
   /** The public GitHub event selection policy; defaults to trusted owner authorization only. */
@@ -404,6 +405,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   reviewGate: {
     publicRepoAuthorGate: DEFAULT_PUBLIC_REPO_AUTHOR_GATE,
+    priorThreadSuppression: { enabled: true },
     maxInlineComments: 25,
     reviewEventPolicy: {
       mode: "trusted_command_only"
@@ -639,6 +641,11 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     const gate = fromFile.reviewGate.publicRepoAuthorGate;
     validatePublicRepoAuthorGateConfig(isRecord(gate) ? { ...DEFAULT_PUBLIC_REPO_AUTHOR_GATE, ...gate } : gate,
       "config.reviewGate.publicRepoAuthorGate");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.priorThreadSuppression !== undefined) {
+    const gate = fromFile.reviewGate.priorThreadSuppression;
+    validatePriorThreadSuppressionConfig(isRecord(gate) ? { enabled: true, ...gate } : gate,
+      "config.reviewGate.priorThreadSuppression");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
   merged.github = { ...merged.github };
@@ -923,6 +930,9 @@ function validatePublicCommandsConfig(value: unknown, label: string): void {
 
 function validateReviewGateConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.priorThreadSuppression !== undefined) {
+    validatePriorThreadSuppressionConfig(value.priorThreadSuppression, `${label}.priorThreadSuppression`);
+  }
   if (value.publicRepoAuthorGate !== undefined) validatePublicRepoAuthorGateConfig(value.publicRepoAuthorGate, `${label}.publicRepoAuthorGate`);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
   validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
@@ -955,6 +965,14 @@ function validateReviewGateConfig(value: unknown, label: string): void {
     }
   }
   if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
+}
+
+function validatePriorThreadSuppressionConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "enabled") throw new Error(`${label} has unknown key "${key}"`);
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
 }
 
 function validatePublicRepoAuthorGateConfig(value: unknown, label: string): void {

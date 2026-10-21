@@ -260,6 +260,18 @@ immediately before posting and again after posting. A head change during the POS
 `head_changed_during_post` and is not claimed as current-head proof. Settings-preview evidence shows
 the configured mode only; it does not claim that a current authorization exists.
 
+#### `priorThreadSuppression`
+
+`reviewGate.priorThreadSuppression.enabled` defaults to `true`. Before posting,
+NeonDiff reads its own inline threads from GitHub and suppresses matching P1–P3
+findings when a human has replied and the root still has a current-head `line`.
+Matches require the same path, a line distance of at most 10, and title-word
+Jaccard similarity of at least 0.5 or body-word similarity of at least 0.4.
+P0 findings are never suppressed. Read failures retain the findings; set
+`enabled: false` to disable the read and suppression. The object accepts only
+the boolean `enabled` key. `prior-threads.json` records counts and matched thread
+IDs in review evidence. Raw LCM assessments and schema-drop counts are unchanged.
+
 #### `selfConsistency`
 
 `config.reviewGate.selfConsistency` adds an opt-in second model draw that verifies or refutes each
