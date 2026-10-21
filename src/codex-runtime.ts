@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
@@ -97,6 +98,24 @@ export const CODEX_REVIEW_FINDINGS_JSON_SCHEMA = {
   }
 } as const;
 
+export function parseCodexUsage(
+  stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number
+): { model: string; reasoningEffort: CodexReasoningEffort; tokensUsed: number | null; durationMs: number } {
+  const model = /^model:[ \t]*(gpt-[a-z0-9._-]+)[ \t]*$/m.exec(stderr)?.[1];
+  const effort = /^reasoning effort:[ \t]*(low|medium|high|xhigh|max)[ \t]*$/m.exec(stderr)?.[1];
+  // Codex groups thousands with a locale separator: a space, U+00A0, U+202F or a comma.
+  // The footer is printed last; an echoed prompt can contain an earlier token-shaped stanza.
+  const rawTokens = [...stderr.matchAll(/^tokens used[ \t]*\r?\n([0-9][0-9 \u00a0\u202f,]*)[ \t]*\r?$/gm)].at(-1)?.[1]?.trim();
+  const tokens = rawTokens && /^(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f,][0-9]{3})+)$/.test(rawTokens)
+    ? Number(rawTokens.replace(/[ \u00a0\u202f,]/g, "")) : NaN;
+  return {
+    model: model && !containsSecretLikeText(model) ? model : redactSecrets(fallback.model),
+    reasoningEffort: (effort ?? fallback.reasoningEffort) as CodexReasoningEffort,
+    tokensUsed: Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : null,
+    durationMs
+  };
+}
+
 export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of CODEX_ENV_ALLOWLIST) {
@@ -104,6 +123,12 @@ export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
     if (typeof value === "string" && value.length > 0) env[key] = value;
   }
   if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) env.CODEX_API_KEY = env.OPENAI_API_KEY;
+  // The bare `codex` command resolves through PATH from the PR worktree cwd; relative or empty
+  // entries would resolve a PR-controlled binary.
+  if (env.PATH) {
+    const safePath = env.PATH.split(delimiter).filter((entry) => entry.length > 0 && isAbsolute(entry)).join(delimiter);
+    if (safePath) env.PATH = safePath; else delete env.PATH;
+  }
   return env;
 }
 
@@ -192,6 +217,8 @@ export async function runCodexStructuredOutput<T>(input: {
   artifactPrefix: string;
   schema: unknown;
   parse: (value: unknown) => T;
+  /** Where this call's usage file goes when its own evidence dir is scratch (defaults to evidenceDir). */
+  usageEvidenceDir?: string;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
@@ -222,7 +249,16 @@ export async function runCodexStructuredOutput<T>(input: {
   };
   const captureWorktreeState = dependencies.captureWorktreeState ?? captureGitWorktreeState;
   const before = captureWorktreeState(input.cwd);
+  const startedAt = Date.now();
   const result = await (dependencies.runProcess ?? runCodexProcess)(invocation);
+  // Every Codex call records its usage, so a review's cost is the sum of its codex-usage*.json files.
+  const usageDir = input.usageEvidenceDir ?? input.evidenceDir;
+  mkdirSync(usageDir, { recursive: true });
+  const usageFile = input.artifactPrefix === "codex-review"
+    ? "codex-usage.json"
+    : `codex-usage-${input.artifactPrefix}-${randomBytes(4).toString("hex")}.json`;
+  writeSecureFileSync(join(usageDir, usageFile),
+    `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt), null, 2)}\n`);
   const after = captureWorktreeState(input.cwd);
   const stdout = redactSecrets(result.stdout);
   const stderr = redactSecrets(result.stderr);

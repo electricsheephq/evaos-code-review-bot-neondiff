@@ -445,7 +445,7 @@ describe("operator CLI summaries", () => {
       codexRuntime: {
         enabled: true,
         cliPath: "/usr/bin/codex",
-        model: "gpt-5.6-luna",
+        model: "gpt-6.1-sol",
         reasoningEffort: "max",
         timeoutMs: 30_000,
         maxOutputBytes: 1_048_576

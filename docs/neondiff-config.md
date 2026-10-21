@@ -299,7 +299,7 @@ PR's changed surface instead of a flat FIFO priority (#301, `src/scheduler.ts`).
 
 ### `reviewEnsemble`
 
-`config.reviewEnsemble` controls the experimental four-lane Luna review team. It is absent/default-off
+`config.reviewEnsemble` controls the experimental four-lane review team. It is absent/default-off
 unless explicitly enabled. The ordinary full-diff review remains the canonical anchor; state,
 boundary, and failure specialists add isolated shadow evidence.
 
@@ -397,3 +397,18 @@ Safety invariants:
 - `packetPath` is confined to the prepared PR worktree. Use a generated packet committed or copied into the worktree; v1 does not read host-side absolute sidecar files.
 - A deterministic packet is treated as fresh only when its `source.headSha` matches the prepared PR worktree head. Generic JSON and raw Markdown packets are unknown-freshness by default.
 - This flag accepts packet output; it does not vendor OpenWiki source code, run OpenWiki during live reviews, enable scheduled docs updates, or permit edits outside `openwiki/**`.
+
+### Public repository author gate
+
+`reviewGate.publicRepoAuthorGate` defaults to `mode: "auto"`. In `auto` the gate is on
+whenever Codex is enabled, unless an API key is Codex's only credential: `CODEX_API_KEY` or
+`OPENAI_API_KEY` is set (both are forwarded to the Codex child) and its `CODEX_HOME` holds
+no ChatGPT login file (`auth.json`). A machine signed in to Codex with ChatGPT therefore
+keeps the gate on even when a key is exported; use `mode: "off"` to turn it off. While on,
+public and unknown-visibility PRs require `OWNER`, `MEMBER`, or `COLLABORATOR` association, or an exact,
+case-insensitive login in `allowedLogins` (default `dependabot[bot]`, `renovate[bot]`).
+Private/internal repositories bypass this gate. `on` and `off` force the mode.
+Untrusted PRs record `untrusted_author_public_repo` in local state and
+`author-gate.json`, without a model call or GitHub post. Codex reviews write
+`codex-usage.json` with model, reasoning effort, tokens used (null when unavailable),
+and elapsed milliseconds. This evidence does not establish live posting or cost.

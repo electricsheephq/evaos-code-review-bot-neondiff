@@ -847,7 +847,7 @@ exit 1
       codexRuntime: {
         enabled: true,
         cliPath: "/Users/test/.local/bin/codex",
-        model: "gpt-5.6-luna",
+        model: "gpt-6.1-sol",
         reasoningEffort: "max",
         timeoutMs: 300_000,
         maxOutputBytes: 20 * 1024 * 1024,
@@ -860,7 +860,7 @@ exit 1
       activeRuntime: {
         providerId: "codex-cli-oauth",
         adapter: "codex-cli",
-        model: "gpt-5.6-luna",
+        model: "gpt-6.1-sol",
         auth: "existing-codex-session"
       }
     });
@@ -1573,7 +1573,7 @@ exit 1
         codexRuntime: {
           enabled: true,
           cliPath: "/usr/bin/codex",
-          model: "gpt-5.6-luna",
+          model: "gpt-6.1-sol",
           reasoningEffort: "max",
           timeoutMs: 30_000,
           maxOutputBytes: 1_048_576

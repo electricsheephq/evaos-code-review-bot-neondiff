@@ -56,7 +56,7 @@ const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycl
       codexRuntime: {
         enabled: true,
         cliPath: input.config.codexRuntime?.cliPath ?? "/Users/test/.local/bin/codex",
-        model: input.config.codexRuntime?.model ?? "gpt-5.6-luna",
+        model: input.config.codexRuntime?.model ?? "gpt-6.1-sol",
         reasoningEffort: input.config.codexRuntime?.reasoningEffort ?? "max",
         timeoutMs: input.config.codexRuntime?.timeoutMs ?? 30_000,
         maxOutputBytes: input.config.codexRuntime?.maxOutputBytes ?? 1024 * 1024

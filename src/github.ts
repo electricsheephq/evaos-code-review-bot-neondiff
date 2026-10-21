@@ -767,6 +767,8 @@ export class GitHubApi {
 function normalizePullRequestSummary(pull: PullRequestSummary): PullRequestSummary {
   return {
     ...pull,
+    authorAssociation: pull.author_association,
+    authorLogin: pull.user?.login,
     head: {
       ...pull.head,
       ...(pull.head.repo ? { repo: normalizePullRepoSummary(pull.head.repo) } : {})
