@@ -1,4 +1,5 @@
 {
+  "baseMergeOnlySkip": { "enabled": true, "excludeRepos": [] },
   "pilotRepos": [
     "electricsheephq/lcm-x",
     "electricsheephq/WorldOS",

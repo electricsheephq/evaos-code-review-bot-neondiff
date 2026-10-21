@@ -27,6 +27,7 @@ export interface ReviewHeadGateResult {
   pullNumber: number;
   headSha: string;
   decision: ReviewHeadGateDecision;
+  carriedFromHead?: string;
   processed?: StoredProcessedReviewRecord;
   readiness?: ReviewReadinessRecord;
   queueJobs: ReviewQueueJobRecord[];
@@ -50,7 +51,10 @@ export function buildReviewHeadGate(input: {
   const queueJobs = input.state
     .listReviewQueueJobsForPull({ repo: input.repo, pullNumber: input.pullNumber })
     .filter((job) => job.headSha === input.headSha);
-  const decision = decideReviewHeadGate({ processed, readiness, queueJobs });
+  const carriedFromHead = processed?.status === "skipped" && processed.error === "base_merge_only" ? processed.carriedFromHead : undefined;
+  const anchor = carriedFromHead ? input.state.getProcessedReview(input.repo, input.pullNumber, carriedFromHead) : undefined;
+  const decision = decideReviewHeadGate({ processed, readiness, queueJobs,
+    ...(anchor?.status === "posted" ? { carriedDecision: decisionFromProcessed(anchor) } : {}) });
   const ok = decision === "passed";
   const gates = [
     {
@@ -68,6 +72,7 @@ export function buildReviewHeadGate(input: {
     pullNumber: input.pullNumber,
     headSha: input.headSha,
     decision,
+    ...(carriedFromHead ? { carriedFromHead } : {}),
     ...(processed ? { processed } : {}),
     ...(readiness ? { readiness } : {}),
     queueJobs,
@@ -77,6 +82,7 @@ export function buildReviewHeadGate(input: {
 }
 
 function decideReviewHeadGate(input: {
+  carriedDecision?: ReviewHeadGateDecision;
   processed?: StoredProcessedReviewRecord;
   readiness?: ReviewReadinessRecord;
   queueJobs: ReviewQueueJobRecord[];
@@ -85,7 +91,7 @@ function decideReviewHeadGate(input: {
   if (activeJob && (!input.processed || isQueueJobNewerThanProcessed(activeJob, input.processed))) {
     return decisionFromQueueJob(activeJob);
   }
-  if (input.processed) return decisionFromProcessed(input.processed);
+  if (input.processed) return input.carriedDecision ?? decisionFromProcessed(input.processed);
   const terminalJob = input.queueJobs.find(isTerminalQueueJob);
   if (terminalJob) return decisionFromQueueJob(terminalJob);
   if (input.readiness) return decisionFromReadiness(input.readiness);

@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch } from "./types.js";
@@ -54,6 +54,47 @@ export interface BranchWorktreeInput {
   protectedCheckoutRoot?: string;
   protectedCheckoutRoots?: string[];
   gitCommandTimeoutMs?: number;
+}
+
+/** Fail open to an ordinary review on any unavailable or ambiguous git evidence. */
+export async function computeOwnDiffFingerprint(path: string, baseSha: string, headSha: string): Promise<
+  { fingerprint: string; mergeBase: string } | { error: string }
+> {
+  try {
+    const startedAt = Date.now();
+    const bases = (await run(["-C", path, "merge-base", "--all", baseSha, headSha], 60_000)).stdout.trim().split(/\s+/);
+    if (bases.length !== 1 || !/^[a-f0-9]{40}$/i.test(bases[0]!)) return { error: "ambiguous_merge_base" };
+    const mergeBase = bases[0]!;
+    const fingerprint = await new Promise<string>((resolve, reject) => {
+      const diff = spawn("git", ["-C", path, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--full-index",
+        "--diff-algorithm=myers", mergeBase, headSha], { stdio: ["ignore", "pipe", "ignore"] });
+      const patch = spawn("git", ["-C", path, "patch-id", "--verbatim"], { stdio: ["pipe", "pipe", "ignore"] });
+      let output = "", closed = 0, failed = false;
+      const fail = () => { failed = true; clearTimeout(timer); diff.kill(); patch.kill(); reject(new Error("patch_id_failed")); };
+      const timer = setTimeout(fail, Math.max(1, 60_000 - (Date.now() - startedAt)));
+      const finish = (code: number | null) => {
+        if (code !== 0) fail();
+        if (failed) return;
+        if (++closed === 2) {
+          clearTimeout(timer);
+          const hex = output.trim().split(/\s+/)[0] ?? "";
+          if (/^[a-f0-9]{40}$/i.test(hex)) resolve(`git-patch-id-verbatim-v1:${hex}`);
+          else reject(new Error("empty_or_invalid_patch_id"));
+        }
+      };
+      diff.on("error", fail); patch.on("error", fail); patch.stdin.on("error", fail);
+      diff.on("close", finish); patch.on("close", finish);
+      patch.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); if (output.length > 1024) fail(); });
+      diff.stdout.pipe(patch.stdin);
+    });
+    return { fingerprint, mergeBase };
+  } catch { return { error: "own_diff_fingerprint_failed" }; }
+}
+
+export async function isGitAncestor(path: string, ancestor: string, head: string): Promise<boolean> {
+  try { await run(["-C", path, "merge-base", "--is-ancestor", ancestor, head], 60_000); return true; }
+  catch { return false; }
 }
 
 export async function prepareBranchWorktree(input: BranchWorktreeInput): Promise<PreparedWorktree> {

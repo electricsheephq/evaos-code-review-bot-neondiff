@@ -1,5 +1,7 @@
 # Review Status Comments
 
+A base-merge-only head skipped by automatic review gets no review-status comment.
+
 `evaos-code-review-bot` can post one App-authored status comment per PR head as
 soon as that head enters the durable review queue. The comment is marker-backed
 and edited in place as the head moves through the review lifecycle.

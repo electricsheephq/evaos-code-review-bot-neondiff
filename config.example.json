@@ -1,4 +1,5 @@
 {
+  "baseMergeOnlySkip": { "enabled": true, "excludeRepos": [] },
   "pilotRepos": ["example-org/example-repo"],
   "pollIntervalMs": 90000,
   "skipDrafts": true,

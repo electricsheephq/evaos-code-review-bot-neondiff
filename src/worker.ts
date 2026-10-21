@@ -16,7 +16,7 @@ import {
 import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { computeOwnDiffFingerprint, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -350,6 +350,7 @@ export type ReviewPullResult =
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
+  | "skipped_base_merge_only"
   | "untrusted_author_public_repo"
   | "skipped_license_gate"
   | "skipped_command_stop"
@@ -369,6 +370,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "dry_run":
     case "skipped_processed":
     case "skipped_closed":
+    case "skipped_base_merge_only":
       return true;
     case "failed":
     case "skipped_draft":
@@ -542,6 +544,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             ...(options.explicitPullReview
               ? { explicitPullReview: options.explicitPullReview }
               : {}),
+            ci: Boolean(options.ciConfig),
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             ...(reviewApprovalRevision
@@ -628,6 +631,7 @@ export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, stat
     case "skipped_canary":
       result.skippedCanary += 1;
       return;
+    case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
     case "skipped_policy":
       result.skippedPolicy += 1;
@@ -1097,6 +1101,7 @@ function retryStatusCommentState(
       if (processedStatus === "skipped" && processedError && parseProviderCooldownError(processedError)) {
         return "provider_deferred";
       }
+      if (processedError === "base_merge_only") return undefined;
       if (processedStatus === "skipped") return "skipped";
       return undefined;
     case "skipped_provider_cooldown":
@@ -1116,6 +1121,7 @@ function retryStatusCommentState(
       return "provider_deferred";
     case "skipped_draft":
     case "skipped_canary":
+    case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -1305,6 +1311,8 @@ function retryQueuePatchForStatus(input: {
         sessionJobState: "skipped",
         sessionProcessedStatus: "skipped"
       };
+    case "skipped_base_merge_only":
+      return { state: "stale_retired", lastError: "base_merge_only", sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
     case "untrusted_author_public_repo":
       return { state: "blocked_on_proof", lastError: input.status,
         sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
@@ -1481,6 +1489,7 @@ export interface ReviewPullInput {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
+  ci?: boolean;
   explicitPullReview?: ExplicitPullReviewScope;
   dryRun: boolean;
   useZCode: boolean;
@@ -1488,6 +1497,8 @@ export interface ReviewPullInput {
   sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run" | "retry_failed_head";
+  manualQueueJob?: boolean;
+  onReviewStarted?: () => Promise<void>;
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
@@ -1906,6 +1917,33 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
+    const ownDiff = await computeOwnDiffFingerprint(worktree.path, pull.base.sha, pull.head.sha);
+    const reviewDiff = { baseRef: pull.base.ref, baseSha: pull.base.sha,
+      ...("fingerprint" in ownDiff ? { diffFingerprint: ownDiff.fingerprint } : {}) };
+    if (!input.ci && !manualReviewRequested && !input.manualQueueJob && !input.explicitPullReview) {
+      const anchor = state.getBaseMergeOnlyAnchor(repo, pull.number);
+      const excluded = config.baseMergeOnlySkip?.enabled === false ||
+        config.baseMergeOnlySkip?.excludeRepos?.some((slug) => slug.toLowerCase() === repo.toLowerCase());
+      const reason = excluded ? "excluded" : "error" in ownDiff ? "fingerprint_error" : !anchor ? "no_anchor"
+        : anchor.baseRef !== pull.base.ref ? "base_ref_changed"
+        : !await isGitAncestor(worktree.path, anchor.headSha, pull.head.sha) ? "not_ancestor"
+        : anchor.diffFingerprint !== ownDiff.fingerprint ? "fingerprint_differs" : undefined;
+      writeRedactedJson(join(evidenceDir, "base-merge-only.json"), {
+        decision: reason ? "reviewed" : "skipped", ...(reason ? { reason } : {}),
+        previousHead: anchor?.headSha, previousReviewUrl: anchor?.reviewUrl, previousEvent: anchor?.event,
+        newHead: pull.head.sha, ...reviewDiff, ...ownDiff
+      });
+      if (!reason && anchor) {
+        if (state.getProcessedReview(repo, pull.number, pull.head.sha)?.status !== "posted") {
+          state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "skipped",
+            error: "base_merge_only", carriedFromHead: anchor.headSha, ...reviewDiff });
+          state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha,
+            state: "skipped", reason: "base_merge_only" });
+        }
+        return "skipped_base_merge_only";
+      }
+    }
+    await input.onReviewStarted?.();
     if (isLcmReviewRepository(repo)) {
       try {
         reviewFiles = await hydratePullFilePatchesFromWorktree({
@@ -2594,6 +2632,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           headSha: pull.head.sha,
           commentId: reviewEventResolution.authorization.commentId,
           author: reviewEventResolution.authorization.author,
+          ...reviewDiff,
           event: plan.event,
           reviewUrl: review.html_url,
           preserveExistingBlocking: preservedPriorBlockingRow
@@ -2604,12 +2643,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           pullNumber: pull.number,
           headSha: pull.head.sha,
           status: "posted",
+          ...reviewDiff,
           event: plan.event,
           reviewUrl: review.html_url
         });
       }
     } catch (error) {
       throw new ReviewPostPersistenceError(error, {
+        ...reviewDiff,
         event: plan.event,
         reviewUrl: review.html_url ?? `${pull.html_url}#pullrequestreview-${review.id}`,
         preserveExistingBlocking: preservedPriorBlockingRow,
@@ -2670,6 +2711,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           pullNumber: pull.number,
           headSha: pull.head.sha,
           status: "posted",
+          baseRef: durablePosted.baseRef, baseSha: durablePosted.baseSha, diffFingerprint: durablePosted.diffFingerprint,
           ...(durablePosted.event ? { event: durablePosted.event } : {}),
           ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
           error: uncertaintyReason
@@ -3767,6 +3809,9 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
 }
 
 interface PostedReviewReceipt {
+  baseRef?: string;
+  baseSha?: string;
+  diffFingerprint?: string;
   event: ReviewEvent;
   reviewUrl: string;
   preserveExistingBlocking: boolean;
@@ -3819,6 +3864,7 @@ export function recoverPostedReviewReceipt(input: {
       headSha: input.pull.head.sha,
       commentId: receipt.authorization.commentId,
       author: receipt.authorization.author,
+      baseRef: receipt.baseRef, baseSha: receipt.baseSha, diffFingerprint: receipt.diffFingerprint,
       event: receipt.event,
       reviewUrl: receipt.reviewUrl,
       preserveExistingBlocking: receipt.preserveExistingBlocking
@@ -3829,6 +3875,7 @@ export function recoverPostedReviewReceipt(input: {
       pullNumber: input.pull.number,
       headSha: input.pull.head.sha,
       status: "posted",
+      baseRef: receipt.baseRef, baseSha: receipt.baseSha, diffFingerprint: receipt.diffFingerprint,
       event: receipt.event,
       reviewUrl: receipt.reviewUrl
     });
@@ -3916,6 +3963,7 @@ export async function recoverPostedReviewReceiptForCurrentHead(input: {
         pullNumber: input.pull.number,
         headSha: input.pull.head.sha,
         status: "posted",
+        baseRef: durablePosted.baseRef, baseSha: durablePosted.baseSha, diffFingerprint: durablePosted.diffFingerprint,
         ...(durablePosted.event ? { event: durablePosted.event } : {}),
         ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
         error: uncertaintyReason

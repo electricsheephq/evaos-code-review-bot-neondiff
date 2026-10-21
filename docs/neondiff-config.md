@@ -412,6 +412,22 @@ Safety invariants:
 - A deterministic packet is treated as fresh only when its `source.headSha` matches the prepared PR worktree head. Generic JSON and raw Markdown packets are unknown-freshness by default.
 - This flag accepts packet output; it does not vendor OpenWiki source code, run OpenWiki during live reviews, enable scheduled docs updates, or permit edits outside `openwiki/**`.
 
+### Base-merge-only automatic review skip
+
+`baseMergeOnlySkip` defaults to `{ "enabled": true, "excludeRepos": [] }`.
+`excludeRepos` accepts `owner/name` slugs (matched case-insensitively).
+Automatic discovery, queue jobs and failed-head/provider-cooldown retries skip when
+the last posted review has the same base ref and whitespace-sensitive own-diff
+fingerprint, and its head is an ancestor of the new head. Legacy rows without a
+fingerprint cannot anchor a skip. Ambiguous/missing git evidence reviews normally.
+
+Skips record local `base_merge_only` state, the original reviewed head and
+`base-merge-only.json`; they call no provider and post nothing to GitHub.
+Manual commands, operator `review-pr` (dry and live), and all `--ci` runs always
+review. Config/model changes and semantic merge conflicts do not invalidate the
+fingerprint; use `re-review` to request a fresh review, or exclude the repository.
+No lcm-x v2 assessment is carried forward.
+
 ### Public repository author gate
 
 `reviewGate.publicRepoAuthorGate` defaults to `mode: "auto"`. In `auto` the gate is on

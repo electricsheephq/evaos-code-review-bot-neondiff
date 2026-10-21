@@ -70,6 +70,7 @@ export interface BotConfig {
     ttlMs: number;
     headCountLimit: number;
   };
+  baseMergeOnlySkip?: { enabled?: boolean; excludeRepos?: string[] };
   reviewScheduler?: ReviewSchedulerConfig;
   reviewEnsemble?: ReviewEnsembleConfig;
   riskWeightedQueue?: RiskWeightedQueueConfig;
@@ -346,6 +347,7 @@ const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["example-org/example-repo"],
   pollIntervalMs: 90_000,
   skipDrafts: true,
+  baseMergeOnlySkip: { enabled: true, excludeRepos: [] },
   // workRoot must resolve outside this checkout (validateWorkRootIsolation); /tmp/neondiff is a
   // portable placeholder that satisfies that check on any machine without edits.
   workRoot: "/tmp/neondiff/runtime",
@@ -656,6 +658,12 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
   if (isRecord(fromFile) && isRecord(fromFile.codexRuntime) && fromFile.codexRuntime.checkoutReads !== undefined) {
     validateBoolean(fromFile.codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
   }
+  if (isRecord(fromFile) && fromFile.baseMergeOnlySkip !== undefined) {
+    const skip = fromFile.baseMergeOnlySkip;
+    if (!isRecord(skip)) throw new Error("config.baseMergeOnlySkip must be an object");
+    if (skip.enabled !== undefined) validateBoolean(skip.enabled, "config.baseMergeOnlySkip.enabled");
+    if (skip.excludeRepos !== undefined) validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
+  }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
   merged.github = { ...merged.github };
   merged.worktreeCleanup = { ...merged.worktreeCleanup! };
@@ -708,6 +716,18 @@ function validateConfig(config: BotConfig): void {
   if (config.canaryPulls !== undefined) {
     validateStringArray(config.canaryPulls, "config.canaryPulls");
     for (const canary of config.canaryPulls) validateCanaryPull(canary, "config.canaryPulls");
+  }
+  if (config.baseMergeOnlySkip !== undefined) {
+    const skip = config.baseMergeOnlySkip;
+    if (!isRecord(skip)) throw new Error("config.baseMergeOnlySkip must be an object");
+    for (const key of Object.keys(skip)) {
+      if (!["enabled", "excludeRepos"].includes(key)) throw new Error(`config.baseMergeOnlySkip.${key} is unknown`);
+    }
+    if (skip.enabled !== undefined) validateBoolean(skip.enabled, "config.baseMergeOnlySkip.enabled");
+    if (skip.excludeRepos !== undefined) {
+      validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
+      for (const repo of skip.excludeRepos) validateRepoName(repo, "config.baseMergeOnlySkip.excludeRepos");
+    }
   }
   validateBoolean(config.skipDrafts, "config.skipDrafts");
   validatePositiveInteger(config.pollIntervalMs, "config.pollIntervalMs");
