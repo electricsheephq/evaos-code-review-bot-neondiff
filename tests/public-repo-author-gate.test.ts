@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -185,6 +185,16 @@ describe("public repository author gate", () => {
       expect(state.getProcessedReview("org/repo", 1, pr.head.sha)?.error).not.toBe("untrusted_author_public_repo");
       const queued = state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 });
       expect(provider.mock.calls.length + queued.length).toBeGreaterThan(0);
+    } finally { state.close(); }
+  });
+  it("still records the skip when evidence cannot be written, so discovery is not aborted", () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-evidence-fail-")); roots.push(root);
+    const cfg = config(); cfg.evidenceDir = join(root, "evidence-is-a-file");
+    writeFileSync(cfg.evidenceDir, "not a directory");
+    const state = new ReviewStateStore(join(root, "state.sqlite")); const pr = pull("public", "NONE");
+    try {
+      expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
+      expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
     } finally { state.close(); }
   });
   it("does not rewrite skip evidence on every poll of a still-blocked head", () => {

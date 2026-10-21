@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
@@ -102,7 +102,8 @@ export function parseCodexUsage(
   const model = /^model:[ \t]*(gpt-[a-z0-9._-]+)[ \t]*$/m.exec(stderr)?.[1];
   const effort = /^reasoning effort:[ \t]*(low|medium|high|xhigh|max)[ \t]*$/m.exec(stderr)?.[1];
   // Codex groups thousands with a locale separator: a space, U+00A0, U+202F or a comma.
-  const rawTokens = /^tokens used[ \t]*\r?\n([0-9][0-9 \u00a0\u202f,]*)[ \t]*\r?$/m.exec(stderr)?.[1]?.trim();
+  // The footer is printed last; an echoed prompt can contain an earlier token-shaped stanza.
+  const rawTokens = [...stderr.matchAll(/^tokens used[ \t]*\r?\n([0-9][0-9 \u00a0\u202f,]*)[ \t]*\r?$/gm)].at(-1)?.[1]?.trim();
   const tokens = rawTokens && /^(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f,][0-9]{3})+)$/.test(rawTokens)
     ? Number(rawTokens.replace(/[ \u00a0\u202f,]/g, "")) : NaN;
   return {
@@ -118,6 +119,12 @@ export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
   for (const key of CODEX_ENV_ALLOWLIST) {
     const value = source[key];
     if (typeof value === "string" && value.length > 0) env[key] = value;
+  }
+  // The bare `codex` command resolves through PATH from the PR worktree cwd; relative or empty
+  // entries would resolve a PR-controlled binary.
+  if (env.PATH) {
+    const safePath = env.PATH.split(delimiter).filter((entry) => entry.length > 0 && isAbsolute(entry)).join(delimiter);
+    if (safePath) env.PATH = safePath; else delete env.PATH;
   }
   return env;
 }

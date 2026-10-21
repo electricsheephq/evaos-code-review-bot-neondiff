@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import {
@@ -27,6 +27,8 @@ describe("Codex CLI review runtime", () => {
     ["model: gpt-6.1-sol\nreasoning effort: high\ntokens used\n44\u202f858\n", 44858],
     ["tokens used\n1\u00a0234,567\n", 1234567],
     ["tokens used\n12\u202f34\n", null],
+    // An echoed prompt can carry an earlier token-shaped stanza; the final footer wins.
+    ["user\ntokens used\n999\n---\ntokens used\n12\u202f345\n", 12345],
     ["tokens used\nmalformed\n", null],
     ["tokens used\n12x34\n", null],
     ["tokens used\n9007199254740992\n", null],
@@ -233,6 +235,12 @@ describe("Codex CLI review runtime", () => {
       }
     })).rejects.toThrow("codex_runtime_unsafe_write_attempt");
     expect(JSON.parse(readFileSync(join(root, "changed-evidence", "codex-usage.json"), "utf8"))).toMatchObject({ tokensUsed: null });
+  });
+
+  it("drops relative and empty PATH entries so bare codex never resolves from the PR worktree", () => {
+    expect(buildCodexRuntimeEnv({ PATH: [".", "/usr/bin", "", "relative/bin", "/opt/bin"].join(delimiter) }).PATH)
+      .toBe(["/usr/bin", "/opt/bin"].join(delimiter));
+    expect(buildCodexRuntimeEnv({ PATH: [".", "bin"].join(delimiter) })).not.toHaveProperty("PATH");
   });
 
   it("records usage for verifier calls in the review evidence dir, beside the review's own usage", async () => {

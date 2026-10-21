@@ -1501,9 +1501,13 @@ export function recordPublicRepoAuthorGateSkip(input: {
     return false;
   }
   if (alreadySkipped) return true;
-  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
-  mkdirSync(evidenceDir, { recursive: true });
-  writeRedactedJson(join(evidenceDir, "author-gate.json"), { reason, visibility });
+  try {
+    const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
+    mkdirSync(evidenceDir, { recursive: true });
+    writeRedactedJson(join(evidenceDir, "author-gate.json"), { reason, visibility });
+  } catch {
+    // Best-effort evidence: this runs inside scheduler discovery, and the processed row below is the durable record.
+  }
   // Preserve an existing posted review as historical truth.
   if (existing?.status !== "posted") {
     input.state.recordProcessed({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
