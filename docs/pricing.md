@@ -13,15 +13,16 @@ credits, unlimited SaaS inference, or bundled provider tokens.
 
 ## Plans
 
-Prices are flat: no per-seat charges, and Team covers every developer and
-private repository in one GitHub organization.
+Prices are flat: no per-seat charges. Each license activates one review worker
+machine, and every developer whose pull requests that worker reviews is covered;
+Team covers the private repositories of one GitHub organization.
 
 | Plan | Price | Best For | Private Repos | Commercial Use | Auto-Updates | Provider Credits |
 | --- | ---: | --- | --- | --- | --- | --- |
 | Public repositories | Free | Any repository that GitHub reports as public (1.1.0+) | — | Yes | — | Not included |
 | Solo Monthly | $9/mo | One developer; 7-day trial | Yes | Yes | Yes | Not included |
 | Solo Yearly | $90/yr | One developer, yearly; 7-day trial | Yes | Yes | Yes | Not included |
-| Team Yearly | $290/yr | One GitHub organization, unlimited seats; 30-day trial | Yes | Yes | Yes | Not included |
+| Team Yearly | $290/yr | One GitHub organization, any number of developers; 30-day trial | Yes | Yes | Yes | Not included |
 | Legacy Lifetime Support | no longer sold | Existing lifetime license holders only | Yes | Yes | Yes | Not included |
 
 Existing subscribers keep their current price for as long as their subscription

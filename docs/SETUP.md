@@ -187,17 +187,20 @@ Remove the local key and cache:
 neondiff license deactivate --config config.local.json --json
 ```
 
-Public, private, internal, and unknown repository work all fail closed before
+Private, internal, and unknown-visibility repository work fails closed before
 worktree prep, model/provider calls, or GitHub review posting unless live API
 validation returns an active entitlement covering that operation and visibility.
-Cached entitlement metadata is diagnostic only.
+From 1.1.0, a repository that GitHub reports as public needs no entitlement for
+review in the npm CLI and the GitHub Action; the npm CLI 1.0.x applies the same
+fail-closed rule to public repositories. Cached entitlement metadata is
+diagnostic only.
 
 Use this matrix when reading doctor or review evidence:
 
 | Repo visibility | License state | Provider state | Expected setup result |
 | --- | --- | --- | --- |
-| public | no license | provider present | license blocks before checkout/provider/post |
-| public | no license | provider absent | license blocks before checkout/provider/post |
+| public | no license | provider present | 1.1.0+: license allows, provider output decides review success; 1.0.x: license blocks before checkout/provider/post |
+| public | no license | provider absent | 1.1.0+: provider setup blocks; 1.0.x: license blocks before checkout/provider/post |
 | public | active covering entitlement | provider present | license allows; provider output decides review success |
 | private | no license | provider present | license blocks before checkout/provider/post |
 | private | active private entitlement | provider present | license allows; provider output decides review success |

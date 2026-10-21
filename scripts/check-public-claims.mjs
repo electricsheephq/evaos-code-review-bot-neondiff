@@ -52,7 +52,8 @@ const forbiddenClaims = [
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,
   /\bpublic launch is complete\b/i,
-  /\bfree for private repo/i
+  /\bfree (?:for )?private repo/i,
+  /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i
 ];
 
 let failed = false;

@@ -72,7 +72,7 @@ export const NEONDIFF_PRICING_PLANS: readonly NeonDiffPricingPlan[] = [
     priceUsd: 290,
     displayPrice: "$290/yr",
     cadence: "year",
-    summary: "Flat yearly plan for one GitHub organization: unlimited seats and private repositories.",
+    summary: "Flat yearly plan for one GitHub organization's private repositories, any number of developers, one activated review worker.",
     requiresPaidLicense: true,
     repoVisibilityScope: "private",
     commercialUse: true,

@@ -6,8 +6,9 @@ NeonDiff is source-available commercial software. The source is available for
 inspection, contribution, and self-hosted evaluation, but this repository is not
 published under an open-source license.
 
-Review of repositories that GitHub reports as public is free. Review of private,
-internal, or unknown-visibility repositories requires an active NeonDiff license.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free.
+Review of private, internal, or unknown-visibility repositories requires an
+active NeonDiff license.
 
 ## Source Evaluation Grant
 
@@ -17,11 +18,12 @@ permission.
 
 ## Free Review Of Public Repositories
 
-You may use the supported distribution (the npm CLI, the GitHub Action, and the
-Mac app) to review repositories that GitHub reports as public, without a license
-key, including for commercial and company-owned public repositories. You supply
-your own model provider account and key, and you are responsible for its costs
-and terms.
+You may use NeonDiff 1.1.0 or later through the npm CLI or the GitHub Action to
+review repositories that GitHub reports as public, without a license key,
+including for commercial and company-owned public repositories. Earlier releases
+and the Mac app beta still require an active license for every repository. You
+supply your own model provider account and key, and you are responsible for its
+costs and terms.
 
 ## Paid License
 
@@ -29,9 +31,11 @@ You need an active paid NeonDiff license for:
 
 - reviewing private, internal, or otherwise non-public repositories, including
   in a company, client, agency, or consulting workflow;
-- distributing NeonDiff binaries, installers, hosted services, marketplace
-  packages, or managed update channels; and
 - paid-support and private-repository entitlement features.
+
+A paid license does not by itself permit distributing NeonDiff binaries,
+installers, hosted services, marketplace packages, or managed update channels;
+those require written permission from Electric Sheep.
 
 Repository entitlement checks are implemented separately from pricing. Current
 prices and terms are published at https://www.neondiff.com/#pricing.

@@ -14,7 +14,9 @@ NeonDiff license; unknown or unreadable visibility fails closed. The npm CLI
 1.0.x requires API-backed activation for every repository.
 
 Paid licenses are flat, with no per-seat pricing: Solo is $9/mo or $90/yr for
-one developer, and Team is $290/yr per GitHub organization. Solo plans include
+one developer, and Team is $290/yr per GitHub organization. Each license
+activates one review worker machine; every developer whose pull requests that
+worker reviews is covered. Solo plans include
 a 7-day trial, Team plans include a 30-day trial, and existing subscribers keep
 their current price. Legacy lifetime licenses remain honored for existing
 holders but are no longer sold. Licenses do not include hosted model credits,
@@ -27,7 +29,8 @@ provider key or local model.
 - Forking the repository to evaluate NeonDiff or propose changes.
 - Submitting GitHub issues and pull requests.
 - From 1.1.0, reviewing repositories that GitHub reports as public through the
-  supported distribution (the npm CLI, the GitHub Action, and the Mac app).
+  npm CLI or the GitHub Action. The Mac app beta (BYO path) still requires
+  activation for every repository.
 
 ## Requires A Paid License
 

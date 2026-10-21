@@ -3770,7 +3770,7 @@ function buildHelp(command?: string) {
     ok: true,
     licenseBoundary: {
       sourceAvailableCommercial: true,
-      activationRequired: "Supported public, private, internal, and unknown repository review requires live API-backed activation.",
+      activationRequired: "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none; the npm CLI 1.0.x requires it for public, private, internal, and unknown repositories.",
       packageVersion,
       releaseState: packageVersion === "1.0.3"
         ? "Mandatory activation is staged for v1.0.4; public npm latest v1.0.3 does not enforce this boundary."
