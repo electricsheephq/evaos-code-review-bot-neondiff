@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -189,9 +189,9 @@ describe("public repository author gate", () => {
   });
   it("still records the skip when evidence cannot be written, so discovery is not aborted", () => {
     apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-evidence-fail-")); roots.push(root);
-    const cfg = config(); cfg.evidenceDir = join(root, "evidence-is-a-file");
-    writeFileSync(cfg.evidenceDir, "not a directory");
-    const state = new ReviewStateStore(join(root, "state.sqlite")); const pr = pull("public", "NONE");
+    const statePath = join(root, "state.sqlite"); const state = new ReviewStateStore(statePath);
+    // The state database is a regular file, so creating evidence directories beneath it fails.
+    const cfg = config(); cfg.evidenceDir = join(statePath, "evidence"); const pr = pull("public", "NONE");
     try {
       expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
       expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
