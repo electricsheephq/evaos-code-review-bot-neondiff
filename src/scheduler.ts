@@ -2666,6 +2666,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       break;
     case "untrusted_author_public_repo":
       result.skippedPolicy += 1;
+      result.queue.staleRetired += 1;
       break;
     case "skipped_draft":
       result.skippedDraft += 1;

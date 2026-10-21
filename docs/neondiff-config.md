@@ -400,9 +400,12 @@ Safety invariants:
 
 ### Public repository author gate
 
-`reviewGate.publicRepoAuthorGate` defaults to `mode: "auto"`: when Codex is enabled
-and neither `CODEX_API_KEY` nor `OPENAI_API_KEY` is set, public and unknown-visibility
-PRs require `OWNER`, `MEMBER`, or `COLLABORATOR` association, or an exact,
+`reviewGate.publicRepoAuthorGate` defaults to `mode: "auto"`. In `auto` the gate is on
+whenever Codex is enabled, unless the Codex child process itself receives `CODEX_API_KEY`
+or `OPENAI_API_KEY` and its `CODEX_HOME` holds no ChatGPT login file (`auth.json`).
+The Codex child environment does not currently forward either key, so exporting one in
+the worker's environment does not turn the gate off; use `mode: "off"` for that. While on,
+public and unknown-visibility PRs require `OWNER`, `MEMBER`, or `COLLABORATOR` association, or an exact,
 case-insensitive login in `allowedLogins` (default `dependabot[bot]`, `renovate[bot]`).
 Private/internal repositories bypass this gate. `on` and `off` force the mode.
 Untrusted PRs record `untrusted_author_public_repo` in local state and

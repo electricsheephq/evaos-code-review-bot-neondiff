@@ -136,6 +136,7 @@ describe("public repository author gate", () => {
             listIssueComments: commands, canPostAsApp: () => true, upsertIssueComment: post },
           options: { dryRun: false }, reviewPullImpl: provider, licenseAdmission: testLicenseAdmission });
         expect(result.skippedPolicy).toBe(1);
+        expect(result.queue.staleRetired).toBe(queued ? 1 : 0);
         expect(provider).not.toHaveBeenCalled(); expect(post).not.toHaveBeenCalled(); expect(commands).not.toHaveBeenCalled();
         expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
         if (queued) {
