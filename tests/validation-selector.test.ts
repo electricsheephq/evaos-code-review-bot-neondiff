@@ -127,6 +127,46 @@ describe("changed-surface validation selector", () => {
     }
   });
 
+  it("keeps proof stated in one bullet when an unrelated bullet contains a negation", () => {
+    const body = [
+      "## Evidence",
+      "- `npm run build`: exit 0.",
+      "- Focused Vitest on worker.ts and scheduler.ts: 287 passed.",
+      "- New tests check for no provider call and no post; config validation."
+    ].join("\n");
+    const pullWithProof = pull({ body });
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: pullWithProof,
+      files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+    });
+    const proof = evaluateProofRequirements({ pull: pullWithProof, validation });
+
+    expect(proof.status).toBe("sufficient");
+    expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests"]));
+  });
+
+  it("still vetoes proof negated in the same sentence or line", () => {
+    const weakBodies = [
+      "The previous build passed in v1.0.6 but we reverted that branch.",
+      "- prior head only: tests passed",
+      "Not yet: focused Vitest on worker.ts passed only locally"
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status, body).toBe("missing");
+      expect(proof.detectedEvidence, body).toEqual([]);
+    }
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."

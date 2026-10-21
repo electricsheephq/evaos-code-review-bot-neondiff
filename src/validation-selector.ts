@@ -134,23 +134,31 @@ function dedupeRecommendations(recommendations: ValidationRecommendation[]): Val
 
 function hasEvidenceForRecommendation(recommendation: ValidationRecommendation, text: string): boolean {
   const normalized = text.toLowerCase();
-  if (recommendation.id === "unity_editor_smoke") return hasUnityEvidence(normalized);
-  if (recommendation.id === "typescript_build") return hasBuildEvidence(normalized) || hasTestEvidence(normalized) || hasCiEvidence(normalized);
-  if (recommendation.id === "ci_release_smoke") return hasReleaseEvidence(normalized) || hasCiEvidence(normalized);
-  if (recommendation.id === "bot_focused_tests") return hasBuildEvidence(normalized) && hasTestEvidence(normalized);
+  const has = (check: (segment: string) => boolean) => inAnySegment(normalized, check);
+  if (recommendation.id === "unity_editor_smoke") return has(hasUnityEvidence);
+  if (recommendation.id === "typescript_build") return has(hasBuildEvidence) || has(hasTestEvidence) || has(hasCiEvidence);
+  if (recommendation.id === "ci_release_smoke") return has(hasReleaseEvidence) || has(hasCiEvidence);
+  if (recommendation.id === "bot_focused_tests") return has(hasBuildEvidence) && has(hasTestEvidence);
   return recommendation.proofTypes.some((proofType) => normalized.includes(proofType.toLowerCase()));
 }
 
 function detectEvidenceMentions(text: string): string[] {
   const normalized = text.toLowerCase();
+  const has = (check: (segment: string) => boolean) => inAnySegment(normalized, check);
   const evidence = new Set<string>();
-  if (hasUnityEvidence(normalized)) evidence.add("Unity smoke");
-  if (hasVisualEvidence(normalized)) evidence.add("visual proof");
-  if (hasBuildEvidence(normalized)) evidence.add("build/typecheck");
-  if (hasTestEvidence(normalized)) evidence.add("tests");
-  if (hasCiEvidence(normalized)) evidence.add("CI checks");
-  if (hasReleaseEvidence(normalized)) evidence.add("release/operator checks");
+  if (has(hasUnityEvidence)) evidence.add("Unity smoke");
+  if (has(hasVisualEvidence)) evidence.add("visual proof");
+  if (has(hasBuildEvidence)) evidence.add("build/typecheck");
+  if (has(hasTestEvidence)) evidence.add("tests");
+  if (has(hasCiEvidence)) evidence.add("CI checks");
+  if (has(hasReleaseEvidence)) evidence.add("release/operator checks");
   return [...evidence];
+}
+
+// Negation only cancels proof within its own line or sentence, so an unrelated "no ..." elsewhere
+// in the description cannot erase proof stated in another bullet. "worker.ts" or "1.0.6" do not end a sentence.
+function inAnySegment(text: string, check: (segment: string) => boolean): boolean {
+  return text.split(/\n|[.!?;](?=\s|$)/).some((segment) => segment.trim() !== "" && check(segment));
 }
 
 function hasBuildEvidence(text: string): boolean {
