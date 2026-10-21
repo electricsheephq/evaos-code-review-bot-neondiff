@@ -204,6 +204,41 @@ describe("changed-surface validation selector", () => {
     }
   });
 
+  it("does not let a proof match borrow an outcome or a qualifier across sentences and lists", () => {
+    const weakBodies = [
+      "build: not run. tests passed",
+      "- Previous validation:\n  - build passed\n  - tests passed",
+      "## Previous validation\nThe build passed and tests passed.\n\n## Notes\nNothing else."
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status, body).toBe("missing");
+      expect(proof.detectedEvidence, body).not.toContain("build/typecheck");
+    }
+  });
+
+  it("finds current proof after a rejected historical mention", () => {
+    const body = "Previous tests passed. Current tests passed.\nBuild passed.";
+    const pullWithProof = pull({ body });
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: pullWithProof,
+      files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+    });
+    const proof = evaluateProofRequirements({ pull: pullWithProof, validation });
+
+    expect(proof.status).toBe("sufficient");
+    expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests"]));
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."

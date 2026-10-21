@@ -155,78 +155,121 @@ function detectEvidenceMentions(text: string): string[] {
 
 function hasBuildEvidence(text: string): boolean {
   return hasUnnegatedProof(text, ["build", "validation", "typecheck", "tsc"], [
-    /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/g,
-    /\b(build|tsc)\b.{0,48}\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/g,
-    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}\b(build|tsc)\b/g
+    /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/,
+    /\b(build|tsc)\b.{0,48}?\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/,
+    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}?\b(build|tsc)\b/
   ]);
 }
 
 function hasTestEvidence(text: string): boolean {
   return hasUnnegatedProof(text, ["validation", "test", "tests", "vitest", "jest", "npm test"], [
-    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b/g,
-    /\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b.{0,48}\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/g
+    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}?\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b/,
+    /\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b.{0,48}?\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/
   ]);
 }
 
 function hasCiEvidence(text: string): boolean {
   return hasUnnegatedProof(text, ["validation", "ci", "check", "checks"], [
-    /\b(all checks? (?:are |is )?green|ci (?:run|pipeline) passed|github actions (?:run )?green|github checks passed)\b/g
+    /\b(all checks? (?:are |is )?green|ci (?:run|pipeline) passed|github actions (?:run )?green|github checks passed)\b/
   ]);
 }
 
 function hasReleaseEvidence(text: string): boolean {
   return hasUnnegatedProof(text, ["validation", "release:status", "coverage-audit", "provider-cooldown", "rollback"], [
-    /\b(release:status|coverage-audit|provider-cooldowns?|rollback note)\b/g
+    /\b(release:status|coverage-audit|provider-cooldowns?|rollback note)\b/
   ]);
 }
 
 function hasUnityEvidence(text: string): boolean {
   return hasUnnegatedProof(text, ["validation", "play mode", "playmode", "unity", "scene smoke", "prefab smoke"], [
-    /\b(play\s*mode|playmode|unity editor|scene smoke|prefab smoke)\b.{0,48}\b(pass(?:ed|es)?|green|ok|smoke(?:d)?|verified)\b/g
+    /\b(play\s*mode|playmode|unity editor|scene smoke|prefab smoke)\b.{0,48}?\b(pass(?:ed|es)?|green|ok|smoke(?:d)?|verified)\b/
   ]) || hasVisualEvidence(text);
 }
 
 function hasVisualEvidence(text: string): boolean {
   return hasUnnegatedProof(text, ["screenshot", "recording", "video", "visual proof"], [
-    /\b(screenshot|recording|video)\b.{0,48}\b(attached|captured|included|provided|uploaded)\b/g,
-    /\b(attached|captured|included|provided|uploaded)\b.{0,48}\b(screenshot|recording|video)\b/g
+    /\b(screenshot|recording|video)\b.{0,48}?\b(attached|captured|included|provided|uploaded)\b/,
+    /\b(attached|captured|included|provided|uploaded)\b.{0,48}?\b(screenshot|recording|video)\b/
   ]);
 }
 
-// A proof mention counts unless a negation sits in its own sentence (up to the match) or in the lead-in
-// line of the list it belongs to ("Previous validation:"). An unrelated "no ..." in another bullet or
-// sentence does not erase it.
+// A proof mention counts unless a negation sits in its own sentence (up to the match) or in a line that
+// governs it: its markdown section heading, an enclosing parent bullet, or the "Previous validation:"
+// lead-in its list hangs from. An unrelated "no ..." in another bullet or sentence does not erase it.
 function hasUnnegatedProof(text: string, negationWords: string[], positives: RegExp[]): boolean {
-  return positives.some((positive) =>
-    [...text.matchAll(positive)].some((match) =>
-      !proofContexts(text, match.index, match.index + match[0].length)
-        .some((context) => hasNegatedOrHistoricalProof(context, negationWords))
-    )
-  );
+  const lines = proofLines(text);
+  return positives.some((positive) => {
+    const pattern = new RegExp(positive.source, "g");
+    for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+      // Minimal matches only; one that crosses a sentence end borrows its outcome from the next sentence.
+      if (!/[.!?]\s/.test(match[0]) && !isNegatedProofMatch(text, lines, match, negationWords)) return true;
+      // Retry from the next character so a rejected match cannot hide later proof it overlaps.
+      pattern.lastIndex = match.index + 1;
+    }
+    return false;
+  });
 }
 
-function proofContexts(text: string, start: number, end: number): string[] {
-  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-  let sentenceStart = lineStart;
-  // "worker.ts" or "1.0.6" do not end a sentence; ";" does not either, so "previous validation: build passed; tests passed" stays one context.
-  for (const boundary of text.slice(lineStart, start).matchAll(/[.!?]\s/g)) sentenceStart = lineStart + boundary.index + boundary[0].length;
-  const contexts = [text.slice(sentenceStart, end)];
-  const leadIn = listLeadIn(text, lineStart);
-  if (leadIn !== undefined) contexts.push(leadIn);
-  return contexts;
+const PROOF_SENTENCE_LOOKBACK = 400;
+
+function isNegatedProofMatch(text: string, lines: ProofLine[], match: RegExpExecArray, negationWords: string[]): boolean {
+  const line = lines[lineIndexAt(lines, match.index)]!;
+  const windowStart = Math.max(line.start, match.index - PROOF_SENTENCE_LOOKBACK);
+  let sentenceStart = windowStart;
+  // "worker.ts" or "1.0.6" do not end a sentence; ";" does not either, so "previous validation: build passed; tests passed" stays one sentence.
+  for (const boundary of text.slice(windowStart, match.index).matchAll(/[.!?]\s/g)) {
+    sentenceStart = windowStart + boundary.index + boundary[0].length;
+  }
+  return [text.slice(sentenceStart, match.index + match[0].length), ...line.governing]
+    .some((context) => hasNegatedOrHistoricalProof(context, negationWords));
+}
+
+interface ProofLine {
+  start: number;
+  governing: string[];
 }
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+const MARKDOWN_HEADING = /^\s{0,3}#{1,6}\s/;
 
-function listLeadIn(text: string, lineStart: number): string | undefined {
-  const lineEnd = text.indexOf("\n", lineStart);
-  if (!LIST_ITEM.test(text.slice(lineStart, lineEnd === -1 ? undefined : lineEnd))) return undefined;
-  const earlier = text.slice(0, lineStart).split("\n");
-  for (let index = earlier.length - 1; index >= 0; index -= 1) {
-    const line = earlier[index]!;
-    if (line.trim() !== "" && !LIST_ITEM.test(line)) return line;
+function proofLines(text: string): ProofLine[] {
+  let offset = 0;
+  let heading: string | undefined;
+  let leadIn: string | undefined;
+  const parents: Array<{ indent: number; line: string }> = [];
+  return text.split("\n").map((line) => {
+    const start = offset;
+    offset += line.length + 1;
+    const governing = heading === undefined ? [] : [heading];
+    if (MARKDOWN_HEADING.test(line)) {
+      heading = line;
+      leadIn = undefined;
+      parents.length = 0;
+      return { start, governing: [] };
+    }
+    if (LIST_ITEM.test(line)) {
+      const indent = line.search(/\S/);
+      while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
+      if (leadIn !== undefined) governing.push(leadIn);
+      governing.push(...parents.map((parent) => parent.line));
+      parents.push({ indent, line });
+    } else if (line.trim() !== "") {
+      // A paragraph line ends the list; it becomes the next list's lead-in only when it ends with a colon.
+      parents.length = 0;
+      leadIn = /:[*_`]*$/.test(line.trimEnd()) ? line : undefined;
+    }
+    return { start, governing };
+  });
+}
+
+function lineIndexAt(lines: ProofLine[], index: number): number {
+  let low = 0;
+  let high = lines.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (lines[middle]!.start <= index) low = middle; else high = middle - 1;
   }
-  return undefined;
+  return low;
 }
 
 function hasNegatedOrHistoricalProof(text: string, evidenceWords: string[]): boolean {
