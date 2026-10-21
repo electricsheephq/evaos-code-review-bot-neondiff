@@ -250,6 +250,10 @@ describe("changed-surface validation selector", () => {
       ["## Previous validation\n### Commands\n- Build passed.\n- Tests passed.", "missing"],
       ["Previous validation\n- build passed\n- tests passed", "missing"],
       ["Previous validation\n\n- build passed\n- tests passed", "missing"],
+      ["- Previous validation:\n  Build passed and tests passed.", "missing"],
+      ["## Previous validation\n```md\n## Example\n```\n- build passed\n- tests passed", "missing"],
+      ["## Validation\n- npm run build passed\n  (all 12 packages)\n- tests passed", "sufficient"],
+      ["## Validation\n```\n$ npm test\n```\n- build passed\n- tests passed", "sufficient"],
       ["Previous validation:\n- build passed\n\nCurrent head: npm run build passed.\nTests passed.", "sufficient"]
     ];
 

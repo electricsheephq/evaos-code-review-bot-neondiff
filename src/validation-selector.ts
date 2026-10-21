@@ -248,6 +248,8 @@ interface ProofLine {
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
 const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s/;
 
+const CODE_FENCE = /^\s{0,3}(?:```|~~~)/;
+
 function proofLines(text: string): ProofLine[] {
   let offset = 0;
   const headings: Array<{ level: number; index: number }> = [];
@@ -255,10 +257,19 @@ function proofLines(text: string): ProofLine[] {
   let leadIn: number | undefined;
   let listLeadIn: number | undefined;
   let afterBlank = false;
+  let inFence = false;
+  const listScope = () => [
+    ...(listLeadIn === undefined ? [] : [listLeadIn]),
+    ...(leadIn === undefined || leadIn === listLeadIn ? [] : [leadIn]),
+    ...parents.map((parent) => parent.index)
+  ];
   return text.split("\n").map((line, index) => {
     const start = offset;
     offset += line.length + 1;
     const governing = headings.map((heading) => heading.index);
+    // Fenced code is content of the section it sits in; its "## Example" or "- item" lines are not structure.
+    if (CODE_FENCE.test(line)) inFence = !inFence;
+    if (inFence || CODE_FENCE.test(line)) return { start, text: line, governing: [...governing, ...listScope()] };
     const heading = MARKDOWN_HEADING.exec(line);
     if (heading) {
       // A subsection stays under its parent heading until a heading of the same or a higher level.
@@ -276,13 +287,15 @@ function proofLines(text: string): ProofLine[] {
       afterBlank = true;
       return { start, text: line, governing };
     }
+    const indent = line.search(/\S/);
     if (LIST_ITEM.test(line)) {
-      const indent = line.search(/\S/);
       while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
-      if (listLeadIn !== undefined) governing.push(listLeadIn);
-      if (leadIn !== undefined && leadIn !== listLeadIn) governing.push(leadIn);
-      governing.push(...parents.map((parent) => parent.index));
+      governing.push(...listScope());
       parents.push({ indent, index });
+    } else if (indent > 0 && parents.length > 0) {
+      // An indented line under a bullet continues that bullet ("- Previous validation:\n  Build passed.").
+      while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
+      governing.push(...listScope());
     } else {
       // Prose directly under a colon lead-in stays in its scope; prose after a blank line starts a new block.
       if (afterBlank) leadIn = undefined;
