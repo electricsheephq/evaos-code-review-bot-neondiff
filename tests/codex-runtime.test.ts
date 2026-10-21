@@ -23,6 +23,10 @@ describe("Codex CLI review runtime", () => {
   it.each([
     ["model: gpt-6.1-sol\nreasoning effort: high\ntokens used\n43 305\n", 43305],
     ["tokens used\n1 234 567\n", 1234567],
+    // Real Codex CLI output groups thousands with U+202F (narrow no-break space).
+    ["model: gpt-6.1-sol\nreasoning effort: high\ntokens used\n44\u202f858\n", 44858],
+    ["tokens used\n1\u00a0234,567\n", 1234567],
+    ["tokens used\n12\u202f34\n", null],
     ["tokens used\nmalformed\n", null],
     ["tokens used\n12x34\n", null],
     ["tokens used\n9007199254740992\n", null],
