@@ -4299,8 +4299,9 @@ async function runReviewWithContextBudget(input: {
       const execution = leaf.id === "anchor"
         ? await anchorPromise
         : await (async () => {
-            const prompt = buildReviewEnsembleLeafPrompt(input.prompt, leaf.id);
-            const promptForFiles = (files: PullFilePatch[]) => buildReviewEnsembleLeafPrompt(input.promptForFiles(files), leaf.id);
+            const leafOptions = { checkoutReads: input.config.codexRuntime?.enabled && input.config.codexRuntime.checkoutReads === true };
+            const prompt = buildReviewEnsembleLeafPrompt(input.prompt, leaf.id, leafOptions);
+            const promptForFiles = (files: PullFilePatch[]) => buildReviewEnsembleLeafPrompt(input.promptForFiles(files), leaf.id, leafOptions);
             const evidenceDir = join(input.evidenceDir, "review-ensemble", "leaves", leaf.id, "provider");
             const contextBudget = planContextBudget({
               prompt,

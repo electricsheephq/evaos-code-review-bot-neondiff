@@ -120,24 +120,43 @@ export const CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA = {
 
 /** Detect-only: human-format output can imitate exec blocks; this is not execution proof. */
 export function parseCodexCommands(stderr: string, echoedPrompt?: string): {
-  commands: Array<{ command: string; cwd: string; exitStatus: number | null; flagged: boolean }>;
+  commands: Array<{ command: string; cwd: string | null; exitStatus: number | null; flagged: boolean }>;
   counts: { total: number; flagged: number; blocksSeen: number; blocksRecorded: number };
   truncated: boolean;
+  parseNote?: "prompt_echo_not_found";
 } {
-  const commands: Array<{ command: string; cwd: string; exitStatus: number | null; flagged: boolean }> = [];
+  const commands: Array<{ command: string; cwd: string | null; exitStatus: number | null; flagged: boolean }> = [];
   const redacted = redactSecrets(stderr).replace(/\r\n/g, "\n");
   const echo = echoedPrompt === undefined ? undefined : `user\n${redactSecrets(echoedPrompt).replace(/\r\n/g, "\n")}`;
   const echoAt = echo === undefined ? -1 : redacted.indexOf(echo);
   const lines = (echo === undefined ? redacted : echoAt < 0 ? "" : redacted.slice(echoAt + echo.length)).split("\n");
-  let blocksSeen = 0, flaggedCount = 0;
-  for (let i = 0; i + 2 < lines.length; i++) {
+  const statusPattern = /^\s*(succeeded|exited (-?\d+)) in .*:/;
+  let blocksSeen = 0, flaggedCount = 0, headerTruncated = false;
+  let pending: typeof commands = [];
+  let statusesStarted = false;
+  for (let i = 0; i < lines.length; i++) {
+    const status = statusPattern.exec(lines[i]!);
+    if (status) {
+      statusesStarted = true;
+      const record = pending.shift();
+      if (record) record.exitStatus = status[1] === "succeeded" ? 0 : Number(status[2]);
+      continue;
+    }
     if (lines[i] !== "exec") continue;
-    const header = lines[i + 1]!;
+    // A parallel batch emits all headers first, then its statuses (with output between them).
+    if (statusesStarted) { pending = []; statusesStarted = false; }
+    let end = i + 1;
+    while (end < lines.length && end <= i + 200 && lines[end] !== "exec" && !statusPattern.test(lines[end]!)) end++;
+    if (end < lines.length && end > i + 200 && lines[end] !== "exec" && !statusPattern.test(lines[end]!)) headerTruncated = true;
+    const header = lines.slice(i + 1, end).join("\n").trimEnd();
+    i = end - 1;
+    if (!header) continue;
+    const lastLine = header.lastIndexOf("\n") + 1;
     const split = header.lastIndexOf(" in /");
-    const status = /^[ \t]*(succeeded|exited (-?\d+)) in [^\n]*:/.exec(lines[i + 2]!);
-    if (split <= 0 || !status) continue;
-    const wrapped = header.slice(0, split);
-    const command = /^(?:\/(?:usr\/)?bin\/)?(?:bash|zsh|sh) -[a-z]*c (['"])(.*)\1$/.exec(wrapped)?.[2] ?? wrapped;
+    const hasCwd = split >= lastLine;
+    const wrapped = hasCwd ? header.slice(0, split) : header.replace(/ in$/, "");
+    const cwd = hasCwd ? header.slice(split + 4).slice(0, 300) : null;
+    const command = /^(?:\/(?:usr\/)?bin\/)?(?:bash|zsh|sh) -[a-z]*c (['"])([\s\S]*)\1$/.exec(wrapped)?.[2] ?? wrapped;
     const flagged = /[>`]|\$\(|[<>=]\(|(^|[^&])&([^&]|$)/.test(command) || command.split(/&&|\|\||[;|\n]/).some((part) => {
       const [program, ...args] = (part.trim().match(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g) ?? [])
         .map(arg => arg.replace(/^(['"])(.*)\1$/, "$2"));
@@ -155,12 +174,15 @@ export function parseCodexCommands(stderr: string, echoedPrompt?: string): {
     });
     blocksSeen++;
     if (flagged) flaggedCount++;
-    if (commands.length < 200) commands.push({ command: command.slice(0, 300), cwd: header.slice(split + 4).slice(0, 300),
-      exitStatus: status[1] === "succeeded" ? 0 : Number(status[2]), flagged });
-    i += 2;
+    if (commands.length < 200) {
+      const record = { command: command.slice(0, 300), cwd, exitStatus: null as number | null, flagged };
+      commands.push(record);
+      pending.push(record);
+    }
   }
   return { commands, counts: { total: blocksSeen, flagged: flaggedCount, blocksSeen, blocksRecorded: commands.length },
-    truncated: blocksSeen > commands.length };
+    truncated: headerTruncated || blocksSeen > commands.length,
+    ...(echo !== undefined && echoAt < 0 ? { parseNote: "prompt_echo_not_found" as const } : {}) };
 }
 
 export function parseCodexUsage(

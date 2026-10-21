@@ -1795,6 +1795,10 @@ describe("worker context budget preflight", () => {
       expect(await reviewPull({ config, github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
         state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
       expect(spy).toHaveBeenCalledTimes(4);
+      for (const [input] of spy.mock.calls) {
+        expect(input.prompt).toContain("The working directory is a read-only checkout");
+        expect(input.prompt).not.toContain("Do not use tools, agents, web, MCP, shell");
+      }
       const ensembleDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha, "review-ensemble");
       const packet = JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"));
       expect(packet.gate.summary.dropReasonCounts.evidence_unverified).toBe(4);

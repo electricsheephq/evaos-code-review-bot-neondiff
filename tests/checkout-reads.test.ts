@@ -124,6 +124,9 @@ describe("checkout reads", () => {
       }
     });
     expect(result.droppedFromSchema).toEqual([]);
+    expect(JSON.parse(readFileSync(join(cwd, "evidence/codex-commands.json"), "utf8"))).toMatchObject({
+      commands: [], parseNote: "prompt_echo_not_found"
+    });
     if (checkoutReads) {
       expect(result.findings).toEqual([]);
       expect(result.droppedFromEvidence).toHaveLength(malformed.length);
@@ -141,7 +144,8 @@ describe("checkout reads", () => {
     const parsed = parseCodexCommands(stderr);
     expect(parsed.commands.map(c => c.flagged)).toEqual([false, false, false, true, true, true, true, true, true, true, true, true]);
     expect(parsed.commands.every(c => c.exitStatus === 1)).toBe(true);
-    expect(parseCodexCommands("exec\n/bin/zsh -lc 'rg unfinished' in /fixture/repo\n").commands).toEqual([]);
+    expect(parseCodexCommands("exec\n/bin/zsh -lc 'rg unfinished' in /fixture/repo\n").commands)
+      .toEqual([{ command: "rg unfinished", cwd: "/fixture/repo", exitStatus: null, flagged: false }]);
     const bounded = parseCodexCommands(Array(205).fill(`exec\n/bin/zsh -lc 'rg ${"a".repeat(400)}' in /fixture/repo\n succeeded in 1ms:\n`).join(""));
     expect(bounded.commands).toHaveLength(200);
     expect(bounded).toMatchObject({ counts: { total: 205, blocksSeen: 205, blocksRecorded: 200 }, truncated: true });
@@ -154,13 +158,45 @@ describe("checkout reads", () => {
     expect(parsed.commands).toEqual([{ command: 'rg -n " in " src', cwd: "/repo", exitStatus: 0, flagged: false }]);
     expect(parseCodexCommands(block("rg x"), prompt).commands).toEqual([]);
     expect(parseCodexCommands(block("for f in src/*.ts; do wc -l $f; done")).commands[0]).toMatchObject({ cwd: "/repo", flagged: true });
-    expect(parseCodexCommands("exec\nrg x in relative\n succeeded in 1ms:\n").commands).toEqual([]);
+    expect(parseCodexCommands("exec\nrg x in relative\n succeeded in 1ms:\n").commands)
+      .toEqual([{ command: "rg x in relative", cwd: null, exitStatus: 0, flagged: false }]);
     expect(parseCodexCommands("exec\n".repeat(200000)).commands).toEqual([]);
     const overflow = parseCodexCommands(block("rg x").repeat(200) + block("node y.js"));
     expect(overflow).toMatchObject({ counts: { total: 201, flagged: 1, blocksSeen: 201, blocksRecorded: 200 }, truncated: true });
   });
+  it.each(["codex-v0163-heredoc-fix.txt", "codex-v0163-heredoc-review.txt"])("records and flags the captured multiline header in %s", name => {
+    const parsed = parseCodexCommands(fixture(name));
+    expect(parsed.counts).toEqual({ total: 1, flagged: 1, blocksSeen: 1, blocksRecorded: 1 });
+    expect(parsed.commands[0]).toMatchObject({ exitStatus: 0, flagged: true });
+    expect(parsed.commands[0]?.command).toMatch(/^python3 - <<'PY'\nfrom pathlib import Path\n/);
+    expect(parsed.commands[0]?.cwd).toBe("/work/repo");
+  });
+  it("records every captured parallel header and pairs statuses in order", () => {
+    const captured = fixture("codex-v0163-parallel.txt");
+    const parsed = parseCodexCommands(captured);
+    expect(parsed.counts).toEqual({ total: 4, flagged: 0, blocksSeen: 4, blocksRecorded: 4 });
+    expect(parsed.commands.map(c => c.exitStatus)).toEqual([0, 0, 0, 0]);
+    expect(parsed.commands.map(c => c.command.split(" ")[0])).toEqual(["cat", "cat", "sed", "sed"]);
+    const headers = captured.slice(0, captured.indexOf(" succeeded"));
+    const partial = parseCodexCommands(headers + " exited -9 in 2ms:\noutput\n succeeded in 3ms:\noutput\n");
+    expect(partial.commands.map(c => c.exitStatus)).toEqual([-9, 0, null, null]);
+    expect(partial.counts.blocksSeen).toBe(4);
+    const missingCwd = parseCodexCommands(headers.replace(/ in \/[^\n]+/g, " in") + " succeeded in 0ms:\n");
+    expect(missingCwd.commands.map(c => c.cwd)).toEqual([null, null, null, null]);
+    expect(missingCwd.commands.map(c => c.flagged)).toEqual([false, false, false, false]);
+  });
+  it("records an unterminated interpreter and limits a header scan to 200 lines", () => {
+    expect(parseCodexCommands("exec\n/bin/zsh -lc 'node server.js' in /repo")).toMatchObject({
+      commands: [{ command: "node server.js", cwd: "/repo", exitStatus: null, flagged: true }], counts: { blocksSeen: 1, flagged: 1 }
+    });
+    const parsed = parseCodexCommands("exec\nnode server.js\n" + "line\n".repeat(201) + " in /beyond-cap\n succeeded in 0ms:\nexec\nrg x in /repo\n succeeded in 0ms:\n");
+    expect(parsed.counts.blocksSeen).toBe(2);
+    expect(parsed.commands[0]).toMatchObject({ cwd: null, exitStatus: 0 });
+    expect(parsed.commands[1]).toMatchObject({ command: "rg x", exitStatus: 0 });
+    expect(parsed.truncated).toBe(true);
+  });
   it.each([
-    "rg x; node y.js", "cat a & node b", "cat <(npm test)", "cat >(node x.js)", "cat $(node x.js)", "cat `node x.js`",
+    "rg x; node y.js", "rg x\nnode y.js", "cat a & node b", "cat <(npm test)", "cat >(node x.js)", "cat $(node x.js)", "cat `node x.js`",
     "find . -exec sh {} \\;", "find . -execdir sh {} +", "find . -ok sh {} \\;", "find . -okdir sh {} +", "find . -fprint out",
     "rg --pre ./x.sh foo", "rg --pre=node foo", "rg --pre-glob=*.ts foo", "rg --hostname-bin=node foo",
     "git -c core.pager=node show", "git --exec-path=/tmp show", "git --upload-pack=node show", "git push",

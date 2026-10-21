@@ -436,5 +436,6 @@ empty evidence is allowed for diff-only claims. Citations stay in local evidence
 Every Codex call filters its shell environment to core variables and excludes
 secret-named variables. Every review writes a bounded, detect-only
 `codex-commands.json` audit; flagged commands do not fail the review.
+The audit is best-effort telemetry, not a security boundary: shell quoting, option abbreviations and shell-specific syntax can hide a non-read command from it. The boundary is the read-only sandbox and the filtered shell environment.
 A review fails closed if the model quotes secret-like text, including in a citation.
 Human-format stderr can imitate exec blocks, so this audit cannot establish execution with certainty.
