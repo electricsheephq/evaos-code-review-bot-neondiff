@@ -271,6 +271,21 @@ export function decideReviewEvent(
     : "COMMENT";
 }
 
+export const SEVERITY_DEMOTION_NOTE = "a second check did not confirm it.";
+
+export function demoteReviewComment(comment: ReviewComment, note: string): ReviewComment | undefined {
+  const original = comment.severity;
+  const prefix = `**${original}: `;
+  if ((original !== "P0" && original !== "P1") || !comment.body.startsWith(prefix)) return undefined;
+  return {
+    ...comment,
+    severity: "P2",
+    body: `**P2: ${comment.body.slice(prefix.length)}\n\n_Severity lowered from ${original}: ${note}_`,
+    severityDemotedFrom: original,
+    severityDemotionReason: note
+  };
+}
+
 export function formatReviewComment(
   finding: Finding,
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy,

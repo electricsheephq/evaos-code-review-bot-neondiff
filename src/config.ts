@@ -289,6 +289,10 @@ export interface SelfConsistencyConfig {
   provider?: string;
   /** Cost bound: max findings re-checked per review, in ranked order. Default 5. */
   maxFindingsPerReview?: number;
+  /** Policy for unconfirmed or unsupported findings: suppress (default) or lower to P2. */
+  onUnsupported?: "suppress" | "demote";
+  /** Optional positive per-verifier-call timeout in milliseconds; absent inherits the runtime timeout. */
+  timeoutMs?: number;
 }
 
 export interface RiskWeightedQueueConfig {
@@ -1018,6 +1022,10 @@ function validateSelfConsistencyConfig(value: unknown, label: string): void {
   if (value.maxFindingsPerReview !== undefined) {
     validatePositiveInteger(value.maxFindingsPerReview, `${label}.maxFindingsPerReview`);
   }
+  if (value.onUnsupported !== undefined && value.onUnsupported !== "suppress" && value.onUnsupported !== "demote") {
+    throw new Error(`${label}.onUnsupported must be one of suppress or demote`);
+  }
+  if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
 }
 
 function validateCalibrationLoopConfig(value: unknown, label: string): void {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { GitHubApi } from "../src/github.js";
+import { demoteReviewComment, normalizeFindingsForReview, SEVERITY_DEMOTION_NOTE } from "../src/findings.js";
 import { collectAnsweredThreads, matchPriorThread, titleWords, wordSetJaccard } from "../src/prior-thread-suppression.js";
 import type { Finding, PullReviewComment } from "../src/types.js";
 
@@ -17,6 +18,14 @@ const finding: Finding = { severity: "P2", path: "src/save.ts", line: 30, title:
 const threads = () => collectAnsweredThreads([root, reply], isOwn);
 
 describe("prior thread suppression", () => {
+  it("round trips a demoted production comment without leaking its note into the extracted body", () => {
+    const severe = { ...finding, severity: "P1" as const };
+    const formatted = normalizeFindingsForReview([severe]).comments[0]!;
+    const demoted = demoteReviewComment(formatted, SEVERITY_DEMOTION_NOTE)!;
+    expect(demoted.body).toContain("_Severity lowered from P1:");
+    expect(collectAnsweredThreads([{ ...root, body: demoted.body }, reply], isOwn))
+      .toEqual([{ id: root.id, path: finding.path, line: finding.line, title: finding.title, body: finding.body }]);
+  });
   it("extracts title/body and keeps the current-head line", () => {
     expect(threads()).toEqual([{ id: 1, path: root.path, line: 30, title: finding.title, body: finding.body }]);
   });

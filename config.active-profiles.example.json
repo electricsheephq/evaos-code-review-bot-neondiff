@@ -47,6 +47,7 @@
       "mode": "trusted_command_only"
     },
     "selfConsistency": {
+      "onUnsupported": "suppress",
       "enabled": false,
       "severities": [
         "P0",

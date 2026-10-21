@@ -825,6 +825,96 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("demotes oversized immutable evidence and records the resolved policy", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-severe-worker-oversized-evidence-"));
+    roots.push(root);
+    const fixture = join(root, "worktree");
+    mkdirSync(join(fixture, "src"), { recursive: true });
+    const filename = "src/oversized.ts";
+    const blob = `${"x".repeat(65_536)}\n`;
+    writeFileSync(join(fixture, filename), blob);
+    execFileSync("git", ["init", "--quiet"], { cwd: fixture });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: fixture });
+    execFileSync("git", ["config", "user.name", "NeonDiff test"], { cwd: fixture });
+    execFileSync("git", ["add", "."], { cwd: fixture });
+    execFileSync("git", ["commit", "--quiet", "-m", "oversized"], { cwd: fixture });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
+    const patch = "@@ -1 +1 @@\n+x";
+    const file = { filename, patch, status: "modified", additions: 1, deletions: 0, changes: 1 };
+    severeCurrentWorktree.enabled = true;
+    severeWorktreePath.value = fixture;
+    const config = minimalConfig(root);
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true, onUnsupported: "demote" } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(431, head);
+    zcodeFindingsByPath.set(filename, [p1Finding(filename, "Oversized severe candidate")]);
+
+    const result = await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true });
+
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, head);
+    expect(result).toBe("reviewed");
+    expect(createdReviews[0]?.comments).toHaveLength(1);
+    expect((createdReviews[0]?.comments[0] as unknown as { body: string }).body).toMatch(/^\*\*P2: /);
+    expect(createdReviews[0]?.event).toBe("COMMENT");
+    expect(zcodePrompts.some((prompt) => prompt.includes("severe-verifier-input-v1"))).toBe(false);
+    const selfConsistency = JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8"));
+    expect(selfConsistency.onUnsupported).toBe("demote");
+    expect(selfConsistency.verdicts[0]).toMatchObject({
+      action: "demoted",
+      path: filename,
+      refuted: true,
+      receipt: {
+        state: "incomplete",
+        disposition: "suppress",
+        reasonCode: "cap_exceeded",
+        evidence: { files: [], omitted: [{ path: filename, code: "cap_exceeded" }], complete: false }
+      }
+    });
+    expect(JSON.stringify(selfConsistency)).not.toContain(blob);
+    state.close();
+  });
+
+  it.each([undefined, 60_000])("passes the verifier timeout %s to Codex and ZCode without changing the main timeout", async (timeoutMs) => {
+    const codex = await import("../src/codex-runtime.js");
+    const zcode = await import("../src/zcode.js");
+    const main = vi.spyOn(codex, "runCodexReview");
+    const verifier = vi.spyOn(codex, "runCodexStructuredOutput").mockResolvedValue({ value: {}, rawResponse: "{}" });
+    try {
+      for (const useCodex of [true, false]) {
+        const root = mkdtempSync(join(tmpdir(), "neondiff-verifier-timeout-")); roots.push(root);
+        const config = minimalConfig(root);
+        config.zcode.timeoutMs = 180_000;
+        if (useCodex) config.codexRuntime = { enabled: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
+          reasoningEffort: "high", contextWindowTokens: 500_000, timeoutMs: 300_000, maxOutputBytes: 1_000_000 };
+        config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true, ...(useCodex ? {} : { onUnsupported: "demote" as const }), ...(timeoutMs === undefined ? {} : { timeoutMs }) } };
+        severeCurrentWorktree.enabled = true;
+        const file = pullFile("src/severe-verification-evidence.ts", 40);
+        const candidate = p1Finding(file.filename, "Verifier timeout fixture");
+        main.mockResolvedValue({ findings: [candidate], droppedFromSchema: [], rawResponse: JSON.stringify({ findings: [candidate] }), attempts: 1, degradedRecovery: false });
+        zcodeFindingsByPath.set(file.filename, [candidate]);
+        const state = new ReviewStateStore(config.statePath);
+        const pull = pullSummary(433, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+        pull.authorAssociation = "OWNER";
+        try {
+          expect(await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
+          if (useCodex) {
+            expect(main).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }));
+            expect(verifier).toHaveBeenCalledTimes(1);
+            expect(verifier).toHaveBeenCalledWith(expect.objectContaining({ artifactPrefix: "severe-verifier", timeoutMs: timeoutMs ?? 300_000 }));
+          } else {
+            expect(zcode.runZCodeRawJson).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: timeoutMs ?? 180_000 }));
+          }
+          const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+          const ledger = JSON.parse(readFileSync(join(evidenceDir, "outcome-ledger.json"), "utf8"));
+          expect(ledger.runtime.notes).toContain(useCodex
+            ? "Self-consistency re-check (#303): 1 actual P0/P1 redraw(s) — 0 retained, 1 suppressed (0 failure(s)), 0 capped candidate(s). Suppression is fail-closed and is not a provider refutation."
+            : "Self-consistency re-check (#303): 1 actual P0/P1 redraw(s) — 0 retained, 1 lowered to P2, 0 suppressed (0 failure(s)), 0 capped candidate(s).");
+          expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).onUnsupported).toBe(useCodex ? "suppress" : "demote");
+        } finally { state.close(); }
+      }
+    } finally { main.mockRestore(); verifier.mockRestore(); }
+  });
+
   it("rechecks the approved provider revision before an ensemble retry", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-provider-revision-"));
     roots.push(root);

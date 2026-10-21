@@ -4124,7 +4124,7 @@ async function applySelfConsistencyRecheck(input: {
               appConfigPath: input.config.zcode.appConfigPath,
               model: input.config.zcode.model,
               ...(providerId ? { providerId } : {}),
-              timeoutMs: input.config.zcode.timeoutMs,
+              timeoutMs: selfConsistencyConfig.timeoutMs ?? input.config.zcode.timeoutMs,
               retryMaxRetries: input.config.zcode.retryMaxRetries
             });
         return parseSevereVerificationTransport(rawResponse, transportInput);
@@ -4144,6 +4144,7 @@ async function applySelfConsistencyRecheck(input: {
   // Redacted evidence: verdicts + both confidences, never raw model prose beyond the sanitized fields.
   writeRedactedJson(join(input.evidenceDir, "self-consistency.json"), {
     enabled: true,
+    onUnsupported: selfConsistencyConfig.onUnsupported ?? "suppress",
     provider: providerId,
     maxFindingsPerReview: selfConsistencyConfig.maxFindingsPerReview ?? 5,
     verdicts: result.verdicts
@@ -4154,7 +4155,11 @@ async function applySelfConsistencyRecheck(input: {
   const redrawn = result.verdicts.length - capped;
   const suppressed = result.verdicts.filter((verdict) => verdict.refuted === true && verdict.error !== "severe_verifier_cap_exceeded").length;
   const failed = result.verdicts.filter((verdict) => verdict.error !== undefined && verdict.error !== "severe_verifier_cap_exceeded").length;
-  const runtimeNote = result.verdicts.length
+  const demoted = result.verdicts.filter((verdict) => verdict.action === "demoted").length;
+  const demoteSuppressed = result.verdicts.filter((verdict) => verdict.action === "suppressed").length;
+  const runtimeNote = result.verdicts.length && selfConsistencyConfig.onUnsupported === "demote"
+    ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${demoted} lowered to P2, ${demoteSuppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s).`
+    : result.verdicts.length
     ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${suppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s). Suppression is fail-closed and is not a provider refutation.`
     : undefined;
 
@@ -4181,7 +4186,7 @@ async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: str
   try {
     return (await runCodexStructuredOutput<unknown>({
       cwd, prompt, cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort,
-      evidenceDir: scratch, timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
+      evidenceDir: scratch, timeoutMs: config.reviewGate?.selfConsistency?.timeoutMs ?? runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
       artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value,
       usageEvidenceDir
     })).rawResponse;

@@ -120,6 +120,8 @@ export interface ReviewComment {
   body: string;
   severity: Severity;
   category: RegressionCategory;
+  severityDemotedFrom?: "P0" | "P1";
+  severityDemotionReason?: string;
   /** Model confidence (0..1); internal gating/evidence metadata, never rendered publicly. */
   confidence: number;
   title: string;
