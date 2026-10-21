@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,8 +12,11 @@ import {
   runCodexStructuredOutput
 } from "../src/codex-runtime.js";
 import { buildReviewProviderMetadata, resolveSelfConsistencyBackend } from "../src/worker.js";
+import { buildLcmReviewAssessmentBody } from "../src/lcm-review-assessment.js";
 
 const temporaryRoots: string[] = [];
+const fixtureSummary = { changedBehavior: ["Fixture"], invariants: ["Fixture"], evidence: ["Fixture"],
+  limitations: ["Synthetic output only"], noFindingRationale: "Fixture" };
 
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -321,6 +324,7 @@ describe("Codex CLI review runtime", () => {
       .toContain('"classification":"bug"');
     expect(existsSync(join(evidenceDir, "codex-issue-analysis-stdout.txt"))).toBe(true);
     expect(existsSync(join(evidenceDir, "codex-issue-analysis-stderr.txt"))).toBe(true);
+    expect(existsSync(join(evidenceDir, "secret-redactions.json"))).toBe(false);
   });
 
   it("rejects unsafe structured-output artifact prefixes before process execution", async () => {
@@ -351,13 +355,13 @@ describe("Codex CLI review runtime", () => {
     expect(invoked).toBe(false);
   });
 
-  it("replaces a rejected secret-like result artifact before failing closed", async () => {
+  it("redacts finding text and logs while retaining the review and metadata only", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-codex-secret-result-"));
     temporaryRoots.push(root);
     const evidenceDir = join(root, "evidence");
     const fixtureToken = ["super", "secret", "token"].join("-");
 
-    await expect(runCodexReview({
+    const result = await runCodexReview({
       cwd: join(root, "worktree"),
       prompt: "Return the fixture result.",
       cliPath: "/Users/test/.local/bin/codex",
@@ -377,15 +381,118 @@ describe("Codex CLI review runtime", () => {
             title: "Fixture finding",
             body: `Leaked ${fixtureToken}`,
             confidence: 0.99
-          }]
+          }], summary: fixtureSummary
         }));
-        return { stdout: "", stderr: "", status: 0, signal: null };
+        return { stdout: `Leaked ${fixtureToken}`, stderr: `Leaked ${fixtureToken}`, status: 0, signal: null };
       }
-    })).rejects.toThrow("codex_runtime_secret_output");
+    });
 
     const retained = readFileSync(join(evidenceDir, "codex-review-result.json"), "utf8");
+    expect(result.findings[0]?.body).toBe("Leaked [redacted-secret]");
+    expect(result.rawResponse).toBe(retained);
     expect(retained).not.toContain(fixtureToken);
-    expect(retained).toContain("rejected-secret-like-output");
+    expect(statSync(join(evidenceDir, "codex-review-result.json")).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(join(evidenceDir, "secret-redactions.json"), "utf8"))).toEqual({
+      count: 1, paths: ["/findings/0/body"], ruleIds: ["hyphenated-named-credential"],
+      locations: [{ path: "/findings/0/body", ruleIds: ["hyphenated-named-credential"] }]
+    });
+    for (const file of readdirSync(evidenceDir)) {
+      expect(readFileSync(join(evidenceDir, file), "utf8").includes(fixtureToken)).toBe(false);
+    }
+  });
+
+  it("reports nested strings and keys with safe escaped JSON pointers and per-location rules", async () => {
+    const token = ["ghp", "abcdefgh12345678"].join("_");
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-pointers-"));
+    temporaryRoots.push(root);
+    const reports: unknown[] = [];
+    const result = await runCodexStructuredOutput({
+      cwd: root, prompt: "Fixture", cliPath: "/fixture/codex", model: "gpt-6.1-sol", reasoningEffort: "high",
+      evidenceDir: root, timeoutMs: 1000, maxOutputBytes: 100000, artifactPrefix: "fixture", schema: {},
+      parse: value => value, onSecretRedaction: report => reports.push(report)
+    }, {
+      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ [`a/~${token}`]: [token, null, 42, true],
+          nested: { body: ["super", "secret", "token"].join("-") }, ["__proto__"]: "ordinary" }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    expect(result.value).toMatchObject({ "a/~[redacted-secret]": ["[redacted-secret]", null, 42, true] });
+    expect(Object.hasOwn(result.value as object, "__proto__")).toBe(true);
+    expect(reports).toEqual([{
+      paths: ["/a~1~0[redacted-secret]", "/a~1~0[redacted-secret]/0", "/nested/body"],
+      ruleIds: ["github-prefixed-token", "hyphenated-named-credential"],
+      locations: [
+        { path: "/a~1~0[redacted-secret]", ruleIds: ["github-prefixed-token"] },
+        { path: "/a~1~0[redacted-secret]/0", ruleIds: ["github-prefixed-token"] },
+        { path: "/nested/body", ruleIds: ["hyphenated-named-credential"] }
+      ]
+    }]);
+    expect(JSON.stringify(reports).includes(token)).toBe(false);
+  });
+
+  it.each(["unparseable", "detector-redactor asymmetry"])("keeps the rejection marker for %s output", async kind => {
+    const token = ["super", "secret", "token"].join("-");
+    const raw = kind === "unparseable" ? `invalid ${token}` : JSON.stringify({ token: "abcdefghijklmnop" });
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-rejected-"));
+    temporaryRoots.push(root);
+    let reported = false, parsed = false;
+    await expect(runCodexStructuredOutput({
+      cwd: root, prompt: "Fixture", cliPath: "/fixture/codex", model: "gpt-6.1-sol", reasoningEffort: "high",
+      evidenceDir: root, timeoutMs: 1000, maxOutputBytes: 100000, artifactPrefix: "fixture", schema: {},
+      parse: value => { parsed = true; return value; }, onSecretRedaction: () => { reported = true; }
+    }, {
+      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, raw);
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    })).rejects.toThrow("codex_runtime_secret_output: result contained secret-like text");
+    expect(readFileSync(join(root, "fixture-result.json"), "utf8")).toBe('{"status":"rejected-secret-like-output"}\n');
+    expect(reported).toBe(false);
+    expect(parsed).toBe(false);
+  });
+
+  it("keeps clean JSON byte-identical and does not report a redaction", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-clean-"));
+    temporaryRoots.push(root);
+    const raw = '{\n  "findings": [], "extra": [null, 1, true]\n}\n';
+    let reported = false;
+    const result = await runCodexStructuredOutput({
+      cwd: root, prompt: "Fixture", cliPath: "/fixture/codex", model: "gpt-6.1-sol", reasoningEffort: "high",
+      evidenceDir: root, timeoutMs: 1000, maxOutputBytes: 100000, artifactPrefix: "fixture", schema: {},
+      parse: value => value, onSecretRedaction: () => { reported = true; }
+    }, {
+      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, raw);
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    expect(result.rawResponse).toBe(raw);
+    expect(readFileSync(join(root, "fixture-result.json"), "utf8")).toBe(raw);
+    expect(reported).toBe(false);
+    expect(existsSync(join(root, "secret-redactions.json"))).toBe(false);
+  });
+
+  it("passes only redacted assessment fields to the LCM publisher", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-lcm-redaction-"));
+    temporaryRoots.push(root);
+    const token = ["super", "secret", "token"].join("-");
+    const result = await runCodexReview({
+      cwd: root, prompt: "Fixture", cliPath: "/fixture/codex", model: "gpt-6.1-sol", reasoningEffort: "high",
+      evidenceDir: root, timeoutMs: 1000, maxOutputBytes: 100000, lcmReviewAssessment: true
+    }, {
+      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [], summary: fixtureSummary, review_assessment: {
+          verdict: "ABSTAIN", scope: `Fixture ${token}`, unresolved_findings: [],
+          limitations: ["Fixture only"], acceptance_evidence: ["Fixture"]
+        } }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    const body = buildLcmReviewAssessmentBody({ repo: "electricsheephq/lcm-x", prNumber: 1,
+      baseSha: "a".repeat(40), headSha: "b".repeat(40), rawResponse: result.rawResponse, complete: true, droppedFindingCount: 0 });
+    expect(body).toContain("Fixture [redacted-secret]");
+    expect(body?.includes(token)).toBe(false);
   });
 
   it("keeps default self-consistency draws on the active Codex backend", () => {

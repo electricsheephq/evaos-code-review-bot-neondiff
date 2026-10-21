@@ -7,7 +7,7 @@ import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
 import { verifySourceRef } from "./issue-analysis.js";
 import type { DroppedFinding } from "./types.js";
-import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import { containsSecretLikeText, redactSecrets, secretLikeRuleIds } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import { parseReviewModelSummary, type ZCodeReviewResult } from "./zcode.js";
 
@@ -30,6 +30,12 @@ export interface CodexProcessResult {
   status: number | null;
   signal: NodeJS.Signals | null;
   error?: Error & { code?: string };
+}
+
+export interface SecretRedactionReport {
+  paths: string[];
+  ruleIds: string[];
+  locations: Array<{ path: string; ruleIds: string[] }>;
 }
 
 const CODEX_ENV_ALLOWLIST = [
@@ -273,6 +279,8 @@ export async function runCodexReview(input: {
   const result = await runCodexStructuredOutput({
     ...input,
     artifactPrefix: "codex-review",
+    onSecretRedaction: (report) => writeSecureFileSync(join(input.evidenceDir, "secret-redactions.json"),
+      `${JSON.stringify({ count: report.locations.length, ...report }, null, 2)}\n`),
     schema: input.lcmReviewAssessment ? {
       ...schema,
       required: [...schema.required, "review_assessment"],
@@ -318,6 +326,7 @@ export async function runCodexStructuredOutput<T>(input: {
   parse: (value: unknown) => T;
   /** Where this call's usage file goes when its own evidence dir is scratch (defaults to evidenceDir). */
   usageEvidenceDir?: string;
+  onSecretRedaction?: (report: SecretRedactionReport) => void;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
@@ -400,8 +409,34 @@ export async function runCodexStructuredOutput<T>(input: {
     if (outputFd !== undefined) closeSync(outputFd);
   }
   if (containsSecretLikeText(rawResponse)) {
-    writeSecureFileSync(outputPath, '{"status":"rejected-secret-like-output"}\n');
-    throw new Error("codex_runtime_secret_output: result contained secret-like text");
+    const locations: SecretRedactionReport["locations"] = [];
+    const redactString = (text: string, path: string): string => {
+      const redacted = redactSecrets(text);
+      if (redacted !== text) locations.push({ path, ruleIds: secretLikeRuleIds(text) });
+      return redacted;
+    };
+    const walk = (value: unknown, path: string): unknown => {
+      if (typeof value === "string") return redactString(value, path);
+      if (Array.isArray(value)) return value.map((item, index) => walk(item, `${path}/${index}`));
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+        const safeKey = redactSecrets(key);
+        // Point into the redacted object: original keys may themselves contain credentials.
+        const childPath = `${path}/${safeKey.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+        redactString(key, childPath);
+        return [safeKey, walk(item, childPath)];
+      }));
+      return value;
+    };
+    try {
+      rawResponse = JSON.stringify(walk(JSON.parse(rawResponse), ""));
+      if (containsSecretLikeText(rawResponse)) throw new Error("redaction incomplete");
+    } catch {
+      writeSecureFileSync(outputPath, '{"status":"rejected-secret-like-output"}\n');
+      throw new Error("codex_runtime_secret_output: result contained secret-like text");
+    }
+    writeSecureFileSync(outputPath, rawResponse);
+    input.onSecretRedaction?.({ paths: [...new Set(locations.map(({ path }) => path))],
+      ruleIds: [...new Set(locations.flatMap(({ ruleIds }) => ruleIds))], locations });
   }
   let parsed: unknown;
   try {

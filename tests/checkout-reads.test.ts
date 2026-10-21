@@ -137,6 +137,26 @@ describe("checkout reads", () => {
       expect(result.droppedFromEvidence).toBeUndefined();
     }
   });
+  it("drops a redacted citation as evidence_unverified while other findings survive", async () => {
+    const cwd = root();
+    const token = ["super", "secret", "token"].join("-");
+    writeFileSync(join(cwd, "context.ts"), `// ${token}\nconst guard = true;\n`);
+    const result = await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex",
+      model: "gpt-6.1-sol", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000, checkoutReads: true }, {
+      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [
+          { ...finding, evidence: [{ ...ref, startLine: 1, endLine: 1, excerpt: `// ${token}` }] },
+          { ...finding, title: "Valid citation", evidence: [ref] },
+          { ...finding, title: "Diff only", evidence: [] }
+        ], summary }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    expect(result.findings.map(f => f.title)).toEqual(["Valid citation", "Diff only"]);
+    expect(result.droppedFromEvidence).toMatchObject([{ reason: "evidence_unverified", evidenceFailure: "excerpt_mismatch",
+      evidence: [{ excerpt: "// [redacted-secret]" }] }]);
+    expect(result.rawResponse.includes(token)).toBe(false);
+  });
   it("parses the captured v0.163 exec block and audits read commands and executable commands", () => {
     expect(parseCodexCommands(fixture("codex-v0163-stderr.txt"))).toMatchObject({ commands: [{ command: "env | cut -d= -f1 | sort", cwd: "/fixture/repo", exitStatus: 0, flagged: true }] });
     const commands = ["rg needle src", "sed -n '1,5p' src/x.ts", "git show HEAD:src/x.ts", "node x.js", "npm test", "bash ./scripts/x.sh", "./node_modules/.bin/x", "find . -delete", "git push", "cat x | python3 -", "git diff > x", "go run x.go"];
