@@ -193,7 +193,7 @@ function hasVisualEvidence(text: string): boolean {
   ]);
 }
 
-// A proof mention counts unless a negation sits in its own sentence (up to the match) or in a line that
+// A proof mention counts unless a negation sits in its own sentence or in a line that
 // governs it: its markdown section heading, an enclosing parent bullet, or the "Previous validation:"
 // lead-in its list hangs from. An unrelated "no ..." in another bullet or sentence does not erase it.
 function hasUnnegatedProof(text: string, negationWords: string[], positives: RegExp[]): boolean {
@@ -202,7 +202,7 @@ function hasUnnegatedProof(text: string, negationWords: string[], positives: Reg
     const pattern = new RegExp(positive.source, "g");
     for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
       // Minimal matches only; one that crosses a sentence end borrows its outcome from the next sentence.
-      if (!/[.!?]\s/.test(match[0]) && !isNegatedProofMatch(text, lines, match, negationWords)) return true;
+      if (!CROSSES_SENTENCE_END.test(match[0]) && !isNegatedProofMatch(text, lines, match, negationWords)) return true;
       // Retry from the next character so a rejected match cannot hide later proof it overlaps.
       pattern.lastIndex = match.index + 1;
     }
@@ -210,17 +210,27 @@ function hasUnnegatedProof(text: string, negationWords: string[], positives: Reg
   });
 }
 
-const PROOF_SENTENCE_LOOKBACK = 400;
+const PROOF_SENTENCE_REACH = 400;
+// "worker.ts", "1.0.6" and "e.g. npm run build" do not end a sentence; ";" does not either, so
+// "previous validation: build passed; tests passed" stays one sentence.
+const SENTENCE_END = /(?<!\b(?:e\.g|i\.e|etc|vs|cf))[.!?]\s/g;
+const CROSSES_SENTENCE_END = new RegExp(SENTENCE_END.source);
 
 function isNegatedProofMatch(text: string, lines: ProofLine[], match: RegExpExecArray, negationWords: string[]): boolean {
-  const line = lines[lineIndexAt(lines, match.index)]!;
-  const windowStart = Math.max(line.start, match.index - PROOF_SENTENCE_LOOKBACK);
+  const lineIndex = lineIndexAt(lines, match.index);
+  const line = lines[lineIndex]!;
+  const matchEnd = match.index + match[0].length;
+  const lineEnd = lineIndex + 1 < lines.length ? lines[lineIndex + 1]!.start - 1 : text.length;
+  const windowStart = Math.max(line.start, match.index - PROOF_SENTENCE_REACH);
   let sentenceStart = windowStart;
-  // "worker.ts" or "1.0.6" do not end a sentence; ";" does not either, so "previous validation: build passed; tests passed" stays one sentence.
-  for (const boundary of text.slice(windowStart, match.index).matchAll(/[.!?]\s/g)) {
+  for (const boundary of text.slice(windowStart, match.index).matchAll(SENTENCE_END)) {
     sentenceStart = windowStart + boundary.index + boundary[0].length;
   }
-  return [text.slice(sentenceStart, match.index + match[0].length), ...line.governing]
+  // The whole sentence counts, so a trailing qualifier ("tests passed (previous validation only)") still vetoes.
+  const after = text.slice(matchEnd, Math.min(lineEnd, matchEnd + PROOF_SENTENCE_REACH));
+  const end = [...after.matchAll(SENTENCE_END)][0];
+  const sentenceEnd = end === undefined ? matchEnd + after.length : matchEnd + end.index + 1;
+  return [text.slice(sentenceStart, sentenceEnd), ...line.governing]
     .some((context) => hasNegatedOrHistoricalProof(context, negationWords));
 }
 

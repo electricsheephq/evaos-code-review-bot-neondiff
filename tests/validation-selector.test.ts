@@ -208,7 +208,9 @@ describe("changed-surface validation selector", () => {
     const weakBodies = [
       "build: not run. tests passed",
       "- Previous validation:\n  - build passed\n  - tests passed",
-      "## Previous validation\nThe build passed and tests passed.\n\n## Notes\nNothing else."
+      "## Previous validation\nThe build passed and tests passed.\n\n## Notes\nNothing else.",
+      "build passed; tests passed (previous validation only).",
+      "No validation was run, e.g. npm run build."
     ];
 
     for (const body of weakBodies) {
