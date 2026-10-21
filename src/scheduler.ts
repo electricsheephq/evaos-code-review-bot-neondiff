@@ -1397,12 +1397,6 @@ async function runLeasedQueueJob(input: {
     return "failed";
   }
 
-  if (recordPublicRepoAuthorGateSkip({ ...input, repo: input.job.repo, pull })) {
-    updateQueueJobAfterReviewStatus({ ...input, pull, status: "untrusted_author_public_repo", now });
-    updateReviewerSessionJobAfterReviewStatus({ ...input, status: "untrusted_author_public_repo", now });
-    return "untrusted_author_public_repo";
-  }
-
   if (isClosedPull(pull)) {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
@@ -1461,6 +1455,13 @@ async function runLeasedQueueJob(input: {
       now
     });
     return "stale_retired";
+  }
+
+  // After the closed/stale retirements, so terminal PR states never requeue as author-blocked.
+  if (recordPublicRepoAuthorGateSkip({ ...input, repo: input.job.repo, pull })) {
+    updateQueueJobAfterReviewStatus({ ...input, pull, status: "untrusted_author_public_repo", now });
+    updateReviewerSessionJobAfterReviewStatus({ ...input, status: "untrusted_author_public_repo", now });
+    return "untrusted_author_public_repo";
   }
 
   if (input.job.source !== "manual_command" && input.job.baseSha && pull.base.sha !== input.job.baseSha) {
@@ -2382,7 +2383,9 @@ function updateQueueJobAfterReviewStatus(input: {
       });
       return;
     case "untrusted_author_public_repo":
-      input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "blocked_on_proof",
+      // Terminal: a leasable blocked job would be re-leased every cycle. If the gate later allows
+      // the head, discovery enqueues a fresh job after this terminal one.
+      input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired",
         lastError: input.status, now: input.now });
       return;
     case "skipped_draft":

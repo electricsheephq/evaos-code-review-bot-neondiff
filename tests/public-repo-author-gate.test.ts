@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
-import { isPublicRepoAuthorBlocked } from "../src/public-repo-author-gate.js";
+import { codexChildUsesApiKeyOnly, isPublicRepoAuthorBlocked } from "../src/public-repo-author-gate.js";
+import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { reviewPull, retryFailedHeadWithDeps } from "../src/worker.js";
+import { recordPublicRepoAuthorGateSkip, reviewPull, retryFailedHeadWithDeps } from "../src/worker.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { runScheduledCycleWithDeps } from "../src/scheduler.js";
 import { buildOperatorDashboard, formatOperatorDashboardHuman } from "../src/operator-cli.js";
@@ -43,7 +44,32 @@ function pull(visibility: string, association?: string, login = "fixture-author"
 function apiEnv(key?: string) {
   vi.stubEnv("CODEX_API_KEY", key === "codex" ? "fake-api-key" : "");
   vi.stubEnv("OPENAI_API_KEY", key === "openai" ? "fake-api-key" : "");
+  // Isolate from any real ChatGPT login on the test machine.
+  vi.stubEnv("CODEX_HOME", mkdtempSync(join(tmpdir(), "neondiff-codex-home-")));
 }
+describe("Codex child authentication", () => {
+  it("counts API-key auth only when the key reaches the child and no ChatGPT login file exists", () => {
+    const none = vi.fn(() => false);
+    expect(codexChildUsesApiKeyOnly({}, none)).toBe(false);
+    expect(codexChildUsesApiKeyOnly({ CODEX_API_KEY: "fake-api-key", CODEX_HOME: "/fixture/home" }, none)).toBe(true);
+    expect(none).toHaveBeenCalledWith("/fixture/home/auth.json");
+    expect(codexChildUsesApiKeyOnly({ OPENAI_API_KEY: "fake-api-key", CODEX_HOME: "/fixture/home" },
+      (path) => path === "/fixture/home/auth.json")).toBe(false);
+    const defaultHome = vi.fn(() => false);
+    expect(codexChildUsesApiKeyOnly({ OPENAI_API_KEY: "fake-api-key" }, defaultHome)).toBe(true);
+    expect(String(defaultHome.mock.calls[0]?.[0])).toMatch(/[\\/]\.codex[\\/]auth\.json$/);
+  });
+  it("keeps the gate on when the parent has a key that the Codex child never receives", () => {
+    vi.stubEnv("OPENAI_API_KEY", "fake-api-key");
+    vi.stubEnv("CODEX_HOME", mkdtempSync(join(tmpdir(), "neondiff-codex-home-")));
+    const child = buildCodexRuntimeEnv(process.env);
+    expect(codexChildUsesApiKeyOnly()).toBe(Boolean(child.OPENAI_API_KEY || child.CODEX_API_KEY));
+    if (!child.OPENAI_API_KEY && !child.CODEX_API_KEY) {
+      expect(isPublicRepoAuthorBlocked(config(), pull("public", "CONTRIBUTOR"))).toBe(true);
+    }
+  });
+});
+
 describe("public repository author gate", () => {
   for (const key of [undefined, "codex", "openai"]) {
     for (const visibility of ["public", "private", "internal", "unknown"]) {
@@ -52,7 +78,9 @@ describe("public repository author gate", () => {
           apiEnv(key);
           const cfg = config();
           const pr = pull(visibility, association);
-          const blocked = !key && ["public", "unknown"].includes(visibility) &&
+          // A key only lifts the gate once it reaches the Codex child; the runtime allowlist does not forward it.
+          const keyReachesCodex = Boolean(buildCodexRuntimeEnv(process.env).CODEX_API_KEY);
+          const blocked = !keyReachesCodex && ["public", "unknown"].includes(visibility) &&
             !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "");
           expect(isPublicRepoAuthorBlocked(cfg, pr)).toBe(blocked);
           const root = mkdtempSync(join(tmpdir(), "neondiff-author-gate-")); roots.push(root);
@@ -110,8 +138,66 @@ describe("public repository author gate", () => {
         expect(result.skippedPolicy).toBe(1);
         expect(provider).not.toHaveBeenCalled(); expect(post).not.toHaveBeenCalled(); expect(commands).not.toHaveBeenCalled();
         expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
+        if (queued) {
+          // Terminal, so the job is never re-leased on later cycles.
+          expect(state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({
+            state: "stale_retired", lastError: "untrusted_author_public_repo" });
+          const getPull = vi.fn(async () => pr);
+          await runScheduledCycleWithDeps({ config: cfg, state,
+            github: { listOpenPulls: async () => [], getPull, listIssueComments: commands, canPostAsApp: () => true, upsertIssueComment: post },
+            options: { dryRun: false }, reviewPullImpl: provider, licenseAdmission: testLicenseAdmission });
+          expect(getPull).not.toHaveBeenCalled();
+        }
       } finally { state.close(); }
     }
+  });
+  it("retires a closed untrusted PR's queued job as closed, not as author-blocked", async () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-closed-")); roots.push(root);
+    const cfg = config(); cfg.reviewScheduler!.enabled = true;
+    cfg.evidenceDir = join(root, "evidence"); cfg.statePath = join(root, "state.sqlite");
+    const state = new ReviewStateStore(cfg.statePath); const pr = { ...pull("public", "NONE"), state: "closed" };
+    state.enqueueReviewQueueJob({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, baseSha: pr.base.sha });
+    try {
+      await runScheduledCycleWithDeps({ config: cfg, state,
+        github: { listOpenPulls: async () => [], getPull: async () => pr, canPostAsApp: () => true, upsertIssueComment: vi.fn() },
+        options: { dryRun: false }, reviewPullImpl: vi.fn(), licenseAdmission: testLicenseAdmission });
+      expect(state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({ state: "closed_retired" });
+      expect(state.getProcessedReview("org/repo", 1, pr.head.sha)?.error).not.toBe("untrusted_author_public_repo");
+    } finally { state.close(); }
+  });
+  it("reviews a previously gate-skipped head once the gate allows it", async () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-recover-")); roots.push(root);
+    const cfg = config(); cfg.reviewScheduler!.enabled = true;
+    cfg.evidenceDir = join(root, "evidence"); cfg.statePath = join(root, "state.sqlite");
+    const state = new ReviewStateStore(cfg.statePath); const pr = pull("public", "NONE");
+    const github = { listOpenPulls: async () => [pr], getPull: async () => pr, listIssueComments: vi.fn(async () => []),
+      canPostAsApp: () => true, upsertIssueComment: vi.fn() };
+    const provider = vi.fn(async () => "reviewed" as const);
+    try {
+      await runScheduledCycleWithDeps({ config: cfg, state, github, options: { dryRun: true },
+        reviewPullImpl: provider, licenseAdmission: testLicenseAdmission });
+      expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
+      expect(provider).not.toHaveBeenCalled();
+      const gate = cfg.reviewGate!.publicRepoAuthorGate;
+      cfg.reviewGate!.publicRepoAuthorGate = { ...gate, allowedLogins: [...gate.allowedLogins, "fixture-author"] };
+      await runScheduledCycleWithDeps({ config: cfg, state, github, options: { dryRun: true },
+        reviewPullImpl: provider, licenseAdmission: testLicenseAdmission });
+      expect(state.getProcessedReview("org/repo", 1, pr.head.sha)?.error).not.toBe("untrusted_author_public_repo");
+      const queued = state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 });
+      expect(provider.mock.calls.length + queued.length).toBeGreaterThan(0);
+    } finally { state.close(); }
+  });
+  it("does not rewrite skip evidence on every poll of a still-blocked head", () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-idempotent-")); roots.push(root);
+    const cfg = config(); cfg.evidenceDir = join(root, "evidence");
+    const state = new ReviewStateStore(join(root, "state.sqlite")); const pr = pull("public", "NONE");
+    try {
+      expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
+      const evidence = findFile(cfg.evidenceDir, "author-gate.json")!;
+      rmSync(evidence);
+      expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
+      expect(findFile(cfg.evidenceDir, "author-gate.json")).toBeUndefined();
+    } finally { state.close(); }
   });
   it("failed-head retry preserves the author skip and suppresses status comments", async () => {
     apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-retry-")); roots.push(root);

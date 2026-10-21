@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
@@ -206,6 +207,8 @@ export async function runCodexStructuredOutput<T>(input: {
   artifactPrefix: string;
   schema: unknown;
   parse: (value: unknown) => T;
+  /** Where this call's usage file goes when its own evidence dir is scratch (defaults to evidenceDir). */
+  usageEvidenceDir?: string;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
@@ -238,10 +241,14 @@ export async function runCodexStructuredOutput<T>(input: {
   const before = captureWorktreeState(input.cwd);
   const startedAt = Date.now();
   const result = await (dependencies.runProcess ?? runCodexProcess)(invocation);
-  if (input.artifactPrefix === "codex-review") {
-    writeSecureFileSync(join(input.evidenceDir, "codex-usage.json"),
-      `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt), null, 2)}\n`);
-  }
+  // Every Codex call records its usage, so a review's cost is the sum of its codex-usage*.json files.
+  const usageDir = input.usageEvidenceDir ?? input.evidenceDir;
+  mkdirSync(usageDir, { recursive: true });
+  const usageFile = input.artifactPrefix === "codex-review"
+    ? "codex-usage.json"
+    : `codex-usage-${input.artifactPrefix}-${randomBytes(4).toString("hex")}.json`;
+  writeSecureFileSync(join(usageDir, usageFile),
+    `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt), null, 2)}\n`);
   const after = captureWorktreeState(input.cwd);
   const stdout = redactSecrets(result.stdout);
   const stderr = redactSecrets(result.stderr);

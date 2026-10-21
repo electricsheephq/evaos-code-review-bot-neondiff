@@ -1492,13 +1492,20 @@ export interface ReviewPullInput {
 export function recordPublicRepoAuthorGateSkip(input: {
   config: BotConfig; state: ReviewStateStore; repo: string; pull: PullRequestSummary;
 }, visibility = visibilityFromPullSummary(input.pull)): boolean {
-  if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility)) return false;
   const reason = "untrusted_author_public_repo";
+  const existing = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const alreadySkipped = existing?.status === "skipped" && existing.error === reason;
+  if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility)) {
+    // The gate decision can change (mode, allowlist); a gate skip must not pin the head as processed.
+    if (alreadySkipped) input.state.clearAuthorGateSkip(input.repo, input.pull.number, input.pull.head.sha);
+    return false;
+  }
+  if (alreadySkipped) return true;
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
   mkdirSync(evidenceDir, { recursive: true });
   writeRedactedJson(join(evidenceDir, "author-gate.json"), { reason, visibility });
   // Preserve an existing posted review as historical truth.
-  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status !== "posted") {
+  if (existing?.status !== "posted") {
     input.state.recordProcessed({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
       status: "skipped", error: reason });
     input.state.recordReviewReadiness({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
@@ -4062,7 +4069,7 @@ async function applySelfConsistencyRecheck(input: {
         const messages = buildSevereVerificationTransport(transportInput);
         input.assertProviderConfigCurrent?.();
         const rawResponse = backend.useCodex
-          ? await runSevereCodexRawJson(input.config, input.worktreePath, JSON.stringify(messages))
+          ? await runSevereCodexRawJson(input.config, input.worktreePath, JSON.stringify(messages), input.evidenceDir)
           : await runZCodeRawJson({
               cwd: input.worktreePath,
               prompt: JSON.stringify(messages),
@@ -4121,14 +4128,15 @@ function severeVerificationFailureReceipt(
   }));
 }
 
-async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: string): Promise<string> {
+async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: string, usageEvidenceDir: string): Promise<string> {
   const runtime = config.codexRuntime!;
   const scratch = mkdtempSync(join(tmpdir(), "neondiff-severe-verifier-"));
   try {
     return (await runCodexStructuredOutput<unknown>({
       cwd, prompt, cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort,
       evidenceDir: scratch, timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
-      artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value
+      artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value,
+      usageEvidenceDir
     })).rawResponse;
   } finally {
     rmSync(scratch, { recursive: true, force: true });

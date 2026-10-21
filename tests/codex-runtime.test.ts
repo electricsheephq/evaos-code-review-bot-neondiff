@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -233,6 +233,31 @@ describe("Codex CLI review runtime", () => {
       }
     })).rejects.toThrow("codex_runtime_unsafe_write_attempt");
     expect(JSON.parse(readFileSync(join(root, "changed-evidence", "codex-usage.json"), "utf8"))).toMatchObject({ tokensUsed: null });
+  });
+
+  it("records usage for verifier calls in the review evidence dir, beside the review's own usage", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-verifier-usage-"));
+    temporaryRoots.push(root);
+    const reviewDir = join(root, "review-evidence");
+    for (let call = 0; call < 2; call += 1) {
+      await runCodexStructuredOutput({
+        cwd: join(root, "worktree"), prompt: "verify", cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-6.1-sol", reasoningEffort: "high", evidenceDir: join(root, `scratch-${call}`),
+        timeoutMs: 30_000, maxOutputBytes: 1024 * 1024, artifactPrefix: "severe-verifier",
+        schema: { type: "object" }, parse: (value) => value, usageEvidenceDir: reviewDir
+      }, {
+        captureWorktreeState: () => "clean",
+        runProcess: async (invocation) => {
+          writeFileSync(invocation.outputPath, "{}");
+          return { stdout: "", stderr: "model: gpt-6.1-sol\nreasoning effort: high\ntokens used\n12\u202f345\n", status: 0, signal: null };
+        }
+      });
+    }
+    const files = readdirSync(reviewDir).filter((name) => /^codex-usage-severe-verifier-[0-9a-f]{8}\.json$/.test(name));
+    expect(files).toHaveLength(2);
+    for (const name of files) {
+      expect(JSON.parse(readFileSync(join(reviewDir, name), "utf8"))).toMatchObject({ model: "gpt-6.1-sol", tokensUsed: 12345 });
+    }
   });
 
   it("supports a named strict structured result without weakening the read-only runtime", async () => {
