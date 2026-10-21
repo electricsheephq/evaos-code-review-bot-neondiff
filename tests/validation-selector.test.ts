@@ -167,6 +167,43 @@ describe("changed-surface validation selector", () => {
     }
   });
 
+  it("keeps a proof match that spans a semicolon or a line break", () => {
+    const cases = [
+      { repo: "electricsheephq/evaos-code-review-bot", file: "src/worker.ts", body: "`npm run build`\n`npm test`; passed." },
+      { repo: "electricsheephq/WorldOS", file: "Assets/Scenes/Main.unity", body: "Play\nMode verified." }
+    ];
+
+    for (const { repo, file, body } of cases) {
+      const pullWithProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo,
+        pull: pullWithProof,
+        files: [{ filename: file, additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithProof, validation }).status, body).toBe("sufficient");
+    }
+  });
+
+  it("keeps historical qualifiers across semicolons and from a list's lead-in line", () => {
+    const weakBodies = [
+      "Previous validation: build passed; tests passed.\nCurrent head: npm run build passed.",
+      "Previous validation:\n\n- build passed\n- tests passed\n\nCurrent head: npm run build passed."
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status, body).toBe("missing");
+      expect(proof.detectedEvidence, body).not.toContain("tests");
+    }
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."
