@@ -1493,7 +1493,7 @@ export function recordPublicRepoAuthorGateSkip(input: {
   config: BotConfig; state: ReviewStateStore; repo: string; pull: PullRequestSummary;
 }, visibility = visibilityFromPullSummary(input.pull)): boolean {
   const reason = "untrusted_author_public_repo";
-  const existing = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const existing = getProcessedReviewIfAvailable(input.state, input.repo, input.pull.number, input.pull.head.sha);
   const alreadySkipped = existing?.status === "skipped" && existing.error === reason;
   if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility)) {
     // The gate decision can change (mode, allowlist); a gate skip must not pin the head as processed.
