@@ -27,6 +27,7 @@ import {
   isRepairableReviewStatusCommentState,
   parseReviewStatusCommentState,
   postReviewStatusComment,
+  settleBaseMergeOnlyStatusComment,
   type ReviewStatusCommentGithub,
   type ReviewStatusCommentPostResult,
   type ReviewStatusCommentState
@@ -1663,12 +1664,23 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
   repo: string;
   pull: PullRequestSummary;
   dryRun: boolean;
-  processed?: { status: ProcessedStatus; reviewUrl?: string };
+  processed?: { status: ProcessedStatus; reviewUrl?: string; error?: string };
   onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
   if (!input.config.reviewStatusComment?.enabled || input.dryRun || !isReviewStatusCommentGithub(input.github)) return;
   const processed = input.processed ?? input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (processed?.status === "skipped" && processed.error === "base_merge_only") {
+    const result = await settleBaseMergeOnlyStatusComment({
+      enabled: true, dryRun: false, github: input.github, stateStore: input.state,
+      repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
+      botLogin: input.config.github.botLogin ?? DEFAULT_BOT_LOGIN,
+      pullTitle: input.pull.title, pullUrl: input.pull.html_url, now: input.now,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    if (result && !result.posted) input.onStatusCommentFailure?.();
+    return;
+  }
   if (processed?.status !== "posted") return;
   const postedJob = input.state
     .listReviewQueueJobsForPull({ repo: input.repo, pullNumber: input.pull.number, state: "posted" })
@@ -1722,6 +1734,19 @@ async function syncReviewStatusCommentForReviewResult(input: {
   now?: Date;
 }): Promise<void> {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+  if (input.status === "skipped_base_merge_only" ||
+    (input.status === "skipped_processed" && processed?.error === "base_merge_only")) {
+    if (!isReviewStatusCommentGithub(input.github)) return;
+    const result = await settleBaseMergeOnlyStatusComment({
+      enabled: input.config.reviewStatusComment?.enabled ?? false, dryRun: input.dryRun,
+      github: input.github, stateStore: input.state, repo: input.job.repo, pullNumber: input.pull.number,
+      headSha: input.pull.head.sha, botLogin: input.config.github.botLogin ?? DEFAULT_BOT_LOGIN,
+      pullTitle: input.pull.title, pullUrl: input.pull.html_url, now: input.now,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    if (result && !result.posted) input.onStatusCommentFailure?.();
+    return;
+  }
   const nextState = reviewResultStatusCommentState(input.status, processed);
   if (!nextState) return;
   await syncReviewStatusComment({
@@ -2356,7 +2381,7 @@ function updateQueueJobAfterReviewStatus(input: {
         jobId: input.job.jobId,
         state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun, processed?.error),
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: `processed_head_already_${processed?.status ?? "unknown"}`,
+        lastError: processed?.error === "base_merge_only" ? "base_merge_only" : `processed_head_already_${processed?.status ?? "unknown"}`,
         now: input.now
       });
       return;
@@ -2396,7 +2421,7 @@ function updateQueueJobAfterReviewStatus(input: {
       // Terminal: a leasable blocked job would be re-leased every cycle. If the gate later allows
       // the head, discovery enqueues a fresh job after this terminal one.
       input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired",
-        lastError: input.status, now: input.now });
+        lastError: input.status === "skipped_base_merge_only" ? "base_merge_only" : input.status, now: input.now });
       return;
     case "skipped_draft":
       input.state.updateReviewQueueJobState({
@@ -2459,7 +2484,7 @@ function reconcileProcessedSkippedFailedQueueJobs(
     state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: "stale_retired",
-      lastError: "processed_head_already_skipped_reconciled",
+      lastError: processed.error === "base_merge_only" ? "base_merge_only" : "processed_head_already_skipped_reconciled",
       now
     });
     result.staleRetired += 1;

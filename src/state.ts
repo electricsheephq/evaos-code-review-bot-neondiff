@@ -997,6 +997,7 @@ export class ReviewStateStore {
 
   // UPSERT keeps rowid and the original timestamp for receipt/uncertainty rewrites of the same post.
   // A genuinely new review URL gets a new post timestamp, so anchor ordering remains chronological.
+  // The gate job-vs-processed comparison may briefly show in-progress on same-URL rewrites; this fails closed.
   recordProcessed(record: ProcessedReviewRecord): void {
     const recordedAt = new Date().toISOString();
     this.db.exec("begin immediate");
@@ -1038,9 +1039,44 @@ export class ReviewStateStore {
     }
   }
 
+  /** A skip is a non-owner write: preserve every claim and any non-retryable processed truth. */
+  recordBaseMergeOnlySkip(record: Omit<ProcessedReviewRecord, "status" | "error">,
+    onRefused?: (reason: "active_claim" | "existing_row") => void): boolean {
+    this.db.exec("begin immediate");
+    try {
+      const recordedAt = new Date().toISOString();
+      const activeClaim = this.db.prepare(`select 1 from review_head_claims
+        where repo = ? and pull_number = ? and head_sha = ? and expires_at > ? limit 1`)
+        .get(record.repo, record.pullNumber, record.headSha, recordedAt);
+      const processed = this.getProcessedReview(record.repo, record.pullNumber, record.headSha);
+      const retryable = processed?.status === "failed" || (processed?.status === "skipped" &&
+        (Boolean(parseProviderCooldownError(processed.error)) || processed.error === "repo_queue_capacity_full"));
+      if (activeClaim || (processed && !retryable)) {
+        this.db.exec("commit");
+        onRefused?.(activeClaim ? "active_claim" : "existing_row");
+        return false;
+      }
+      this.db.prepare(`insert into processed_reviews
+        (repo, pull_number, head_sha, status, error, created_at, base_ref, base_sha, diff_fingerprint, carried_from_head)
+        values (?, ?, ?, 'skipped', 'base_merge_only', ?, ?, ?, ?, ?)
+        on conflict(repo, pull_number, head_sha) do update set status=excluded.status, error=excluded.error,
+          created_at=excluded.created_at, base_ref=excluded.base_ref, base_sha=excluded.base_sha,
+          diff_fingerprint=excluded.diff_fingerprint, carried_from_head=excluded.carried_from_head,
+          config_revision=null, event=null, review_url=null`)
+        .run(record.repo, record.pullNumber, record.headSha, recordedAt, record.baseRef ?? null,
+          record.baseSha ?? null, record.diffFingerprint ?? null, record.carriedFromHead ?? null);
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   tryRecordDryRun(
     record: Omit<ProcessedReviewRecord, "status" | "reviewUrl" | "error"> & {
       allowActivationBaselineSupersession?: boolean;
+      allowBaseMergeOnlySupersession?: boolean;
     },
     now: Date = new Date()
   ): boolean {
@@ -1073,7 +1109,8 @@ export class ReviewStateStore {
         (processed &&
           processed.status !== "dry_run" &&
           !isRetryableApprovedDryRunPrePostFailure(processed) &&
-          !activationBaselineSupersession)
+          !activationBaselineSupersession &&
+          !(record.allowBaseMergeOnlySupersession && processed.status === "skipped" && processed.error === "base_merge_only"))
       ) {
         this.db.exec("commit");
         return false;
@@ -3775,11 +3812,21 @@ export class ReviewStateStore {
   }
 
   private ensureProcessedReviewColumns(): void {
-    const columns = this.db
-      .prepare("pragma table_info(processed_reviews)")
-      .all() as unknown as Array<{ name: string }>;
-    for (const name of ["config_revision", "base_ref", "base_sha", "diff_fingerprint", "carried_from_head"]) {
-      if (!columns.some((column) => column.name === name)) this.db.exec(`alter table processed_reviews add column ${name} text`);
+    this.db.exec("begin immediate");
+    try {
+      // Re-read under the write lock: another opener may have migrated before we acquired it.
+      const columns = this.db.prepare("pragma table_info(processed_reviews)").all() as unknown as Array<{ name: string }>;
+      for (const name of ["config_revision", "base_ref", "base_sha", "diff_fingerprint", "carried_from_head"]) {
+        if (columns.some((column) => column.name === name)) continue;
+        try { this.db.exec(`alter table processed_reviews add column ${name} text`); }
+        catch (error) {
+          if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error;
+        }
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* migration transaction did not start or was rolled back */ }
+      throw error;
     }
   }
 

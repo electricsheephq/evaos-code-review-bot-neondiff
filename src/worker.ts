@@ -34,7 +34,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
@@ -92,6 +92,7 @@ import {
 } from "./review-lenses.js";
 import {
   postReviewStatusComment,
+  settleBaseMergeOnlyStatusComment,
   type ReviewStatusCommentGithub,
   type ReviewStatusCommentState
 } from "./review-status-comment.js";
@@ -1062,6 +1063,17 @@ async function syncRetryReviewStatusComment(input: {
 }): Promise<void> {
   if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
   const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.headSha);
+  if (input.status === "skipped_base_merge_only" ||
+    (input.status === "skipped_processed" && processed?.error === "base_merge_only")) {
+    await settleBaseMergeOnlyStatusComment({
+      enabled: input.config.reviewStatusComment?.enabled ?? false, dryRun: input.dryRun,
+      github: input.github, stateStore: input.state, repo: input.repo, pullNumber: input.pull.number,
+      headSha: input.headSha, botLogin: input.config.github.botLogin ?? DEFAULT_BOT_LOGIN,
+      pullTitle: input.pull.title, pullUrl: input.pull.html_url,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    return;
+  }
   const state = retryStatusCommentState(input.status, processed?.status, processed?.error);
   if (!state) return;
   await postReviewStatusComment({
@@ -1298,7 +1310,7 @@ function retryQueuePatchForStatus(input: {
         : {
             state: retryQueueJobStateForProcessedStatus(input.processedStatus, input.dryRun),
             ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
-            lastError: `retry_did_not_review=skipped_processed:${input.processedStatus ?? "unknown"}`,
+            lastError: input.processedError === "base_merge_only" ? "base_merge_only" : `retry_did_not_review=skipped_processed:${input.processedStatus ?? "unknown"}`,
             sessionJobState: reviewerSessionJobStateForProcessedStatus(input.processedStatus),
             ...(input.processedStatus ? { sessionProcessedStatus: input.processedStatus } : {})
           };
@@ -1419,6 +1431,7 @@ export function restoreFailedRetryRowIfNeeded(input: {
     input.retryTarget.headSha
   );
   if (current?.status === "posted") return;
+  if (current?.status === "skipped" && current.error === "base_merge_only") return;
   if (current?.status === "failed") return;
   if (current?.status === "skipped" && current.error === "untrusted_author_public_repo") return;
 
@@ -1575,6 +1588,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     input.dryRun &&
     input.processedHeadPolicy === "refresh_dry_run" &&
     processed?.status === "dry_run";
+  const baseMergeOnlyOverride = processed?.status === "skipped" && processed.error === "base_merge_only" &&
+    Boolean(input.explicitPullReview || input.allowActivationBaselineCommandLookup || input.manualQueueJob);
   const scopedActivationBaselineOverride =
     input.allowActivationBaselineCommandLookup &&
     isActivationBaselineProcessedReview(processed);
@@ -1807,6 +1822,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !retryableApprovedDryRunPrePostFailure &&
     !refreshableDryRun &&
     !scopedActivationBaselineOverride &&
+    !baseMergeOnlyOverride &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1920,7 +1936,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const ownDiff = await computeOwnDiffFingerprint(worktree.path, pull.base.sha, pull.head.sha);
     const reviewDiff = { baseRef: pull.base.ref, baseSha: pull.base.sha,
       ...("fingerprint" in ownDiff ? { diffFingerprint: ownDiff.fingerprint } : {}) };
-    if (!input.ci && !manualReviewRequested && !input.manualQueueJob && !input.explicitPullReview) {
+    if (!input.dryRun && !input.ci && !manualReviewRequested && !input.manualQueueJob && !input.explicitPullReview) {
       const anchor = state.getBaseMergeOnlyAnchor(repo, pull.number);
       const excluded = config.baseMergeOnlySkip?.enabled === false ||
         config.baseMergeOnlySkip?.excludeRepos?.some((slug) => slug.toLowerCase() === repo.toLowerCase());
@@ -1928,20 +1944,23 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         : anchor.baseRef !== pull.base.ref ? "base_ref_changed"
         : !await isGitAncestor(worktree.path, anchor.headSha, pull.head.sha) ? "not_ancestor"
         : anchor.diffFingerprint !== ownDiff.fingerprint ? "fingerprint_differs" : undefined;
-      writeRedactedJson(join(evidenceDir, "base-merge-only.json"), {
-        decision: reason ? "reviewed" : "skipped", ...(reason ? { reason } : {}),
+      const evidence = {
         previousHead: anchor?.headSha, previousReviewUrl: anchor?.reviewUrl, previousEvent: anchor?.event,
         newHead: pull.head.sha, ...reviewDiff, ...ownDiff
-      });
+      };
       if (!reason && anchor) {
-        if (state.getProcessedReview(repo, pull.number, pull.head.sha)?.status !== "posted") {
-          state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "skipped",
-            error: "base_merge_only", carriedFromHead: anchor.headSha, ...reviewDiff });
-          state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha,
-            state: "skipped", reason: "base_merge_only" });
-        }
+        let refusalReason: "active_claim" | "existing_row" = "existing_row";
+        const recorded = state.recordBaseMergeOnlySkip({ repo, pullNumber: pull.number, headSha: pull.head.sha,
+          carriedFromHead: anchor.headSha, ...reviewDiff }, (reason) => { refusalReason = reason; });
+        writeRedactedJson(join(evidenceDir, "base-merge-only.json"), {
+          ...evidence, decision: recorded ? "skipped" : "refused", ...(!recorded ? { reason: refusalReason } : {})
+        });
+        if (!recorded) return "skipped_processed";
+        state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha,
+          state: "skipped", reason: "base_merge_only" });
         return "skipped_base_merge_only";
       }
+      writeRedactedJson(join(evidenceDir, "base-merge-only.json"), { ...evidence, decision: "reviewed", reason });
     }
     await input.onReviewStarted?.();
     if (isLcmReviewRepository(repo)) {
@@ -2368,6 +2387,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     assertApprovedProviderConfigCurrent();
+    // A competing review may have posted during provider work. Only the current
+    // carried skip can authorize this override at the record/claim boundary.
+    const processedBeforeClaim = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+    const baseMergeOnlySupersession = (baseMergeOnlyOverride || manualReviewRequested) &&
+      processedBeforeClaim?.status === "skipped" && processedBeforeClaim.error === "base_merge_only";
     if (input.dryRun) {
       // Dry-run posts nothing public, but its durable proof must not replace an
       // active or completed live review. The state transaction admits this row
@@ -2378,6 +2402,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         headSha: pull.head.sha,
         ...(input.configRevision ? { configRevision: input.configRevision } : {}),
         event: plan.event,
+        allowBaseMergeOnlySupersession: baseMergeOnlySupersession,
         ...(scopedActivationBaselineOverride
           ? { allowActivationBaselineSupersession: true }
           : {})
@@ -2396,7 +2421,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       claimTtlMs: config.reviewConcurrency.leaseTtlMs,
       // retry_failed_head is admitted only after the earlier processed-status validation; it must
       // be able to replace that failed/deferred row after a successful provider retry.
-      allowProcessedOwnerSupersession: commandReviewRequested ||
+      allowProcessedOwnerSupersession: baseMergeOnlySupersession || commandReviewRequested ||
         (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
         input.processedHeadPolicy === "approved_dry_run" ||
         input.processedHeadPolicy === "retry_failed_head",
@@ -4858,6 +4883,7 @@ function summarizeRetryProviderCooldownResults(results: RetryFailedHeadResult[])
       case "skipped_stale_head":
         summary.skippedStaleHead += 1;
         break;
+      case "skipped_base_merge_only":
       case "skipped_processed":
         summary.skippedProcessed += 1;
         break;

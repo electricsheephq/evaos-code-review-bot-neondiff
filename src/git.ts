@@ -65,10 +65,16 @@ export async function computeOwnDiffFingerprint(path: string, baseSha: string, h
     const bases = (await run(["-C", path, "merge-base", "--all", baseSha, headSha], 60_000)).stdout.trim().split(/\s+/);
     if (bases.length !== 1 || !/^[a-f0-9]{40}$/i.test(bases[0]!)) return { error: "ambiguous_merge_base" };
     const mergeBase = bases[0]!;
+    const diffEnv = { ...process.env };
+    delete diffEnv.GIT_DIFF_OPTS;
+    delete diffEnv.GIT_EXTERNAL_DIFF;
     const fingerprint = await new Promise<string>((resolve, reject) => {
       const diff = spawn("git", ["-C", path, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+        "-c", "diff.ignoreSubmodules=none", "-c", "diff.suppressBlankEmpty=false",
+        "-c", "diff.submodule=short", "-c", "diff.context=3",
         "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--full-index",
-        "--diff-algorithm=myers", mergeBase, headSha], { stdio: ["ignore", "pipe", "ignore"] });
+        "--diff-algorithm=myers", "--ignore-submodules=none", "--submodule=short", "-U3", mergeBase, headSha],
+        { env: diffEnv, stdio: ["ignore", "pipe", "ignore"] });
       const patch = spawn("git", ["-C", path, "patch-id", "--verbatim"], { stdio: ["pipe", "pipe", "ignore"] });
       let output = "", closed = 0, failed = false;
       const fail = () => { failed = true; clearTimeout(timer); diff.kill(); patch.kill(); reject(new Error("patch_id_failed")); };
@@ -78,14 +84,14 @@ export async function computeOwnDiffFingerprint(path: string, baseSha: string, h
         if (failed) return;
         if (++closed === 2) {
           clearTimeout(timer);
-          const hex = output.trim().split(/\s+/)[0] ?? "";
-          if (/^[a-f0-9]{40}$/i.test(hex)) resolve(`git-patch-id-verbatim-v1:${hex}`);
+          const match = /^([a-f0-9]{40}) [a-f0-9]{40}\n?$/i.exec(output);
+          if (match) resolve(`git-patch-id-verbatim-v1:${match[1]}`);
           else reject(new Error("empty_or_invalid_patch_id"));
         }
       };
       diff.on("error", fail); patch.on("error", fail); patch.stdin.on("error", fail);
       diff.on("close", finish); patch.on("close", finish);
-      patch.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); if (output.length > 1024) fail(); });
+      patch.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); if (output.length > 256) fail(); });
       diff.stdout.pipe(patch.stdin);
     });
     return { fingerprint, mergeBase };

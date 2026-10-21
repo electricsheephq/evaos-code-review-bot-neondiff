@@ -13,9 +13,17 @@ import type { PullRequestSummary } from "../src/types.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { runScheduledCycleWithDeps } from "../src/scheduler.js";
 import { isSuccessfulRetryStatus, recoverPostedReviewReceiptForCurrentHead, retryFailedHeadWithDeps, reviewPull } from "../src/worker.js";
+import { buildReviewStatusComment } from "../src/review-status-comment.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
-const mocks = vi.hoisted(() => ({ provider: vi.fn(), prepare: vi.fn() }));
+const mocks = vi.hoisted(() => ({ provider: vi.fn(), prepare: vi.fn(), patchOutput: undefined as string | undefined }));
+vi.mock("node:child_process", async (original) => {
+  const actual = await original<typeof import("node:child_process")>();
+  return { ...actual, spawn: (command: string, args: string[], options: object) =>
+    mocks.patchOutput !== undefined && args.includes("patch-id")
+      ? actual.spawn(process.execPath, ["-e", `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(mocks.patchOutput)}));`], options)
+      : actual.spawn(command, args, options) };
+});
 vi.mock("../src/codex-runtime.js", async (original) => ({
   ...await original<typeof import("../src/codex-runtime.js")>(), runCodexReview: mocks.provider
 }));
@@ -27,7 +35,7 @@ const stores: ReviewStateStore[] = [];
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-  vi.restoreAllMocks(); vi.clearAllMocks();
+  vi.restoreAllMocks(); vi.clearAllMocks(); mocks.patchOutput = undefined;
 });
 function fixture() {
   const temp = mkdtempSync(join(tmpdir(), "neondiff-base-merge-")); roots.push(temp);
@@ -54,7 +62,8 @@ function fixture() {
     canPostAsApp: () => true, canPost: () => true, createReview: post, upsertIssueComment: vi.fn() } as unknown as GitHubApi;
   mocks.prepare.mockImplementation(({ expectedHeadSha }) => ({ path: root, headSha: expectedHeadSha }));
   mocks.provider.mockResolvedValue({ findings: [], droppedFromSchema: [], rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false });
-  const run = (extra = {}) => reviewPull({ config, github, state, repo: "org/repo", pull, dryRun: true,
+  vi.spyOn(GitHubApi.prototype, "createReview").mockImplementation(post);
+  const run = (extra = {}) => reviewPull({ config, github, state, repo: "org/repo", pull, dryRun: false,
     useZCode: true, licenseAdmission: testLicenseAdmission, ...extra });
   const anchor = async (error?: string) => {
     const fp = await computeOwnDiffFingerprint(root, base, h1);
@@ -83,13 +92,13 @@ function fixture() {
 }
 it("skips only base merges, writes evidence/readiness, and compares skip chains directly to H1", async () => {
   const f = fixture(); await f.anchor("review_posted_head_changed"); f.mergeBase();
-  expect(await f.run()).toBe("skipped_base_merge_only");
+  expect(await f.run({ dryRun: false })).toBe("skipped_base_merge_only");
   expect(mocks.provider).not.toHaveBeenCalled(); expect(f.post).not.toHaveBeenCalled();
   expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)).toMatchObject({
     status: "skipped", error: "base_merge_only", carriedFromHead: f.h1, baseRef: "main", baseSha: f.pull.base.sha });
   expect(f.state.getReviewReadiness("org/repo", 1, f.pull.head.sha)).toMatchObject({ state: "skipped", reason: "base_merge_only" });
   expect(f.evidence()).toMatchObject({ decision: "skipped", previousHead: f.h1, newHead: f.pull.head.sha });
-  f.mergeBase(); expect(await f.run()).toBe("skipped_base_merge_only");
+  f.mergeBase(); expect(await f.run({ dryRun: false })).toBe("skipped_base_merge_only");
   expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)?.carriedFromHead).toBe(f.h1);
   expect(isSuccessfulRetryStatus("skipped_base_merge_only")).toBe(true);
 });
@@ -184,6 +193,8 @@ it.each(["COMMENT", "REQUEST_CHANGES"] as const)("carries exactly one hop of %s 
   const check = () => buildReviewHeadGate({ state: f.state, repo: "org/repo", pullNumber: 1, headSha: head });
   f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: head, status: "skipped", error: "base_merge_only", carriedFromHead: f.h1 });
   expect(check()).toMatchObject({ decision: event === "COMMENT" ? "passed" : "needs_fix", carriedFromHead: f.h1 });
+  expect(check().gates[0]?.detail).toContain(`status=posted event=${event}`);
+  expect(check().gates[0]?.detail).toContain(`carried from ${f.h1.slice(0, 12)} via a base-merge-only push`);
   f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.h1, status: "skipped", error: "other", carriedFromHead: "b".repeat(40) });
   expect(check().decision).toBe("skipped");
   f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: head, status: "skipped", error: "base_merge_only", carriedFromHead: "c".repeat(40) });
@@ -235,12 +246,28 @@ it("scheduler skips terminally, posts no status comment, and backfills skipped r
     options: { dryRun: false }, reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
   const result = await cycle();
   expect(result).toMatchObject({ skippedPolicy: 1, failed: 0, queue: { staleRetired: 1, failedQueueJobs: 0 } });
-  expect(f.state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]?.state).toBe("stale_retired");
+  expect(f.state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({
+    state: "stale_retired", lastError: "base_merge_only" });
   await cycle(); expect(upsert).not.toHaveBeenCalled(); expect(f.post).not.toHaveBeenCalled(); expect(mocks.provider).not.toHaveBeenCalled();
   expect(f.state.getReviewReadiness("org/repo", 1, f.pull.head.sha)).toMatchObject({ state: "skipped", reason: "base_merge_only" });
 });
+it.each(["queued", "failed"] as const)("normalizes %s queue retirement for an existing carried skip", async (queueState) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  expect(await f.run()).toBe("skipped_base_merge_only");
+  f.config.reviewScheduler!.enabled = true;
+  const queued = f.state.enqueueReviewQueueJob({ repo: "org/repo", pullNumber: 1,
+    headSha: f.pull.head.sha, baseSha: f.pull.base.sha });
+  if (queueState === "failed") f.state.updateReviewQueueJobState({ jobId: queued.job.jobId,
+    state: "failed", lastError: "processed_head_already_skipped" });
+  await runScheduledCycleWithDeps({ config: f.config, state: f.state,
+    github: { ...f.github, listOpenPulls: async () => [f.pull] }, options: { dryRun: false },
+    reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+  expect(f.state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({
+    state: "stale_retired", lastError: "base_merge_only" });
+});
 it.each(["failed", "cooldown"])("retires a %s retry as a successful policy skip", async (kind) => {
   const f = fixture(); await f.anchor(); f.mergeBase(); f.config.reviewStatusComment!.enabled = true;
+  f.config.reviewScheduler!.enabled = true;
   f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha,
     status: kind === "failed" ? "failed" : "skipped",
     error: kind === "failed" ? "fixture failure" : "provider_rate_limit_cooldown_until=2020-01-01T00:00:00.000Z; reason=fixture" });
@@ -249,6 +276,164 @@ it.each(["failed", "cooldown"])("retires a %s retry as a successful policy skip"
     budget: new ReviewRunBudget(1), options: { repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, dryRun: false },
     reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
   expect(result.status).toBe("skipped_base_merge_only"); expect(isSuccessfulRetryStatus(result.status)).toBe(true);
-  expect(f.state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]?.state).toBe("stale_retired");
+  const row = f.state.getProcessedReview("org/repo", 1, f.pull.head.sha);
+  // This is the daemon's cooldown-retry selector, independent of scheduler mode.
+  expect(f.state.listProviderCooldownReviews({ repo: "org/repo", expiredOnly: true })).toEqual([]);
+  expect(row).toMatchObject({ status: "skipped", error: "base_merge_only", carriedFromHead: f.h1 });
+  const prepareCount = mocks.prepare.mock.calls.length;
+  await runScheduledCycleWithDeps({ config: f.config, state: f.state,
+    github: { ...f.github, listOpenPulls: async () => [f.pull] }, options: { dryRun: false },
+    reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+  expect(mocks.prepare).toHaveBeenCalledTimes(prepareCount);
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)).toEqual(row);
+  expect(f.state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({
+    state: "stale_retired", lastError: "base_merge_only" });
   expect(mocks.provider).not.toHaveBeenCalled(); expect(f.github.upsertIssueComment).not.toHaveBeenCalled();
+});
+
+it.each(["daemon", "retry"])("dry %s runs review rather than persisting a base-merge skip", async (kind) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  if (kind === "retry") f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha,
+    status: "failed", error: "fixture failure" });
+  expect(await f.run({ dryRun: true, ...(kind === "retry" ? { processedHeadPolicy: "retry_failed_head" } : {}) }))
+    .not.toBe("skipped_base_merge_only");
+  expect(mocks.provider).toHaveBeenCalledOnce();
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)?.error).not.toBe("base_merge_only");
+});
+it.each(["operator", "manual"])("%s can review an already skipped head", async (kind) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  expect(await f.run({ dryRun: false })).toBe("skipped_base_merge_only");
+  // A leased manual queue job can arrive without another command lookup.
+  const extra = kind === "operator" ? { explicitPullReview: { repo: "org/repo", pullNumber: 1 } } : { manualQueueJob: true };
+  if (kind === "operator") expect(await f.run({ ...extra, dryRun: true, configRevision: "a".repeat(64) })).toMatch(/^reviewed/);
+  vi.spyOn(GitHubApi.prototype, "createReview").mockImplementation(f.post);
+  expect(await f.run({ ...extra, dryRun: false,
+    ...(kind === "operator" ? { processedHeadPolicy: "approved_dry_run", configRevision: "a".repeat(64) } : {}) })).toMatch(/^reviewed/);
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)?.status).toBe("posted");
+  expect(mocks.provider).toHaveBeenCalled();
+});
+it.each([false, true])("preserves a posted row arriving before %s dry-run/claim supersession", async (dryRun) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  expect(await f.run()).toBe("skipped_base_merge_only");
+  const winner = { repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, status: "posted" as const,
+    reviewUrl: "https://github.com/org/repo/pull/1#pullrequestreview-99" };
+  mocks.provider.mockImplementationOnce(async () => {
+    f.state.recordProcessed(winner);
+    return { findings: [], droppedFromSchema: [], rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false };
+  });
+  const claim = vi.spyOn(f.state, "tryClaimReviewHeadWithOutcome");
+  const record = vi.spyOn(f.state, "tryRecordDryRun");
+  expect(await f.run({ dryRun, manualQueueJob: true })).toBe("skipped_processed");
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)).toMatchObject(winner);
+  expect(f.post).not.toHaveBeenCalled();
+  if (dryRun) expect(record).toHaveBeenCalledWith(expect.objectContaining({ allowBaseMergeOnlySupersession: false }));
+  else expect(claim).toHaveBeenCalledWith(expect.objectContaining({ allowProcessedOwnerSupersession: false }));
+});
+it.each(["dry_run", "posted", "claim"])("a racing %s prevents the skip and readiness write", async (kind) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  const prepare = mocks.prepare.getMockImplementation()!;
+  let claimId: string | undefined;
+  mocks.prepare.mockImplementationOnce((...args) => {
+    if (kind === "claim") claimId = f.state.tryClaimReviewHead({ repo: "org/repo", pullNumber: 1,
+      headSha: f.pull.head.sha, claimTtlMs: 60_000 })?.claimId;
+    else f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, status: kind });
+    f.state.recordReviewReadiness({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, state: "reviewing", reason: "winner" });
+    return prepare(...args);
+  });
+  expect(await f.run({ dryRun: false })).toBe("skipped_processed");
+  expect(f.evidence()).toMatchObject({ decision: "refused", reason: kind === "claim" ? "active_claim" : "existing_row" });
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)?.status).toBe(kind === "claim" ? undefined : kind);
+  expect(f.state.getReviewReadiness("org/repo", 1, f.pull.head.sha)?.reason).toBe("winner");
+  if (claimId) {
+    expect(f.state.tryClaimReviewHeadWithOutcome({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha,
+      claimTtlMs: 60_000 })).toMatchObject({ status: "blocked", reason: "active_claim" });
+    f.state.releaseReviewHeadClaim(claimId);
+  }
+});
+it.each(["settled", "missing", "disabled", "dry_run"])("benign %s status settlement makes no call or failure", async (kind) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  expect(await f.run()).toBe("skipped_base_merge_only");
+  f.config.reviewScheduler!.enabled = true; f.config.reviewStatusComment!.enabled = kind !== "disabled";
+  const comment = buildReviewStatusComment({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha,
+    state: kind === "settled" ? "completed" : "provider_deferred",
+    reviewUrl: kind === "settled" ? "https://github.com/org/repo/pull/1#pullrequestreview-1" : undefined });
+  const list = vi.fn(async () => kind === "missing" ? [] : [{ id: 9, body: comment.body,
+    user: { login: f.config.github.botLogin ?? "evaos-code-review-bot[bot]", type: "Bot" } }]);
+  const result = await runScheduledCycleWithDeps({ config: f.config, state: f.state,
+    github: { ...f.github, listIssueComments: list, listOpenPulls: async () => [f.pull] }, options: { dryRun: kind === "dry_run" },
+    reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+  expect(f.github.upsertIssueComment).not.toHaveBeenCalled();
+  expect(result).toMatchObject({ failed: 0, statusCommentFailures: 0 });
+  if (["settled", "missing"].includes(kind)) expect(list).toHaveBeenCalled();
+  else expect(list).not.toHaveBeenCalled();
+});
+
+it("repairs a base-merge status comment on the next sweep after a failed settle", async () => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  f.config.reviewScheduler!.enabled = true; f.config.reviewStatusComment!.enabled = true;
+  const comment = buildReviewStatusComment({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, state: "provider_deferred" });
+  f.github.listIssueComments = async () => [{ id: 9, body: comment.body,
+    user: { login: f.config.github.botLogin ?? "evaos-code-review-bot[bot]", type: "Bot" } }];
+  const upsert = vi.mocked(f.github.upsertIssueComment);
+  upsert.mockRejectedValueOnce(new Error("fixture settle failed"));
+  upsert.mockResolvedValue({ action: "updated", id: 9 });
+  const cycle = () => runScheduledCycleWithDeps({ config: f.config, state: f.state,
+    github: { ...f.github, listOpenPulls: async () => [f.pull] }, options: { dryRun: false },
+    reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+  expect(await cycle()).toMatchObject({ statusCommentFailures: 1 });
+  expect(await cycle()).toMatchObject({ statusCommentFailures: 0 });
+  expect(upsert).toHaveBeenCalledTimes(2);
+  expect(upsert).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.stringContaining("status=completed") }));
+  expect(mocks.provider).not.toHaveBeenCalled();
+});
+it.each(["scheduler", "retry"].flatMap((kind) =>
+  ["provider_deferred", "queued", "failed"].map((status) => [kind, status] as const)
+))("settles existing comments on %s skip from %s", async (kind, status) => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  f.config.reviewScheduler!.enabled = true; f.config.reviewStatusComment!.enabled = true;
+  const deferred = buildReviewStatusComment({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, state: status as "provider_deferred" | "queued" | "failed" });
+  f.github.listIssueComments = async () => [{ id: 9, body: deferred.body,
+    user: { login: f.config.github.botLogin ?? "evaos-code-review-bot[bot]", type: "Bot" } }];
+  if (kind === "retry") {
+    f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, status: "skipped",
+      error: "provider_rate_limit_cooldown_until=2020-01-01T00:00:00.000Z; reason=fixture" });
+    await retryFailedHeadWithDeps({ config: f.config, state: f.state, github: f.github, budget: new ReviewRunBudget(1),
+      options: { repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, dryRun: false },
+      reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+  } else {
+    await runScheduledCycleWithDeps({ config: f.config, state: f.state,
+      github: { ...f.github, listOpenPulls: async () => [f.pull] }, options: { dryRun: false },
+      reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+  }
+  expect(f.github.upsertIssueComment).toHaveBeenCalledWith(expect.objectContaining({
+    body: expect.stringContaining("status=completed") }));
+  expect(f.github.upsertIssueComment).toHaveBeenCalledWith(expect.objectContaining({
+    body: expect.stringContaining("https://github.com/org/repo/pull/1#pullrequestreview-1") }));
+});
+
+it.each(["missing", "failed", "cooldown", "capacity"])("dedicated skip writer admits only retryable truth: %s", (kind) => {
+  const f = fixture();
+  if (kind !== "missing") f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.h1,
+    status: kind === "failed" ? "failed" : "skipped", error: kind === "cooldown"
+      ? "provider_rate_limit_cooldown_until=2020-01-01T00:00:00.000Z; reason=fixture" : "repo_queue_capacity_full" });
+  expect(f.state.recordBaseMergeOnlySkip({ repo: "org/repo", pullNumber: 1, headSha: f.h1, carriedFromHead: "anchor" })).toBe(true);
+  expect(f.state.getProcessedReview("org/repo", 1, f.h1)).toMatchObject({ status: "skipped", error: "base_merge_only", carriedFromHead: "anchor" });
+  expect(f.state.recordBaseMergeOnlySkip({ repo: "org/repo", pullNumber: 1, headSha: f.h1, carriedFromHead: "other" })).toBe(false);
+});
+it.each(["multiline", "blank_line_tail", "extra_token", "invalid_second_sha", "oversized"])("rejects %s patch-id output", async (kind) => {
+  const f = fixture(), hex = "a".repeat(40);
+  mocks.patchOutput = kind === "multiline" ? `${hex} ${hex}\n${hex} ${hex}\n`
+    : kind === "blank_line_tail" ? `${hex} ${hex}\n\n`
+    : kind === "extra_token" ? `${hex} ${hex} extra\n`
+    : kind === "invalid_second_sha" ? `${hex} invalid\n` : "a".repeat(257);
+  expect(await computeOwnDiffFingerprint(f.root, f.base, f.h1)).toHaveProperty("error");
+});
+it("manual dry-run can supersede a base-merge skip without posting", async () => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  expect(await f.run()).toBe("skipped_base_merge_only");
+  f.config.commands.enabled = true; f.config.commands.trustedAuthors = ["owner"];
+  f.github.listIssueComments = async () => [{ id: 42, body: "@neondiff re-review", user: { login: "owner", type: "User" } }];
+  expect(await f.run({ dryRun: true })).toBe("reviewed_command");
+  expect(f.post).not.toHaveBeenCalled();
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)?.status).toBe("dry_run");
 });

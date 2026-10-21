@@ -60,7 +60,9 @@ export function buildReviewHeadGate(input: {
     {
       name: "exact_head_has_recorded_nonblocking_evaos_review",
       ok,
-      detail: gateDetail(decision, processed, readiness, queueJobs)
+      detail: anchor?.status === "posted" && decision === decisionFromProcessed(anchor)
+        ? `processed_reviews status=${anchor.status} event=${anchor.event ?? "unknown"} reviewUrl=${anchor.reviewUrl ?? "none"}; carried from ${anchor.headSha.slice(0, 12)} via a base-merge-only push`
+        : gateDetail(decision, processed, readiness, queueJobs)
     }
   ];
 

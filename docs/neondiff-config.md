@@ -422,7 +422,8 @@ fingerprint, and its head is an ancestor of the new head. Legacy rows without a
 fingerprint cannot anchor a skip. Ambiguous/missing git evidence reviews normally.
 
 Skips record local `base_merge_only` state, the original reviewed head and
-`base-merge-only.json`; they call no provider and post nothing to GitHub.
+`base-merge-only.json`; they call no provider and post nothing new; an existing
+status comment for that head is settled as completed.
 Manual commands, operator `review-pr` (dry and live), and all `--ci` runs always
 review. Config/model changes and semantic merge conflicts do not invalidate the
 fingerprint; use `re-review` to request a fresh review, or exclude the repository.
