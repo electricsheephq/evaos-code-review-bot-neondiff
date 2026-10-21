@@ -193,16 +193,23 @@ function hasVisualEvidence(text: string): boolean {
   ]);
 }
 
-// A proof mention counts unless a negation sits in its own sentence or in a line that
-// governs it: its markdown section heading, an enclosing parent bullet, or the "Previous validation:"
-// lead-in its list hangs from. An unrelated "no ..." in another bullet or sentence does not erase it.
+// A proof mention counts unless a negation sits in its own sentence or in a line that governs it:
+// its markdown section headings, an enclosing parent bullet, or a "Previous validation:" lead-in
+// above it. An unrelated "no ..." in another bullet or sentence does not erase it.
 function hasUnnegatedProof(text: string, negationWords: string[], positives: RegExp[]): boolean {
   const lines = proofLines(text);
+  const negatedLine: Array<boolean | undefined> = [];
+  const isNegatedLine = (index: number) =>
+    (negatedLine[index] ??= hasNegatedOrHistoricalProof(lines[index]!.text, negationWords));
   return positives.some((positive) => {
     const pattern = new RegExp(positive.source, "g");
     for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
       // Minimal matches only; one that crosses a sentence end borrows its outcome from the next sentence.
-      if (!CROSSES_SENTENCE_END.test(match[0]) && !isNegatedProofMatch(text, lines, match, negationWords)) return true;
+      if (!CROSSES_SENTENCE_END.test(match[0])) {
+        const lineIndex = lineIndexAt(lines, match.index);
+        if (!hasNegatedOrHistoricalProof(proofSentence(text, lines, lineIndex, match), negationWords) &&
+          !lines[lineIndex]!.governing.some(isNegatedLine)) return true;
+      }
       // Retry from the next character so a rejected match cannot hide later proof it overlaps.
       pattern.lastIndex = match.index + 1;
     }
@@ -211,64 +218,77 @@ function hasUnnegatedProof(text: string, negationWords: string[], positives: Reg
 }
 
 const PROOF_SENTENCE_REACH = 400;
-// "worker.ts", "1.0.6" and "e.g. npm run build" do not end a sentence; ";" does not either, so
-// "previous validation: build passed; tests passed" stays one sentence.
-const SENTENCE_END = /(?<!\b(?:e\.g|i\.e|etc|vs|cf))[.!?]\s/g;
+// "worker.ts", "1.0.6", "e.g. npm run build" and "(incl. assets)" do not end a sentence; ";" does not
+// either, so "previous validation: build passed; tests passed" stays one sentence.
+const SENTENCE_END = /(?<!\b(?:e\.g|i\.e|eg|ie|etc|vs|cf|incl|approx|esp|al|fig))[.!?]\s/g;
 const CROSSES_SENTENCE_END = new RegExp(SENTENCE_END.source);
 
-function isNegatedProofMatch(text: string, lines: ProofLine[], match: RegExpExecArray, negationWords: string[]): boolean {
-  const lineIndex = lineIndexAt(lines, match.index);
+// The whole sentence counts, so a trailing qualifier ("tests passed (previous validation only)") still vetoes.
+function proofSentence(text: string, lines: ProofLine[], lineIndex: number, match: RegExpExecArray): string {
   const line = lines[lineIndex]!;
   const matchEnd = match.index + match[0].length;
-  const lineEnd = lineIndex + 1 < lines.length ? lines[lineIndex + 1]!.start - 1 : text.length;
+  const lineEnd = line.start + line.text.length;
   const windowStart = Math.max(line.start, match.index - PROOF_SENTENCE_REACH);
   let sentenceStart = windowStart;
   for (const boundary of text.slice(windowStart, match.index).matchAll(SENTENCE_END)) {
     sentenceStart = windowStart + boundary.index + boundary[0].length;
   }
-  // The whole sentence counts, so a trailing qualifier ("tests passed (previous validation only)") still vetoes.
-  const after = text.slice(matchEnd, Math.min(lineEnd, matchEnd + PROOF_SENTENCE_REACH));
-  const end = [...after.matchAll(SENTENCE_END)][0];
-  const sentenceEnd = end === undefined ? matchEnd + after.length : matchEnd + end.index + 1;
-  return [text.slice(sentenceStart, sentenceEnd), ...line.governing]
-    .some((context) => hasNegatedOrHistoricalProof(context, negationWords));
+  const after = text.slice(matchEnd, Math.max(matchEnd, Math.min(lineEnd, matchEnd + PROOF_SENTENCE_REACH)));
+  const end = new RegExp(SENTENCE_END.source).exec(after);
+  return text.slice(sentenceStart, end === null ? matchEnd + after.length : matchEnd + end.index + 1);
 }
 
 interface ProofLine {
   start: number;
-  governing: string[];
+  text: string;
+  // Indices of earlier lines that qualify this one.
+  governing: number[];
 }
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
-const MARKDOWN_HEADING = /^\s{0,3}#{1,6}\s/;
+const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s/;
 
 function proofLines(text: string): ProofLine[] {
   let offset = 0;
-  let heading: string | undefined;
-  let leadIn: string | undefined;
-  const parents: Array<{ indent: number; line: string }> = [];
-  return text.split("\n").map((line) => {
+  const headings: Array<{ level: number; index: number }> = [];
+  const parents: Array<{ indent: number; index: number }> = [];
+  let leadIn: number | undefined;
+  let afterBlank = false;
+  return text.split("\n").map((line, index) => {
     const start = offset;
     offset += line.length + 1;
-    const governing = heading === undefined ? [] : [heading];
-    if (MARKDOWN_HEADING.test(line)) {
-      heading = line;
-      leadIn = undefined;
+    const governing = headings.map((heading) => heading.index);
+    const heading = MARKDOWN_HEADING.exec(line);
+    if (heading) {
+      // A subsection stays under its parent heading until a heading of the same or a higher level.
+      const level = heading[1]!.length;
+      while (headings.length > 0 && headings[headings.length - 1]!.level >= level) headings.pop();
+      const ancestors = headings.map((ancestor) => ancestor.index);
+      headings.push({ level, index });
       parents.length = 0;
-      return { start, governing: [] };
+      leadIn = undefined;
+      afterBlank = false;
+      return { start, text: line, governing: ancestors };
+    }
+    if (line.trim() === "") {
+      afterBlank = true;
+      return { start, text: line, governing };
     }
     if (LIST_ITEM.test(line)) {
       const indent = line.search(/\S/);
       while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
       if (leadIn !== undefined) governing.push(leadIn);
-      governing.push(...parents.map((parent) => parent.line));
-      parents.push({ indent, line });
-    } else if (line.trim() !== "") {
-      // A paragraph line ends the list; it becomes the next list's lead-in only when it ends with a colon.
+      governing.push(...parents.map((parent) => parent.index));
+      parents.push({ indent, index });
+    } else {
+      // Prose directly under a colon lead-in stays in its scope; prose after a blank line starts a new block.
+      if (afterBlank) leadIn = undefined;
       parents.length = 0;
-      leadIn = /:[*_`]*$/.test(line.trimEnd()) ? line : undefined;
+      if (leadIn !== undefined) governing.push(leadIn);
+      if (/:[*_`]*$/.test(line.trimEnd())) leadIn = index;
     }
-    return { start, governing };
+    afterBlank = false;
+    return { start, text: line, governing };
   });
 }
 

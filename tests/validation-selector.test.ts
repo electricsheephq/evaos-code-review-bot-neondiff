@@ -241,6 +241,27 @@ describe("changed-surface validation selector", () => {
     expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests"]));
   });
 
+  it("reads abbreviations, prose lead-ins and nested headings the way authors write them", () => {
+    const cases: Array<[string, "sufficient" | "missing"]> = [
+      ["## Validation\nBuild passed.\nTests (e.g. worker and scheduler) passed.", "sufficient"],
+      ["## Validation\n- npm run build: exit 0\n- Unit tests (incl. regression cases): 42 passed.", "sufficient"],
+      ["## Previous release\nPrevious validation: build passed; tests passed.\n\n## Validation for this release\n- Build passed.\n- Tests passed.", "sufficient"],
+      ["Previous validation:\nBuild passed.\nTests passed.", "missing"],
+      ["## Previous validation\n### Commands\n- Build passed.\n- Tests passed.", "missing"],
+      ["Previous validation:\n- build passed\n\nCurrent head: npm run build passed.\nTests passed.", "sufficient"]
+    ];
+
+    for (const [body, expected] of cases) {
+      const pullWithBody = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithBody,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithBody, validation }).status, body).toBe(expected);
+    }
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."
