@@ -429,7 +429,8 @@ and elapsed milliseconds. This evidence does not establish live posting or cost.
 
 ## Codex checkout reads
 
-`codexRuntime.checkoutReads` is a boolean, default `false`. With Codex enabled,
+`codexRuntime.checkoutReads` is a boolean, default `true` from 1.1.0. Set it to
+`false` for diff-only reviews. With Codex enabled,
 `true` allows read-only PR-head checkout inspection and requires verbatim evidence
 for claims outside changed lines. Unverified citations drop only their finding;
 empty evidence is allowed for diff-only claims. Citations stay in local evidence.

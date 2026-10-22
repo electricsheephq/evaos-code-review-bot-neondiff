@@ -338,7 +338,7 @@
   },
   "codexRuntime": {
     "_comment": "Optional agent runtime. Uses the existing Codex CLI login internally; never paste OAuth material into this file.",
-    "checkoutReads": false,
+    "checkoutReads": true,
     "enabled": false,
     "cliPath": "codex",
     "model": "gpt-6.1-sol",

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
+import { loadConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { Finding, PullRequestSummary } from "../src/types.js";
@@ -1789,6 +1790,29 @@ describe("worker context budget preflight", () => {
       configRevision: newRevision
     });
     state.close();
+  });
+
+  it("defaults an omitted checkoutReads config key to the shell_read_only worker prompt", async () => {
+    const codex = await import("../src/codex-runtime.js");
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
+    const root = mkdtempSync(join(tmpdir(), "neondiff-checkout-default-")); roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ ...minimalConfig(root), codexRuntime: { enabled: true } }));
+    const config = loadConfig(configPath);
+    expect(config.codexRuntime?.checkoutReads).toBe(true);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(437, "a".repeat(40)); pull.authorAssociation = "OWNER";
+    const spy = vi.spyOn(codex, "runCodexReview").mockResolvedValue({ findings: [],
+      summary: { changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture" },
+      droppedFromSchema: [], droppedFromEvidence: [], rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false });
+    try {
+      expect(await reviewPull({ config, github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+        state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true,
+        prompt: expect.stringContaining("The working directory is a read-only checkout") }));
+      expect(spy.mock.calls[0]![0].prompt).not.toContain("Do not call Bash");
+    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
   it("merges evidence drops across Codex context chunks separately from schema drops", async () => {
