@@ -7,7 +7,7 @@ import type { GitNexusCommandRunner } from "../src/gitnexus-context.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
-import type { PullRequestSummary } from "../src/types.js";
+import type { PullRequestSummary, RepositorySummary } from "../src/types.js";
 import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
 import {
   buildRepoMemoryContext,
@@ -77,6 +77,39 @@ describe("worker review failures", () => {
     await buildGitHubRelatedContext({ config, github: { getIssueOrPull }, repo: "owner/public", pull: pullSummary(1, "head", "base", { body: "Refs owner/private#1" }), evidenceDir: join(root, "evidence"),
       licenseAdmission: await createTestLicenseAdmission({ scope: "public", privateRepoAllowed: false }) });
     expect(getIssueOrPull).not.toHaveBeenCalled();
+  });
+
+  it.each(["public", "private"] as const)("limits licensed %s reviews to covered related repositories", async (visibility) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-public-related-")); roots.push(root);
+    const evidenceDir = join(root, "evidence"); mkdirSync(evidenceDir);
+    const config = minimalConfig(root);
+    config.githubRelatedContext = { ...loadConfigFromObject({}).githubRelatedContext!, enabled: true, includeCrossRepoRefs: true, maxRelatedItems: 12 };
+    const pull = pullSummary(1, "head", "base", { body: "Refs org/private#1 org/public#2 org/public#3 org/internal#4 org/unknown#5 org/unavailable#6 #7" });
+    pull.base.repo = { full_name: "org/reviewed", private: visibility === "private", visibility };
+    const github = {
+      getRepo: vi.fn(async (repo: string): Promise<RepositorySummary> => {
+        if (repo === "org/unavailable") throw new Error("lookup failed");
+        if (repo === "org/unknown") return { full_name: repo } as RepositorySummary;
+        return { full_name: repo, private: repo === "org/private", visibility: repo.slice(4) as RepositorySummary["visibility"] };
+      }),
+      getIssueOrPull: vi.fn(async (_repo: string, number: number) => ({ number, title: "Fixture" }))
+    };
+    const context = await buildGitHubRelatedContext({ config, github, repo: "org/reviewed", pull, evidenceDir,
+      licenseAdmission: await createTestLicenseAdmission({ privateRepoAllowed: true }) });
+    const expected = visibility === "public"
+      ? ["org/public#2", "org/public#3", "org/reviewed#7"]
+      : ["org/private#1", "org/public#2", "org/public#3", "org/internal#4", "org/unknown#5", "org/unavailable#6", "org/reviewed#7"];
+    expect(github.getIssueOrPull.mock.calls.map(([repo, number]) => `${repo}#${number}`).sort()).toEqual(expected.sort());
+    expect(context.packet?.references.map((ref) => `${ref.repo}#${ref.number}`).sort()).toEqual(expected);
+    if (visibility === "public") {
+      expect(JSON.stringify(context.packet)).not.toContain("org/private");
+      expect(github.getRepo.mock.calls.map(([repo]) => repo).sort()).toEqual(["org/internal", "org/private", "org/public", "org/unavailable", "org/unknown"]);
+    } else expect(github.getRepo).not.toHaveBeenCalled();
+    config.githubRelatedContext = { ...config.githubRelatedContext, includeCrossRepoRefs: false };
+    const disabled = await buildGitHubRelatedContext({ config, github, repo: "org/reviewed", pull, evidenceDir,
+      licenseAdmission: await createTestLicenseAdmission({ privateRepoAllowed: true }) });
+    // Only a public review conceals the disabled cross-repository references it never checked.
+    expect(JSON.stringify(disabled.packet).includes("org/private#1")).toBe(visibility === "private");
   });
 
   it("records a failed head with redacted evidence so duplicate suppression can hold", () => {
