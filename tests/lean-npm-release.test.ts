@@ -71,7 +71,8 @@ describe("lean npm publication sequence", () => {
         args[0] === "audit" ? { invalid: [], missing: [], verified: [{ name: "neondiff", version: "1.1.0", attestations: {} }] } : {};
       return { status: 0, stdout: JSON.stringify(value), stderr: "" };
     };
-    await publishLeanRelease(pack, "fixture.tgz", run, async () => {}, () => 0);
+    let clock = 0;
+    await publishLeanRelease(pack, "fixture.tgz", run, async (ms: number) => { clock += ms; }, () => clock);
     expect(calls).not.toContain("dist-tag add neondiff@1.1.0 latest");
     expect(calls.some((call) => call.startsWith("publish "))).toBe(false);
   });
