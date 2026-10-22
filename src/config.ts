@@ -70,6 +70,7 @@ export interface BotConfig {
     ttlMs: number;
     headCountLimit: number;
   };
+  baseMergeOnlySkip?: { enabled?: boolean; excludeRepos?: string[] };
   reviewScheduler?: ReviewSchedulerConfig;
   reviewEnsemble?: ReviewEnsembleConfig;
   riskWeightedQueue?: RiskWeightedQueueConfig;
@@ -113,6 +114,7 @@ export interface BotConfig {
   providers?: ProviderRegistryConfig;
   codexRuntime?: {
     enabled: boolean;
+    checkoutReads?: boolean;
     cliPath: string;
     model: string;
     reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
@@ -345,6 +347,7 @@ const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["example-org/example-repo"],
   pollIntervalMs: 90_000,
   skipDrafts: true,
+  baseMergeOnlySkip: { enabled: true, excludeRepos: [] },
   // workRoot must resolve outside this checkout (validateWorkRootIsolation); /tmp/neondiff is a
   // portable placeholder that satisfies that check on any machine without edits.
   workRoot: "/tmp/neondiff/runtime",
@@ -620,6 +623,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   codexRuntime: {
     enabled: false,
+    checkoutReads: true,
     cliPath: "codex",
     model: "gpt-6.1-sol",
     reasoningEffort: "high",
@@ -650,6 +654,15 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     const gate = fromFile.reviewGate.priorThreadSuppression;
     validatePriorThreadSuppressionConfig(isRecord(gate) ? { enabled: true, ...gate } : gate,
       "config.reviewGate.priorThreadSuppression");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.codexRuntime) && fromFile.codexRuntime.checkoutReads !== undefined) {
+    validateBoolean(fromFile.codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
+  }
+  if (isRecord(fromFile) && fromFile.baseMergeOnlySkip !== undefined) {
+    const skip = fromFile.baseMergeOnlySkip;
+    if (!isRecord(skip)) throw new Error("config.baseMergeOnlySkip must be an object");
+    if (skip.enabled !== undefined) validateBoolean(skip.enabled, "config.baseMergeOnlySkip.enabled");
+    if (skip.excludeRepos !== undefined) validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
   merged.github = { ...merged.github };
@@ -703,6 +716,18 @@ function validateConfig(config: BotConfig): void {
   if (config.canaryPulls !== undefined) {
     validateStringArray(config.canaryPulls, "config.canaryPulls");
     for (const canary of config.canaryPulls) validateCanaryPull(canary, "config.canaryPulls");
+  }
+  if (config.baseMergeOnlySkip !== undefined) {
+    const skip = config.baseMergeOnlySkip;
+    if (!isRecord(skip)) throw new Error("config.baseMergeOnlySkip must be an object");
+    for (const key of Object.keys(skip)) {
+      if (!["enabled", "excludeRepos"].includes(key)) throw new Error(`config.baseMergeOnlySkip.${key} is unknown`);
+    }
+    if (skip.enabled !== undefined) validateBoolean(skip.enabled, "config.baseMergeOnlySkip.enabled");
+    if (skip.excludeRepos !== undefined) {
+      validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
+      for (const repo of skip.excludeRepos) validateRepoName(repo, "config.baseMergeOnlySkip.excludeRepos");
+    }
   }
   validateBoolean(config.skipDrafts, "config.skipDrafts");
   validatePositiveInteger(config.pollIntervalMs, "config.pollIntervalMs");
@@ -827,6 +852,7 @@ function validateConfig(config: BotConfig): void {
   const codexRuntime = config.codexRuntime ?? DEFAULT_CONFIG.codexRuntime!;
   config.codexRuntime = codexRuntime;
   validateBoolean(codexRuntime.enabled, "config.codexRuntime.enabled");
+  if (codexRuntime.checkoutReads !== undefined) validateBoolean(codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
   validateNonEmptyString(codexRuntime.cliPath, "config.codexRuntime.cliPath");
   if (codexRuntime.enabled && codexRuntime.cliPath !== "codex" && !isAbsolute(codexRuntime.cliPath)) {
     throw new Error("config.codexRuntime.cliPath must be codex or absolute when enabled");

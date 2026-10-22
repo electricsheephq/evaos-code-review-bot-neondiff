@@ -32,6 +32,17 @@ export function containsSecretLikeText(input: string): boolean {
   });
 }
 
+/** Detector rule IDs only; never return the matched credential text. */
+export function secretLikeRuleIds(input: string): string[] {
+  const safeInput = protectSafeEnvVarNames(input);
+  const ids = SECRET_PATTERNS.filter(({ id, pattern }) => {
+    pattern.lastIndex = 0;
+    return pattern.test(id === "named-credential" ? input : safeInput);
+  }).map(({ id }) => id);
+  if (containsSensitiveCookieHeader(safeInput)) ids.push(canonicalSensitiveCookieRule.id);
+  return ids;
+}
+
 export function redactSecrets(input: string): string {
   const namedRedacted = NAMED_CREDENTIAL_RULE
     ? redactNamedCredentials(redactSensitiveCookieHeaders(input), NAMED_CREDENTIAL_RULE.pattern)

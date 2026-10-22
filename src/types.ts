@@ -18,6 +18,13 @@ export type RegressionCategory =
   | "docs_only"
   | "unknown";
 
+export interface FindingEvidenceRef {
+  path: string;
+  startLine: number;
+  endLine: number;
+  excerpt: string;
+}
+
 export interface Finding {
   severity: Severity;
   path: string;
@@ -27,10 +34,14 @@ export interface Finding {
   confidence: number;
   category?: RegressionCategory;
   why_this_matters?: string;
+  evidence?: FindingEvidenceRef[];
+  /** Internal parse marker; excluded from finding identity and public comments. */
+  evidenceMalformed?: boolean;
 }
 
 export interface DroppedFinding extends Partial<Finding> {
   reason: string;
+  evidenceFailure?: "malformed" | "path_missing" | "path_escapes" | "non_canonical" | "range_out_of_bounds" | "excerpt_mismatch" | "citation_budget_exceeded";
   fingerprint?: string;
   threadId?: number;
 }

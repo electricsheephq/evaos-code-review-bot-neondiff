@@ -412,6 +412,26 @@ Safety invariants:
 - A deterministic packet is treated as fresh only when its `source.headSha` matches the prepared PR worktree head. Generic JSON and raw Markdown packets are unknown-freshness by default.
 - This flag accepts packet output; it does not vendor OpenWiki source code, run OpenWiki during live reviews, enable scheduled docs updates, or permit edits outside `openwiki/**`.
 
+### Base-merge-only automatic review skip
+
+`baseMergeOnlySkip` defaults to `{ "enabled": true, "excludeRepos": [] }`.
+`excludeRepos` accepts `owner/name` slugs (matched case-insensitively).
+Automatic discovery, queue jobs and failed-head/provider-cooldown retries skip when
+the last posted review has the same base ref and whitespace-sensitive own-diff
+fingerprint, its head is an ancestor of the new head, and re-merging the merged
+base into that head (`git merge-tree --write-tree`, git 2.38+) reproduces the new
+head's tree exactly. Only the latest posted review can anchor; if it lacks a
+fingerprint (including legacy rows) the head is reviewed. Ambiguous/missing git
+evidence or a conflicting re-merge reviews normally.
+
+Skips record local `base_merge_only` state, the original reviewed head and
+`base-merge-only.json`; they call no provider and post nothing new; an existing
+status comment for that head is settled as completed.
+Manual commands, operator `review-pr` (dry and live), and all `--ci` runs always
+review. Config/model changes and conflict-free semantic merge breakage do not
+invalidate the skip; use `re-review` to request a fresh review, or exclude the repository.
+No lcm-x v2 assessment is carried forward.
+
 ### Public repository author gate
 
 `reviewGate.publicRepoAuthorGate` defaults to `mode: "auto"`. In `auto` the gate is on
@@ -426,3 +446,29 @@ Untrusted PRs record `untrusted_author_public_repo` in local state and
 `author-gate.json`, without a model call or GitHub post. Codex reviews write
 `codex-usage.json` with model, reasoning effort, tokens used (null when unavailable),
 and elapsed milliseconds. This evidence does not establish live posting or cost.
+
+## Codex checkout reads
+
+`codexRuntime.checkoutReads` is a boolean, default `true` from 1.1.0. Set it to
+`false` for diff-only reviews. With Codex enabled,
+`true` allows read-only PR-head checkout inspection and requires verbatim evidence
+for claims outside changed lines. Unverified citations drop only their finding;
+empty evidence is allowed for diff-only claims. Citations stay in local evidence.
+With checkout reads on, Codex runs under a named permission profile instead of
+`--sandbox read-only`: the shell tool can read only the checkout, its git mirror,
+the Codex install and system files, so absolute paths, `../` and symlinks in the
+PR tree cannot reach other host files such as `$CODEX_HOME/auth.json`. If the
+Codex CLI is older than 0.163.0, its version cannot be read, or those read roots
+cannot be resolved, the review falls back to a diff-only review (`--sandbox
+read-only`, no checkout instructions, no citation checks). The reason is recorded
+in `checkout-reads.json` and a runtime note, and one `[checkout-reads]` warning is
+logged. Set `checkoutReads` to `false` to make diff-only reviews explicit. Citation checks read at
+most 200 citations and 16 MiB of files (1 MiB per file); a citation over that
+budget drops its finding. When any finding is dropped for evidence, the model
+summary from that response is withheld.
+Every Codex call filters its shell environment to core variables and excludes
+secret-named variables. Every review writes a bounded, detect-only
+`codex-commands.json` audit; flagged commands do not fail the review.
+The audit is best-effort telemetry, not a security boundary: shell quoting, option abbreviations and shell-specific syntax can hide a non-read command from it. The boundary is the sandbox (the checkout-read permission profile when enabled) and the filtered shell environment.
+A review fails closed if the model quotes secret-like text, including in a citation.
+Human-format stderr can imitate exec blocks, so this audit cannot establish execution with certainty.

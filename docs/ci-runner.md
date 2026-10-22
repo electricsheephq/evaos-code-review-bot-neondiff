@@ -1,5 +1,7 @@
 # CI Runner Guide
 
+All `review-pr --ci` runs bypass the base-merge-only skip: CI state is temporary and the shared Actions bot identity is not a trusted prior-review anchor.
+
 NeonDiff can run one-shot dry-run checks on Linux CI runners when you want PR
 review evidence without a long-lived daemon. This guide covers GitHub Actions
 and generic CI hosts. It does not grant extra GitHub permissions or bypass the

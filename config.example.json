@@ -1,4 +1,5 @@
 {
+  "baseMergeOnlySkip": { "enabled": true, "excludeRepos": [] },
   "pilotRepos": ["example-org/example-repo"],
   "pollIntervalMs": 90000,
   "skipDrafts": true,
@@ -338,6 +339,7 @@
   },
   "codexRuntime": {
     "_comment": "Optional agent runtime. Uses the existing Codex CLI login internally; never paste OAuth material into this file.",
+    "checkoutReads": true,
     "enabled": false,
     "cliPath": "codex",
     "model": "gpt-6.1-sol",
