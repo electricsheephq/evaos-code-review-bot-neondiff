@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { createPrivateKey } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readCiPullContext, buildCiConfig } from "./ci-mode.js";
+import { readCiPullContext, buildCiConfig, findPostedCiReview } from "./ci-mode.js";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
@@ -2123,7 +2123,10 @@ async function main(): Promise<void> {
       return;
     }
     const repo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
-    const dryRun = ci ? args["dry-run"] === "true" : args["dry-run"] !== "false";
+    // CI posts live by default, so an unparseable --dry-run must fail closed instead of reading as false.
+    const dryRun = ci
+      ? args["dry-run"] !== undefined && parseBooleanArg(args["dry-run"], "--dry-run")
+      : args["dry-run"] !== "false";
     if (command === "review-pr" && !ci && !dryRun && args.confirm !== "true") {
       console.log(JSON.stringify({
         ok: false,
@@ -2136,8 +2139,22 @@ async function main(): Promise<void> {
     }
     let reviewPrExpectedHeadSha: string | undefined;
     if (ciContext && ciConfig) {
-      reviewPrExpectedHeadSha = ciContext.headSha ?? (await new GitHubApi(ciConfig.github).getPull(ciContext.repo, ciContext.pullNumber)).head.sha;
+      const ciGithub = new GitHubApi(ciConfig.github);
+      reviewPrExpectedHeadSha = ciContext.headSha ?? (await ciGithub.getPull(ciContext.repo, ciContext.pullNumber)).head.sha;
       if (!/^[a-f0-9]{40}$/i.test(reviewPrExpectedHeadSha)) throw new Error("CI pull request head SHA is invalid");
+      const posted = dryRun ? undefined : await findPostedCiReview(ciGithub, ciContext.repo, ciContext.pullNumber, reviewPrExpectedHeadSha);
+      if (posted) {
+        console.log(JSON.stringify({
+          ok: true,
+          command: "review-pr",
+          repo: ciContext.repo,
+          pullNumber: ciContext.pullNumber,
+          headSha: reviewPrExpectedHeadSha,
+          status: "skipped_already_reviewed",
+          ...(posted.html_url ? { reviewUrl: posted.html_url } : {})
+        }, null, 2));
+        return;
+      }
     }
     if (command === "review-pr" && !ci && !dryRun) {
       const configPath = args.config ? parseSingleArg(args.config, "--config") : undefined;
@@ -3664,15 +3681,16 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     ]
   },
   "review-pr": {
-    description: "Run a single dry-run-by-default PR review for one repo/PR (public alias of run-once, scoped to one PR).",
+    description: "Run a single dry-run-by-default PR review for one repo/PR (public alias of run-once, scoped to one PR). With --ci true it runs inside GitHub Actions and posts live by default.",
     flags: [
+      { name: "--ci", description: "true (or bare --ci) to review the pull request from GITHUB_EVENT_PATH/GITHUB_REPOSITORY inside GitHub Actions (pull_request_target or issue_comment on a PR). Uses GITHUB_TOKEN to post, OPENAI_API_KEY or CODEX_API_KEY for Codex, and codex on PATH; needs no config file, --repo, --pr, --expected-config-revision or --zcode. Posts live unless --dry-run true, and skips a head this token already reviewed." },
       { name: "--config", description: "Path to the config file." },
-      { name: "--repo", description: "Repo to review, owner/name (required)." },
-      { name: "--pr", description: "Pull request number to review (required)." },
-      { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
+      { name: "--repo", description: "Repo to review, owner/name (required without --ci)." },
+      { name: "--pr", description: "Pull request number to review (required without --ci)." },
+      { name: "--dry-run", description: "true (default) or false; false requires --confirm true. With --ci the default is false and the value must be true or false." },
       { name: "--confirm", description: "Must be true to allow --dry-run false." },
-      { name: "--expected-config-revision", description: "Required lowercase SHA-256 config revision from provider verification for dry and live execution." },
-      { name: "--zcode", description: "Must be true so dry and live reviews execute the same provider path." },
+      { name: "--expected-config-revision", description: "Required (without --ci) lowercase SHA-256 config revision from provider verification for dry and live execution." },
+      { name: "--zcode", description: "Must be true (without --ci) so dry and live reviews execute the same provider path." },
       { name: "--github-app-id", description: "Numeric customer-owned App ID used only with bounded private-key stdin." },
       { name: "--github-app-private-key-stdin", description: "true to read one bounded runtime-only App key; never accepted from config." },
       { name: "--runtime-credentials-stdin", description: "true for the signed app to supply one bounded App-key/license-key JSON envelope." }

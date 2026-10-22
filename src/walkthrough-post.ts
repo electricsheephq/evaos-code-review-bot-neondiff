@@ -46,7 +46,9 @@ export function reviewBodyAfterWalkthroughPost(plan: Pick<ReviewPlan, "summary" 
   return plan.summary;
 }
 
+export const REVIEW_ATTRIBUTION_PREFIX = "Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ";
+
 export function appendReviewAttribution(body: string, model: string): string {
-  const footer = `Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ${model}`;
+  const footer = `${REVIEW_ATTRIBUTION_PREFIX}${model}`;
   return `${body.split("\n").filter((line) => line !== footer).join("\n").trimEnd()}\n\n${footer}`;
 }
