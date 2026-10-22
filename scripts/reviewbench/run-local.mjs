@@ -49,6 +49,7 @@ async function main(argv) {
   if (!options.reviewbench || !options.run) throw Error("Required: --reviewbench <clone> --run <new directory>");
   const arm = options.arm ?? "neondiff", model = options.model ?? "gpt-6.1-sol", effort = options["reasoning-effort"] ?? "high", reads = options["checkout-reads"] ?? "false";
   if (!["neondiff", "codex-native"].includes(arm) || !["low", "medium", "high", "xhigh", "max"].includes(effort) || !["true", "false"].includes(reads)) throw Error("Invalid arm, reasoning-effort or checkout-reads");
+  const effectiveReads = arm === "neondiff" ? reads : "checkout";
   let tasks = readCorpus(resolve(options.reviewbench), options.set ?? "test");
   for (const key of ["pr", "limit"]) if (options[key] !== undefined && (!/^\d+$/.test(options[key]) || !Number.isSafeInteger(Number(options[key])) || Number(options[key]) < (key === "pr" ? 0 : 1))) throw Error(`Invalid --${key}`);
   if (options.pr !== undefined) {
@@ -57,10 +58,10 @@ async function main(argv) {
   if (options.limit) tasks = tasks.slice(0, Number(options.limit));
   const run = resolve(options.run), cache = resolve(options.cache ?? join(dirname(run), "mirror-cache"));
   mkdirSync(run); mkdirSync(cache, { recursive: true }); mkdirSync(join(run, "findings"));
-  writeFileSync(join(run, "settings.json"), JSON.stringify({ arm, model, effort, checkout_reads: reads, set: options.set ?? "test", tasks }, null, 2));
+  writeFileSync(join(run, "settings.json"), JSON.stringify({ arm, model, effort, checkout_reads: effectiveReads, set: options.set ?? "test", tasks }, null, 2));
   const cli = fileURLToPath(new URL("../../dist/src/cli.js", import.meta.url));
+  console.log(`arm=${arm} model=${model} effort=${effort} checkout_reads=${effectiveReads}`);
   const runtime = arm === "codex-native" ? await import("../../dist/src/codex-runtime.js") : undefined;
-  console.log(`arm=${arm} model=${model} effort=${effort} checkout_reads=${reads}`);
   let failed = 0;
   for (const task of tasks) {
     const id = `${task.nwo.replace("/", "_")}_${task.pr_number}-${task.head.slice(0, 8)}`, started = Date.now();

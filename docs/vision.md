@@ -85,9 +85,10 @@ them:
   They never promote a finding or escalate the review verdict.
 - **Fail-closed configuration.** Unknown keys, out-of-range values, and
   malformed shapes are rejected at load, not silently ignored.
-- **Entitlement-gated private review.** Private or commercial review requests
-  stop before checkout, file listing, provider calls, or GitHub review posting
-  when entitlement proof is missing.
+- **Entitlement-gated private review.** GitHub-connected review requests (the worker, `review-pr` and
+  `review-pr --ci`) for private, internal, and unknown-visibility repositories (including commercial non-public
+  code) stop before checkout, file listing, provider calls, or GitHub review posting when entitlement proof is
+  missing. `review-local`, which reviews a local diff and posts nothing, is the documented exemption.
 - **Additive and default-off.** New gate behavior ships disabled and opt-in,
   with dry-run evidence, before anyone depends on it.
 - **Advisory proof boundaries.** NeonDiff does not claim calibrated accuracy

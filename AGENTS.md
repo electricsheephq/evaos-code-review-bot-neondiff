@@ -35,8 +35,9 @@ If you are a coding agent working in this repository:
   `run-once`, and local `review-pr`) still require activation for every
   repository until #1191 lands. The npm CLI 1.0.x requires API-backed activation for every
   repository.
-- API-backed activation is required for supported private, internal, and
-  commercial repository work; unknown visibility fails closed. GitHub-authoritative
+- `review-local` is a local development tool that posts nothing and needs no activation: it reviews only a local diff and makes no GitHub calls.
+- API-backed activation is required for supported private, internal, and unknown-visibility
+  repository work (including commercial non-public code); unknown visibility fails closed. GitHub-authoritative
   visibility decides the tier, and provider verification is still required for all
   tiers. Enforced at the #614 authorization boundary; public-facing website copy
   migration is owned by website #52.
