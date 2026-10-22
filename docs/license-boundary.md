@@ -8,11 +8,10 @@ CLI help, package metadata, and release notes instead of inventing new wording.
 
 NeonDiff is source-available commercial software, not open-source software.
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free,
-with no NeonDiff license key, through the GitHub Action and
-`neondiff review-pr --ci`, including company-owned public repositories. The Mac
-app and the self-hosted worker (`daemon`, `run-once`, and local `review-pr`)
-still ask for a license key for every repository for now; extending free public
-review to them is tracked in [#1191](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191).
+with no NeonDiff license key, through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
+worker (`daemon`, `run-once`, `review-pr`, `providers verify`),
+including company-owned public repositories. The Mac app still requires a
+license key for every repository ([#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203)).
 Private, internal, and unknown-visibility repositories require an active
 NeonDiff license; unknown or unreadable visibility fails closed. The npm CLI
 1.0.x requires API-backed activation for every repository.
@@ -42,9 +41,9 @@ model calls.
 - Forking the repository to evaluate NeonDiff or propose changes.
 - Submitting GitHub issues and pull requests.
 - From 1.1.0, reviewing repositories that GitHub reports as public through the
-  GitHub Action or `neondiff review-pr --ci`. The Mac app and the self-hosted
-  worker (`daemon`, `run-once`, and local `review-pr`) still require activation
-  for every repository for now (#1191).
+  GitHub Action, `neondiff review-pr --ci`, or the self-hosted worker (`daemon`,
+  `run-once`, `review-pr`, `providers verify`). The Mac app still requires
+  activation for every repository (#1203).
 
 ## Requires A Paid License
 
@@ -62,10 +61,12 @@ The supported distribution pins the canonical production license API and grants
 zero offline cache authority. From 1.1.0 its official policy sets
 `publicReposFree: true`: a review cycle on a repository whose GitHub-reported
 visibility is `public` is admitted without a license call, and every other
-visibility requires live activation. Today only the CI review path (the GitHub
-Action and `neondiff review-pr --ci`) reaches that review cycle without a key;
-`providers verify`, `daemon`, `run-once`, and local `review-pr` still require
-activation for every repository (#1191). User or legacy config cannot disable
+visibility requires live activation. Keyless public-only worker admission covers
+`providers verify`, provider smoke checks, `daemon`, and review discovery for
+`run-once` and retries. A stored key always receives live validation; failures
+never silently downgrade to public-only mode. Issue enrichment and update
+checks remain licensed. The Mac app still requires activation (#1203).
+User or legacy config cannot disable
 enforcement for private work, redirect the API, or enable grace. The npm CLI
 1.0.x requires live activation for public, private, internal, and unknown
 repository work.
@@ -91,8 +92,8 @@ private repository entitlement.
 
 | Repo visibility | NeonDiff entitlement | Provider configured | License gate result | Next blocking layer |
 | --- | --- | --- | --- | --- |
-| public | none | yes | allow (1.1.0+, GitHub Action or `review-pr --ci`); block before checkout, provider call, or post on 1.0.x | provider output may still fail normally |
-| public | none | no | allow the license gate (1.1.0+, GitHub Action or `review-pr --ci`); provider setup still blocks | provider blocked |
+| public | none | yes | allow (1.1.0+, GitHub Action, `review-pr --ci`, or self-hosted worker); block before checkout, provider call, or post on 1.0.x | provider output may still fail normally |
+| public | none | no | allow the license gate (1.1.0+, GitHub Action, `review-pr --ci`, or self-hosted worker); provider setup still blocks | provider blocked |
 | public | active covering entitlement | yes | allow | provider output may still fail normally |
 | private | none | yes | block before checkout, provider call, or post | license blocked |
 | private | active private entitlement | yes | allow | provider output may still fail normally |
@@ -121,8 +122,8 @@ logs.
 Use:
 
 - "source-available commercial software"
-- "review of repositories that GitHub reports as public is free through the GitHub Action and `neondiff review-pr --ci` (NeonDiff 1.1.0 and later)"
-- "the Mac app and the self-hosted worker still ask for a license key for now (#1191)"
+- "review of repositories that GitHub reports as public is free through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker (NeonDiff 1.1.0 and later)"
+- "the Mac app still requires a license key (#1203)"
 - "private, internal, and unknown-visibility repositories require an active NeonDiff license"
 - "private repository review requires a paid NeonDiff license"
 - "the npm CLI 1.0.x requires API-backed activation for every repository"
@@ -163,8 +164,9 @@ CLI setup/help copy should say:
 
 > NeonDiff is source-available commercial software. From 1.1.0, review of
 > repositories that GitHub reports as public is free with no license key
-> through the GitHub Action and `neondiff review-pr --ci`; the Mac app and the
-> self-hosted worker still ask for a license key for now (#1191).
+> through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker
+> (`daemon`, `run-once`, `review-pr`, `providers verify`); the Mac app still
+> requires a license key (#1203).
 > Private, internal, and unknown-visibility repositories require an active
 > API-backed NeonDiff license: Solo $9/mo or $90/yr, Team $290/yr per GitHub
 > organization, with a 7-day Solo trial and a 30-day Team trial. Legacy
@@ -183,3 +185,5 @@ Private-repo failure copy should say:
 - Pricing implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/105
 - License activation implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/111
 - Public release readiness: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/396
+
+Operator status commands show open-PR metadata for every configured repository; reviewing, enriching or posting on a private repository needs a license.

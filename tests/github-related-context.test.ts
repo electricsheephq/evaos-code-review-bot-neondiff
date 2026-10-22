@@ -24,6 +24,15 @@ describe("GitHub related context packets", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("skips uncovered referenced repositories before issue reads", async () => {
+    const reads: string[] = [];
+    const result = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "Refs owner/private#1 and #2" }), config: config({ includeCrossRepoRefs: true }),
+      repositoryCovered: async (repo: string) => repo === "owner/repo",
+      reader: { getIssueOrPull: async (repo, number) => { reads.push(repo); return { number, title: "Fixture" }; } } });
+    expect(result.ok).toBe(true);
+    expect(reads).toEqual(["owner/repo"]);
+  });
+
   it("extracts explicit issue and PR references from title/body deterministically", () => {
     const refs = extractGitHubReferences({
       repo: "owner/repo",

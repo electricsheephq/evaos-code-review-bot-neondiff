@@ -29,12 +29,11 @@ If you are a coding agent working in this repository:
 
 - NeonDiff is source-available beta software.
 - From 1.1.0, review of repositories that GitHub reports as public is free with no
-  license key through the GitHub Action and `neondiff review-pr --ci`
-  (`publicReposFree: true` in the official policy; product decision 2026-10-22).
-  The Mac app and the self-hosted worker (`providers verify`, `daemon`,
-  `run-once`, and local `review-pr`) still require activation for every
-  repository until #1191 lands. The npm CLI 1.0.x requires API-backed activation for every
-  repository.
+  license key through the GitHub Action, `neondiff review-pr --ci`, and the
+  self-hosted worker (`daemon`, `run-once`, `review-pr`, `providers verify`)
+  (`publicReposFree: true` in the official policy; product decision 2026-10-23).
+  The Mac app still requires activation for every repository (#1203).
+  The npm CLI 1.0.x requires API-backed activation for every repository.
 - `review-local` is a local development tool that posts nothing and needs no activation: it reviews only a local diff and makes no GitHub calls.
 - API-backed activation is required for supported private, internal, and unknown-visibility
   repository work (including commercial non-public code); unknown visibility fails closed. GitHub-authoritative

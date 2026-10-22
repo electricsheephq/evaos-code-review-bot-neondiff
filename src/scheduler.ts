@@ -54,7 +54,7 @@ import {
   type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
-import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, ReviewEvent } from "./types.js";
+import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
 import { buildChangedSurfaceValidationReport } from "./validation-selector.js";
 import { collectRightSideLines } from "./diff.js";
@@ -68,6 +68,7 @@ import {
 } from "./outcome-observer.js";
 import {
   activateRepoForNewOnlyReview,
+  resolveEmptyRepositoryCoverage,
   isCanaryAllowed,
   recordFailedReview,
   recordPublicRepoAuthorGateSkip,
@@ -121,6 +122,8 @@ export interface SchedulerGitHubApi {
   // a merged PR's outcome (revert/hotfix/human-thread). All read-only; absent ⇒ merge-state-only cut.
   listRecentMergedPulls?(repo: string, limit: number): Promise<PullRequestSummary[]>;
   listPullReviewComments?(repo: string, pullNumber: number): Promise<PullReviewComment[]>;
+  // Optional: read once for an unactivated repository with no open pulls on a public-only worker.
+  getRepo?(repo: string): Promise<RepositorySummary>;
 }
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
@@ -213,7 +216,10 @@ export async function runScheduledCycleWithDeps(input: {
       repo,
       pulls,
       scopedPullNumber: input.options.pullNumber,
-      now
+      now,
+      licenseAdmission: input.licenseAdmission,
+      repositoryCovered: await resolveEmptyRepositoryCoverage({ config, state: input.state, github: input.github, repo, pulls,
+        scopedPullNumber: input.options.pullNumber, licenseAdmission: input.licenseAdmission })
     });
     result.baselinedExisting += activation.baselined;
     const admittedPulls = pulls.filter((pull) => {
@@ -357,7 +363,7 @@ export async function runScheduledCycleWithDeps(input: {
   // calibrationLoop.observeSchedule.enabled. Disabled/absent ⇒ zero observer work and zero GitHub
   // reads. It records outcome labels only; it never aggregates, promotes, writes config, touches
   // publicDisplay.mode, or posts to GitHub. Failures here never affect the review cycle result.
-  await observeScheduledOutcomes({ config, github: input.github, state: input.state, now });
+  await observeScheduledOutcomes({ config, github: input.github, state: input.state, now, licenseAdmission: input.licenseAdmission });
 
   return result;
 }
@@ -376,6 +382,7 @@ export async function runScheduledCycleWithDeps(input: {
  */
 export async function observeScheduledOutcomes(input: {
   config: BotConfig;
+  licenseAdmission: ProductionLicenseAdmission;
   github: SchedulerGitHubApi;
   state: ReviewStateStore;
   now?: Date;
@@ -395,8 +402,9 @@ export async function observeScheduledOutcomes(input: {
     recentMergedByRepo: new Map(),
     filesByRepoPull: new Map()
   };
-  const fetchOutcome = async (target: ScheduledObserveTarget): Promise<ObservedPullOutcome> => {
+  const fetchOutcome = async (target: ScheduledObserveTarget): Promise<ObservedPullOutcome | undefined> => {
     const pull = await input.github.getPull(target.repo, target.pullNumber);
+    if (!authorizeAdmissionForVisibility(input.licenseAdmission, visibilityFromPullSummary(pull), "review_discovery").ok) return undefined;
     const merged = Boolean(pull.merged_at);
     // Merge-state cut (the honest #357 floor). An UNMERGED PR has no terminal post-merge signal; a
     // merged PR is enriched below. Any enrichment-read failure falls back to exactly this cut.
@@ -1376,7 +1384,7 @@ async function runLeasedQueueJob(input: {
       now
     });
     updateReviewerSessionJobFromQueueStatus({ ...input, now }, "failed", "failed");
-    await syncReviewStatusComment({
+    if (input.licenseAdmission.privateRepoAllowed) await syncReviewStatusComment({
       config: input.config,
       github: input.github,
       dryRun: input.dryRun,
@@ -1388,6 +1396,12 @@ async function runLeasedQueueJob(input: {
       now
     });
     return "failed";
+  }
+
+  if (!authorizeAdmissionForVisibility(input.licenseAdmission, visibilityFromPullSummary(pull), "review_discovery").ok) {
+    updateQueueJobAfterReviewStatus({ ...input, pull, status: "skipped_license_gate", now });
+    updateReviewerSessionJobAfterReviewStatus({ ...input, status: "skipped_license_gate", now });
+    return "skipped_license_gate";
   }
 
   if (isClosedPull(pull)) {
@@ -1811,8 +1825,9 @@ function reviewResultStatusCommentState(
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
-    case "skipped_license_gate":
       return "skipped";
+    case "skipped_license_gate":
+      return undefined;
     case "skipped_command_stop":
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":

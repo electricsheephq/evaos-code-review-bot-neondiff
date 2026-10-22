@@ -151,6 +151,7 @@ export async function buildGitHubRelatedContextPacket(input: {
   pull: PullRequestSummary;
   config: GitHubRelatedContextConfig;
   reader: GitHubRelatedContextReader;
+  repositoryCovered?: (repo: string) => Promise<boolean>;
   /** Changed files (already fetched for the review). Feeds pathOverlap/lexical when relevanceScoring
    * is enabled; ignored (and the ordering byte-identical) when disabled. */
   files?: PullFilePatch[];
@@ -194,6 +195,7 @@ export async function buildGitHubRelatedContextPacket(input: {
     const ref = boundedRefs[index]!;
     const id = `${ref.repo}#${ref.number}`;
     try {
+      if (input.repositoryCovered && !await input.repositoryCovered(ref.repo)) continue;
       const item = await withTimeout(
         input.reader.getIssueOrPull(ref.repo, ref.number),
         input.config.requestTimeoutMs,

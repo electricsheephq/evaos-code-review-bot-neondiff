@@ -1735,11 +1735,10 @@ export function validateMandatoryActivationProofPath(input: {
   const unexpectedMatrixKeys = collectUnexpectedKeys(matrix, new Set(["bypassAllowedCases", "scenarios"]));
   if (unexpectedMatrixKeys.length) failures.push(`unexpected matrix fields: ${unexpectedMatrixKeys.join(", ")}`);
   requireZero(matrix.bypassAllowedCases, "matrix.bypassAllowedCases");
-  const requiredAllowedScenarioIds = new Set(["public_active", "public_free_allowed", "private_active"]);
+  const requiredAllowedScenarioIds = new Set(["public_active", "public_free_allowed", "private_active", "missing_key", "dashboard_provider_pre_activation", "daemon_cycle_missing_key", "review_discovery_missing_key"]);
   const requiredDeniedScenarioIds = new Set([
     "unknown_repo",
     "private_denied",
-    "missing_key",
     "missing_api_url",
     "offline",
     "timeout",
@@ -1751,14 +1750,13 @@ export function validateMandatoryActivationProofPath(input: {
     "server_error",
     "malformed_response",
     "revoked",
-    "expired",
-    "dashboard_provider_pre_activation"
+    "expired"
   ]);
   const scenarios = Array.isArray(matrix.scenarios) ? matrix.scenarios : [];
   const scenarioIds = new Set<string>();
   const zeroLicenseApiCallScenarioIds = new Set([
     "public_active", "public_free_allowed",
-    "missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"
+    "missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation", "daemon_cycle_missing_key", "review_discovery_missing_key"
   ]);
   for (const rawScenario of scenarios) {
     const scenario = asRecord(rawScenario);
@@ -1800,10 +1798,10 @@ export function validateMandatoryActivationProofPath(input: {
 
   const requiredBoundaryTests = [
     "providers verify license admission denies before provider-key stdin or provider network",
-    "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
-    "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
-    "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
-    "local HTML dashboard serves HTML status but blocks provider verification before activation"
+    "public NeonDiff CLI surface allows provider-key stdin and provider network for public-only admission",
+    "public NeonDiff CLI surface runs public run-once dry-run without activation",
+    "public NeonDiff CLI surface allows status and coverage commands with public-only admission",
+    "local HTML dashboard serves HTML status and allows provider verification without a license key"
   ];
   const unexpectedUsefulWorkKeys = collectUnexpectedKeys(usefulWorkBoundaries, new Set([
     "reportPassed", "totalTests", "requiredPassingTests", "resultSha256"

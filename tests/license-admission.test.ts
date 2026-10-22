@@ -218,7 +218,7 @@ describe("production useful-work admission", () => {
     expect(fetchCalls).toBe(0);
   });
 
-  it("denies a missing production key file before any API request", async () => {
+  it("admits a missing production key file as public-only before any API request", async () => {
     const config = fixtureConfig();
     rmSync(config.keyPath!);
     let fetchCalls = 0;
@@ -231,7 +231,7 @@ describe("production useful-work admission", () => {
       }) as typeof fetch
     });
 
-    expect(result).toMatchObject({ ok: false, decision: { status: "missing" } });
+    expect(result).toMatchObject({ ok: true, admission: { fingerprint: "public-free", privateRepoAllowed: false } });
     expect(fetchCalls).toBe(0);
   });
 
@@ -323,7 +323,7 @@ describe("production useful-work admission", () => {
     expect(result).toMatchObject({ ok: true, admission: { repoVisibilityScope: "private" } });
   });
 
-  it("rejects discovery when the active entitlement cannot cover private repositories", async () => {
+  it("admits discovery with the active public-only entitlement", async () => {
     for (const operation of ["review_discovery", "daemon_cycle"] as const) {
       const result = await requireActiveProductionLicense({
         operation,
@@ -337,7 +337,7 @@ describe("production useful-work admission", () => {
         }), { status: 200 })) as typeof fetch,
         now: new Date("2026-07-11T00:00:00.000Z")
       });
-      expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
+      expect(result).toMatchObject({ ok: true, admission: { repoVisibilityScope: "public", privateRepoAllowed: false } });
     }
   });
 
@@ -355,5 +355,54 @@ describe("production useful-work admission", () => {
       now: new Date("2026-07-11T00:00:00.000Z")
     });
     expect(result).toMatchObject({ ok: false, decision: { status: "scope_mismatch" } });
+  });
+});
+
+const workerOperations = ["provider_verify", "provider_smoke", "daemon_cycle", "review_discovery", "issue_enrichment", "update_check"] as const;
+describe("self-hosted public-free operation table", () => {
+  it.each(workerOperations)("%s: missing key grants only public work, with one existence read", async (operation) => {
+    let reads = 0;
+    let calls = 0;
+    const config = fixtureConfig();
+    writeFileSync(config.cachePath, JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true }));
+    const result = await requireActiveProductionLicense({ config, operation,
+      secretReader: { read: () => { reads += 1; return undefined; } },
+      fetchImpl: (async () => { calls += 1; throw new Error("must not call API"); }) as typeof fetch });
+    expect(reads).toBe(1);
+    expect(calls).toBe(0);
+    if (operation === "issue_enrichment" || operation === "update_check") {
+      expect(result).toMatchObject({ ok: false, decision: { status: "missing" } });
+    } else {
+      expect(result).toMatchObject({ ok: true, admission: { fingerprint: "public-free", repoVisibilityScope: "public", privateRepoAllowed: false, updateEntitlement: false } });
+      if (!result.ok) throw new Error("expected public-only admission");
+      for (const visibility of ["public", "private", "unknown"] as const) {
+        expect(authorizeAdmissionForVisibility(result.admission, visibility).ok).toBe(visibility === "public");
+      }
+    }
+  });
+  it.each(workerOperations)("%s: stored keys never silently downgrade", async (operation) => {
+    for (const state of ["active-all", "active-public-only", "revoked", "expired", "offline", "timeout", "rate-limited", "malformed", "forged-cache", "mismatched-cache"] as const) {
+      const config = fixtureConfig();
+      if (state.endsWith("cache")) writeFileSync(config.cachePath, JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true, licenseFingerprint: state }));
+      let calls = 0;
+      const result = await requireActiveProductionLicense({ config, operation, fetchImpl: (async () => {
+        calls += 1;
+        if (["offline", "forged-cache", "mismatched-cache"].includes(state)) throw new Error("offline");
+        if (state === "timeout") throw new DOMException("timeout", "TimeoutError");
+        if (state === "active-all" || state === "active-public-only") return new Response(JSON.stringify({ status: "active", repoVisibilityScope: state === "active-all" ? "all" : "public", privateRepoAllowed: state === "active-all", updateEntitlement: true }));
+        return new Response(JSON.stringify({ status: state === "malformed" ? "active" : state }), { status: state === "revoked" ? 403 : state === "expired" ? 402 : state === "rate-limited" ? 429 : 200 });
+      }) as typeof fetch });
+      expect(calls, state).toBe(1);
+      expect(result.ok, state).toBe(state === "active-all" || (state === "active-public-only" && operation !== "issue_enrichment"));
+      if (result.ok) {
+        expect(result.admission.fingerprint).not.toBe("public-free");
+        for (const visibility of ["public", "private", "unknown"] as const) expect(authorizeAdmissionForVisibility(result.admission, visibility).ok).toBe(visibility === "public" || (visibility === "private" && state === "active-all"));
+      }
+    }
+  });
+  it("omits enrichment from a keyless daemon bundle", async () => {
+    const result = await requireActiveDaemonCycleAdmissions({ config: fixtureConfig(), secretReader: { read: () => undefined } });
+    expect(result).toMatchObject({ ok: true, admissions: { daemonCycle: { privateRepoAllowed: false }, reviewDiscovery: { repoVisibilityScope: "public" } } });
+    if (result.ok) expect(result.admissions.issueEnrichment).toBeUndefined();
   });
 });

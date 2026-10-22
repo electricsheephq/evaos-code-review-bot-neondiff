@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requireActiveProductionLicense } from "./license-admission.js";
+import { authorizeAdmissionForVisibility, requireActiveProductionLicense } from "./license-admission.js";
 import { OFFICIAL_LICENSE_API_BASE_URL } from "./license-production-policy.js";
 import type { LicenseConfig } from "./license.js";
 
@@ -30,7 +30,7 @@ type Scenario = {
   config?: Partial<LicenseConfig>;
   cache?: "forged" | "mismatched";
   response: "active_all" | "active_public" | "invalid" | "offline" | "timeout" | "rate_limited" | "server" | "malformed" | "revoked" | "expired";
-  operation?: "review_cycle" | "provider_verify";
+  operation?: "review_cycle" | "provider_verify" | "daemon_cycle" | "review_discovery";
   assertCanonicalUrl?: boolean;
 };
 
@@ -40,7 +40,9 @@ const SCENARIOS: Scenario[] = [
   { id: "unknown_repo", visibility: "unknown", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
   { id: "public_free_allowed", visibility: "public", expected: "allowed", expectedLicenseApiCalls: 0, key: "missing", response: "invalid" },
   { id: "private_denied", visibility: "private", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "active_public" },
-  { id: "missing_key", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" },
+  { id: "missing_key", visibility: "not_applicable", expected: "allowed", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" },
+  { id: "daemon_cycle_missing_key", visibility: "not_applicable", expected: "allowed", expectedLicenseApiCalls: 0, key: "missing", response: "invalid", operation: "daemon_cycle" },
+  { id: "review_discovery_missing_key", visibility: "not_applicable", expected: "allowed", expectedLicenseApiCalls: 0, key: "missing", response: "invalid", operation: "review_discovery" },
   { id: "missing_api_url", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", config: { apiBaseUrl: undefined }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
   { id: "offline", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "offline", operation: "provider_verify" },
   { id: "timeout", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "timeout", operation: "provider_verify" },
@@ -53,7 +55,7 @@ const SCENARIOS: Scenario[] = [
   { id: "malformed_response", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "malformed", operation: "provider_verify" },
   { id: "revoked", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "revoked", operation: "provider_verify" },
   { id: "expired", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "expired", operation: "provider_verify" },
-  { id: "dashboard_provider_pre_activation", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" }
+  { id: "dashboard_provider_pre_activation", visibility: "not_applicable", expected: "allowed", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" }
 ];
 
 export async function runMandatoryActivationMatrix(): Promise<MandatoryActivationMatrixResult> {
@@ -107,17 +109,23 @@ async function runScenario(scenario: Scenario): Promise<MandatoryActivationScena
         return scenarioResponse(scenario.response);
       }) as typeof fetch
     };
-    const result = scenario.operation === "provider_verify" || scenario.visibility === "not_applicable"
-      ? await requireActiveProductionLicense({ ...common, operation: "provider_verify" })
+    const result = scenario.operation && scenario.operation !== "review_cycle"
+      ? await requireActiveProductionLicense({ ...common, operation: scenario.operation })
       : await requireActiveProductionLicense({
           ...common,
           operation: "review_cycle",
-          visibility: scenario.visibility
+          visibility: scenario.visibility as "public" | "private" | "unknown"
         });
     if (scenario.assertCanonicalUrl && observedUrls.some((url) => !url.startsWith(`${OFFICIAL_LICENSE_API_BASE_URL}/`))) {
       throw new Error(`${scenario.id} reached a noncanonical license API`);
     }
-    const actual = result.ok ? "allowed" : "denied";
+    if (scenario.key === "missing" && scenario.operation && scenario.operation !== "review_cycle") {
+      if (!result.ok || result.admission.repoVisibilityScope !== "public" || result.admission.privateRepoAllowed || result.admission.updateEntitlement) {
+        throw new Error(`${scenario.id} must grant public-only admission`);
+      }
+    }
+    // A forged cache with no key may admit public work, but must still deny private work.
+    const actual = result.ok && (scenario.id !== "forged_cache" || authorizeAdmissionForVisibility(result.admission, "private").ok) ? "allowed" : "denied";
     return {
       id: scenario.id,
       visibility: scenario.visibility,

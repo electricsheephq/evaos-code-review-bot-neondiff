@@ -56,7 +56,7 @@ type ProductionLicenseAdmissionInput = ProductionLicenseValidationInput & (
 export interface DaemonCycleAdmissions {
   daemonCycle: ProductionLicenseAdmission;
   reviewDiscovery: ProductionLicenseAdmission;
-  issueEnrichment: ProductionLicenseAdmission;
+  issueEnrichment?: ProductionLicenseAdmission;
 }
 
 export function authorizeAdmissionForVisibility(
@@ -128,6 +128,14 @@ export async function requireActiveProductionLicense(
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     licenseSecretReader: input.secretReader ?? productionLicenseSecretReader
   });
+  if (status.status === "missing" && status.classification === "missing"
+    && config.publicReposFree
+    && ["provider_verify", "provider_smoke", "daemon_cycle", "review_discovery"].includes(input.operation)) {
+    return { ok: true, admission: mintProductionLicenseAdmission({
+      operation: input.operation, checkedAt: status.checkedAt,
+      fingerprint: "public-free", repoVisibilityScope: "public", privateRepoAllowed: false, updateEntitlement: false
+    }) };
+  }
   const entitlement = status.entitlement;
   if (!status.ok
     || status.status !== "active"
@@ -165,9 +173,7 @@ export async function requireActiveProductionLicense(
       }
     };
   }
-  if ((input.operation === "review_discovery"
-      || input.operation === "daemon_cycle"
-      || input.operation === "issue_enrichment")
+  if (input.operation === "issue_enrichment"
     && !admission.privateRepoAllowed) {
     return {
       ok: false,
@@ -203,7 +209,9 @@ export async function requireActiveDaemonCycleAdmissions(
     admissions: {
       daemonCycle: shared,
       reviewDiscovery: deriveProductionLicenseAdmission(shared, "review_discovery"),
-      issueEnrichment: deriveProductionLicenseAdmission(shared, "issue_enrichment")
+      ...(shared.privateRepoAllowed
+        ? { issueEnrichment: deriveProductionLicenseAdmission(shared, "issue_enrichment") }
+        : {})
     }
   };
 }

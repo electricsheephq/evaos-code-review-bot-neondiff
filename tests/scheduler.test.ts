@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BotConfig } from "../src/config.js";
+import { requireActiveProductionLicense } from "../src/license-admission.js";
+import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
@@ -42,6 +43,100 @@ describe("provider-aware review scheduler", () => {
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("blocks private leased jobs before status posts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-leased-gate-")); roots.push(root);
+    const config = schedulerConfig(root, []); config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    state.enqueueReviewQueueJob({ repo: "org/private", pullNumber: 1, headSha: HEAD_A, baseSha: "base" });
+    const posts: StatusCommentCall[] = []; const review = vi.fn(async () => "reviewed" as const);
+    try {
+      const result = await runScheduledCycleWithDeps({ config, state, options: { dryRun: false },
+        github: githubFromMap(new Map([["org/private", [pull("org/private", 1, HEAD_A, "base", { visibility: "private", state: "closed" })]]]), new Map(), posts), reviewPullImpl: review,
+        licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: "public", privateRepoAllowed: false }) });
+      expect(result.skippedLicenseGate).toBe(1); expect(posts).toEqual([]); expect(review).not.toHaveBeenCalled();
+      expect(state.listReviewQueueJobs()[0]?.state).toBe("blocked_on_proof");
+    } finally { state.close(); }
+  });
+
+  it("starts new-only review of a private repository when a license first covers it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-deferred-activation-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/private"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    const state = new ReviewStateStore(config.statePath);
+    const pulls = new Map([["org/private", [pull("org/private", 1, HEAD_A, "base", { visibility: "private" })]]]);
+    const reviewed: string[] = [];
+    const cycle = async (paid: boolean) => runScheduledCycleWithDeps({ config, state, options: { dryRun: true }, github: githubFromMap(pulls),
+      licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: paid ? "all" : "public", privateRepoAllowed: paid }),
+      reviewPullImpl: async (input) => { reviewed.push(`${input.repo}#${input.pull.number}@${input.pull.head.sha.slice(0, 1)}`); return "reviewed"; } });
+    try {
+      const keyless = await cycle(false);
+      expect(keyless).toMatchObject({ skippedLicenseGate: 1, baselinedExisting: 0 });
+      expect(state.hasRepoActivation("org/private")).toBe(false);
+      expect(state.hasProcessed("org/private", 1, HEAD_A)).toBe(false);
+      // A pull opened while the worker had no license is still an existing pull when the license
+      // arrives, exactly as if the repository had been added to a licensed worker at that moment.
+      pulls.set("org/private", [...pulls.get("org/private")!, pull("org/private", 2, HEAD_C, "base", { visibility: "private" })]);
+      const licensed = await cycle(true);
+      expect(licensed.baselinedExisting).toBe(2);
+      expect(state.hasRepoActivation("org/private")).toBe(true);
+      pulls.set("org/private", [pull("org/private", 1, HEAD_B, "base", { visibility: "private" })]);
+      await cycle(true);
+      expect(reviewed).toEqual(["org/private#1@b"]);
+    } finally { state.close(); }
+  });
+
+  it("checks an empty repository's visibility once before activating it on a public-only worker", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-empty-activation-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/private", "org/public"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    const state = new ReviewStateStore(config.statePath);
+    const pulls = new Map<string, PullRequestSummary[]>([["org/private", []], ["org/public", []]]);
+    const getRepo = vi.fn(async (repo: string) => ({ full_name: repo, private: repo === "org/private", visibility: repo === "org/private" ? "private" : "public" }));
+    const reviewed: string[] = [];
+    const cycle = async (paid: boolean) => runScheduledCycleWithDeps({ config, state, options: { dryRun: true }, github: { ...githubFromMap(pulls), getRepo },
+      licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: paid ? "all" : "public", privateRepoAllowed: paid }),
+      reviewPullImpl: async (input) => { reviewed.push(`${input.repo}#${input.pull.number}`); return "reviewed"; } });
+    try {
+      await cycle(false);
+      expect(state.hasRepoActivation("org/public")).toBe(true);
+      expect(state.hasRepoActivation("org/private")).toBe(false);
+      await cycle(false);
+      // The activated public repository is never looked up again; the private one waits for a license.
+      expect(getRepo.mock.calls.map(([repo]) => repo)).toEqual(["org/private", "org/public", "org/private"]);
+      pulls.set("org/private", [pull("org/private", 1, HEAD_A, "base", { visibility: "private" })]);
+      pulls.set("org/public", [pull("org/public", 2, HEAD_B, "base")]);
+      await cycle(false);
+      expect(reviewed).toEqual(["org/public#2"]);
+      const licensed = await cycle(true);
+      expect(licensed.baselinedExisting).toBe(1);
+      expect(state.hasProcessed("org/private", 1, HEAD_A)).toBe(true);
+      // Dry runs record nothing, so the public pull is reviewed again; the private one is baselined.
+      expect(reviewed.filter((entry) => entry.startsWith("org/private"))).toEqual([]);
+    } finally { state.close(); }
+  });
+
+  it.each([false, true])("reviews only covered repositories with paid=%s", async (paid) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-public-worker-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/public", "org/private", "org/internal"]);
+    config.reviewConcurrency.maxActiveRuns = 3;
+    config.reviewScheduler!.maxProviderActive = 3;
+    const admitted = await requireActiveProductionLicense({ config: loadConfigFromObject({ license: { cachePath: join(root, "license-cache.json") } }).license!, operation: "review_discovery",
+      secretReader: { read: () => paid ? ["nd", "live", "schedulerfixture123456789"].join("_") : undefined },
+      fetchImpl: (async () => new Response(JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true }))) as typeof fetch });
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) throw new Error("expected discovery admission");
+    const state = new ReviewStateStore(config.statePath);
+    const reviewed: string[] = [];
+    try {
+      const result = await runScheduledCycleWithDeps({ config, state, options: { dryRun: true }, licenseAdmission: admitted.admission,
+        github: githubFromMap(new Map(config.pilotRepos.map((repo) => [repo, [pull(repo, 1, HEAD_A, "base", { visibility: repo.endsWith("public") ? "public" : repo.endsWith("internal") ? "internal" : "private" })]]))),
+        reviewPullImpl: async (input) => { reviewed.push(input.repo); return "reviewed"; } });
+      expect(result.skippedLicenseGate).toBe(paid ? 0 : 2);
+      expect(reviewed.sort()).toEqual(paid ? ["org/internal", "org/private", "org/public"] : ["org/public"]);
+    } finally { state.close(); }
   });
 
   it("rejects a wrong-operation public token before scheduled work", async () => {
@@ -2510,7 +2605,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.skippedPolicy).toBe(1);
-    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress"]);
     expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })).toHaveLength(1);
     expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })[0]).toMatchObject({
       nextEligibleAt: "2026-07-02T00:15:00.000Z"

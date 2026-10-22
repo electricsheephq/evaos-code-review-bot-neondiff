@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 const { prepareBranchWorktree, runIssueAnalysis } = vi.hoisted(() => ({ prepareBranchWorktree: vi.fn(), runIssueAnalysis: vi.fn(async () => ({ analysis: { classification: "needs-repro", priority: "P3", priorityState: "provisional", confidence: "needs-repro", repositoryImpact: "fixture", currentMainApplicability: "fixture", verifiedFacts: [], reproductionOrInvariantGap: "fixture", relatedWork: [], migrationDisposition: "needs-repro", nextGate: "fixture", limitations: [], labelProposals: [] } })) }));
@@ -6,7 +7,7 @@ vi.mock("../src/issue-analysis.js", async (original) => ({ ...await original<typ
 const { reads } = vi.hoisted(() => ({ reads: vi.fn() }));
 vi.mock("../src/codex-runtime.js", async (original) => ({ ...await original<typeof import("../src/codex-runtime.js")>(), resolveCheckoutReadsStatus: reads }));
 import { runIssueEnrichmentCycle } from "../src/issue-enrichment.js";
-const config = (allowlist: string[]) => ({ workRoot: "/tmp/work", evidenceDir: "/tmp/evidence", codexRuntime: { enabled: true, cliPath: "/usr/bin/false", model: "fixture", reasoningEffort: "low" as const, timeoutMs: 1, maxOutputBytes: 1 }, issueEnrichment: {
+const config = (allowlist: string[]) => ({ workRoot: "/tmp/work", evidenceDir: `${tmpdir()}/neondiff-issue-lazy-evidence`, codexRuntime: { enabled: true, cliPath: "/usr/bin/false", model: "fixture", reasoningEffort: "low" as const, timeoutMs: 1, maxOutputBytes: 1 }, issueEnrichment: {
   enabled: true, postIssueComment: true, allowlist, allowedLabels: [], allowedReviewers: [], maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, globalMaxIssuesPerCycle: 1, globalMaxCommentsPerCycle: 1, maxActiveRuns: 1, leaseTtlMs: 60_000, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 1, lookbackMs: 60_000, processExistingOpenIssuesOnActivation: true,
   repos: Object.fromEntries(allowlist.map((repo) => [repo, { maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 1, lookbackMs: 60_000 }]))
 } });

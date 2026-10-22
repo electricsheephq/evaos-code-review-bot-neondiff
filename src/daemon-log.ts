@@ -2,7 +2,7 @@ import { redactSecrets } from "./secrets.js";
 
 export interface DaemonLogEvent {
   event: string;
-  level?: "info" | "error";
+  level?: "info" | "warn" | "error";
   [key: string]: unknown;
 }
 

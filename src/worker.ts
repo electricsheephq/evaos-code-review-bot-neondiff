@@ -551,7 +551,10 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         state,
         repo,
         pulls,
-        scopedPullNumber: options.pullNumber
+        scopedPullNumber: options.pullNumber,
+        licenseAdmission,
+        repositoryCovered: await resolveEmptyRepositoryCoverage({ config, state, github, repo, pulls,
+          scopedPullNumber: options.pullNumber, licenseAdmission })
       });
       result.baselinedExisting += activation.baselined;
       for (const pull of pulls) {
@@ -856,6 +859,10 @@ export async function retryFailedHeadWithDeps(input: {
     throw new Error(`Refusing retry for repo skipped by policy: ${options.repo} (${repoPolicy.reason})`);
   }
   const pull = await github.getPull(options.repo, options.pullNumber);
+  if (!authorizeAdmissionForVisibility(input.licenseAdmission, visibilityFromPullSummary(pull), "review_discovery").ok) {
+    updateRetryQueueJobsAfterRetry({ state, ...options, status: "skipped_license_gate" });
+    return { repo: options.repo, pullNumber: options.pullNumber, headSha: options.headSha, status: "skipped_license_gate" };
+  }
   if (isClosedPull(pull)) {
     recordClosedRetrySkip({ state, repo: options.repo, pull, headSha: options.headSha });
     updateRetryQueueJobsAfterRetry({
@@ -2105,7 +2112,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const githubRelatedContext = analysisPlan?.githubRelatedContext === false
       ? {}
       : await buildGitHubRelatedContext({
-          config,
+          config, licenseAdmission: input.licenseAdmission,
           github: createGitHubRelatedContextReader(config, github),
           repo,
           pull,
@@ -3273,12 +3280,26 @@ export function activateRepoForNewOnlyReview(input: {
   pulls: PullRequestSummary[];
   scopedPullNumber?: number;
   now?: Date;
+  licenseAdmission?: ProductionLicenseAdmission;
+  /** For a repository with no open pulls: false while the admission does not cover it. */
+  repositoryCovered?: boolean;
 }): { activated: boolean; baselined: number } {
   const { config, state, repo, pulls } = input;
   if (input.scopedPullNumber !== undefined) return { activated: false, baselined: 0 };
   const repoHasCanaryOverride = (config.canaryPulls ?? []).some((entry) => entry.startsWith(`${repo}#`));
   if (repoHasCanaryOverride) return { activated: false, baselined: 0 };
   if (state.hasRepoActivation(repo)) return { activated: false, baselined: 0 };
+  // A worker whose admission does not cover this repository (a keyless worker on a private
+  // repository) is not watching it yet. Activation waits for the first covered discovery, so the
+  // repository starts new-only review from the moment a license covers it. Unknown visibility fails
+  // closed under every license, so it does not delay activation.
+  const admission = input.licenseAdmission;
+  if (input.repositoryCovered === false || (admission && pulls.some((pull) => {
+    const visibility = visibilityFromPullSummary(pull);
+    return visibility !== "unknown" && !authorizeAdmissionForVisibility(admission, visibility).ok;
+  }))) {
+    return { activated: false, baselined: 0 };
+  }
 
   if (config.activation.reviewExistingOpenPrsOnActivation) {
     state.recordRepoActivation(repo, (input.now ?? new Date()).toISOString());
@@ -3300,6 +3321,34 @@ export function activateRepoForNewOnlyReview(input: {
   }
   state.recordRepoActivation(repo, (input.now ?? new Date()).toISOString());
   return { activated: true, baselined };
+}
+
+/**
+ * Whether the admission covers a repository that has no open pulls, for activateRepoForNewOnlyReview.
+ * Only an unactivated repository on a worker whose admission does not cover private repositories
+ * needs GitHub's repository visibility; every other case returns undefined without a request. A
+ * failed lookup defers activation to the next discovery.
+ */
+export async function resolveEmptyRepositoryCoverage(input: {
+  config: Pick<BotConfig, "activation" | "canaryPulls">;
+  state: Pick<ReviewStateStore, "hasRepoActivation">;
+  github: { getRepo?: (repo: string) => Promise<RepositorySummary> };
+  repo: string;
+  pulls: PullRequestSummary[];
+  scopedPullNumber?: number;
+  licenseAdmission?: ProductionLicenseAdmission;
+}): Promise<boolean | undefined> {
+  const admission = input.licenseAdmission;
+  if (!admission || input.pulls.length > 0 || input.scopedPullNumber !== undefined || !input.github.getRepo) return undefined;
+  if (input.config.activation.reviewExistingOpenPrsOnActivation || input.state.hasRepoActivation(input.repo)) return undefined;
+  if ((input.config.canaryPulls ?? []).some((entry) => entry.startsWith(`${input.repo}#`))) return undefined;
+  if (authorizeAdmissionForVisibility(admission, "private").ok) return undefined;
+  try {
+    const visibility = visibilityFromRepositorySummary(await input.github.getRepo(input.repo));
+    return visibility === "unknown" || authorizeAdmissionForVisibility(admission, visibility).ok;
+  } catch {
+    return false;
+  }
 }
 
 export function isCanaryAllowed(
@@ -3613,6 +3662,7 @@ export function buildReviewLensContext(input: {
 
 export async function buildGitHubRelatedContext(input: {
   config: BotConfig;
+  licenseAdmission?: ProductionLicenseAdmission;
   github: GitHubRelatedContextReader;
   repo: string;
   pull: PullRequestSummary;
@@ -3625,7 +3675,7 @@ export async function buildGitHubRelatedContext(input: {
   const packetResult = await buildGitHubRelatedContextPacket({
     repo: input.repo,
     pull: input.pull,
-    config: relatedConfig,
+    config: { ...relatedConfig, includeCrossRepoRefs: Boolean(input.licenseAdmission?.privateRepoAllowed) && relatedConfig.includeCrossRepoRefs },
     reader: input.github,
     ...(input.files ? { files: input.files } : {})
   });

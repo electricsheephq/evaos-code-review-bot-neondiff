@@ -63,7 +63,7 @@ import {
 } from "./issue-enrichment.js";
 import { canonicalIssueEnrichmentRepository } from "./issue-enrichment-repository-policy.js";
 import { activateLicense, deactivateLicense, getLicenseStatus, type LicenseConfig } from "./license.js";
-import { requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
+import { authorizeAdmissionForVisibility, requireActiveProductionLicense, type ProductionLicenseAdmission } from "./license-admission.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { runLocalDashboardPreviewSmoke, startLocalDashboardServer } from "./local-dashboard.js";
 import {
@@ -181,10 +181,11 @@ async function main(): Promise<void> {
     dryRun: args["dry-run"] !== "false",
     coverageBacked: isCoverageBackedCommand(command, args)
   });
+  let commandAdmission: ProductionLicenseAdmission | undefined;
   if (commandLicensePolicy.mode === "requires_license"
     && isKnownCLICommand(command)
     && !deferCommandAdmissionUntilValidated(command)) {
-    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+    commandAdmission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
   }
 
   if (command === "init") {
@@ -1012,6 +1013,7 @@ async function main(): Promise<void> {
   if (command === "build-memory-packet") {
     if (!args.repo) throw new Error("--repo is required for build-memory-packet");
     const config = loadConfig(args.config);
+    await requireRepositoryContentCovered(config, parseSingleArg(args.repo, "--repo"), commandAdmission);
     const generatedAt = args["generated-at"] ?? new Date().toISOString();
     const generatedAtDate = parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
     const memoryConfig = config.repoMemory!;
@@ -1092,6 +1094,7 @@ async function main(): Promise<void> {
     parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
     const gitnexusConfig = config.gitnexusContext!;
     const github = new GitHubApi(config.github);
+    if (!await repositoryContentCovered(github, repo, commandAdmission)) throw new Error("A Solo or Team license is required for this repository.");
     const pull = await github.getPull(repo, pullNumber);
     const files = await github.listPullFiles(repo, pullNumber);
     const result = buildGitNexusContextPacket({
@@ -1171,6 +1174,7 @@ async function main(): Promise<void> {
     };
     applyRuntimeGitHubCredentials(githubConfig);
     const github = new GitHubApi(githubConfig);
+    if (!await repositoryContentCovered(github, repo, commandAdmission)) throw new Error("A Solo or Team license is required for this repository.");
     const pull = await github.getPull(repo, pullNumber);
     const result = await buildGitHubRelatedContextPacket({
       repo,
@@ -1186,6 +1190,7 @@ async function main(): Promise<void> {
         ...(args["include-cross-repo-refs"] ? { includeCrossRepoRefs: parseBooleanArg(args["include-cross-repo-refs"], "--include-cross-repo-refs") } : {})
       },
       reader: github,
+      repositoryCovered: (refRepo) => repositoryContentCovered(github, refRepo, commandAdmission),
       generatedAt
     });
     if (args["output-dir"]) {
@@ -1237,11 +1242,12 @@ async function main(): Promise<void> {
     if (Array.isArray(args.issue)) throw new Error("--issue must be provided once for build-enrichment-comment");
     const repo = parseSingleArg(args.repo, "--repo");
     const config = loadConfig(args.config);
-    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config, config);
+    const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config, config);
     const github = new GitHubApi(config.github);
     const repoPolicy = resolveRepoProfile(config, repo);
     const enrichmentConfig = config.enrichment!;
     if (args.issue) {
+      if (!admission?.privateRepoAllowed) throw new Error("A Solo or Team license is required for issue enrichment.");
       const issueNumber = parsePositiveInteger(parseSingleArg(args.issue, "--issue"), "--issue");
       const issue = await github.getIssueOrPull(repo, issueNumber, { tolerateUnreadable: true });
       if (!issue) throw new Error(`Issue ${repo}#${issueNumber} was not found or is not readable`);
@@ -1271,6 +1277,7 @@ async function main(): Promise<void> {
     if (!repoPolicy.allowed) throw new Error(`Repo ${repo} is skipped by policy: ${repoPolicy.reason}`);
     const prArg = parseSingleArg(args.pr ?? [], "--pr");
     const pullNumber = parsePositiveInteger(prArg, "--pr");
+    if (!await repositoryContentCovered(github, repo, admission)) throw new Error("A Solo or Team license is required for this repository.");
     const pull = await github.getPull(repo, pullNumber);
     const files = await github.listPullFiles(repo, pullNumber);
     const validation = buildChangedSurfaceValidationReport({
@@ -1609,7 +1616,8 @@ async function main(): Promise<void> {
     });
     const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
-    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+    const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+    await requireRepositoryContentCovered(loadConfig(args.config), repo, admission);
     const trustedAuthors = parseCsv(args["trusted-authors"]);
     const worktreeCleanArg = args["worktree-clean"];
     const worktreeCleanExplicit = worktreeCleanArg !== undefined;
@@ -3811,7 +3819,7 @@ function buildHelp(command?: string) {
       sourceAvailableCommercial: true,
       activationRequired: command === "review-local"
         ? "Local checkout review posts nothing and requires no activation."
-        : "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none through the GitHub Action or `review-pr --ci`; the self-hosted worker (providers verify, daemon, run-once, local review-pr), the Mac app, and the npm CLI 1.0.x require it for public, private, internal, and unknown repositories (issue #1191).",
+        : "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none through the GitHub Action or `review-pr --ci` and the self-hosted worker (daemon, run-once, review-pr, providers verify); the Mac app (issue #1203) and the npm CLI 1.0.x require it for public, private, internal, and unknown repositories.",
       packageVersion,
       releaseState: packageVersion === "1.0.3"
         ? "Mandatory activation is staged for v1.0.4; public npm latest v1.0.3 does not enforce this boundary."
@@ -4095,6 +4103,26 @@ const admissionAfterValidationCommands = new Set([
 
 function deferCommandAdmissionUntilValidated(command: string): boolean {
   return admissionAfterValidationCommands.has(command);
+}
+
+async function repositoryContentCovered(github: GitHubApi, repo: string, admission?: ProductionLicenseAdmission): Promise<boolean> {
+  if (!admission) return false;
+  const metadata = await github.getRepo(repo);
+  const visibility = metadata.private || metadata.visibility === "private" || metadata.visibility === "internal"
+    ? "private" : metadata.visibility === "public" || metadata.private === false ? "public" : "unknown";
+  return authorizeAdmissionForVisibility(admission, visibility).ok;
+}
+
+// Repository-scoped utilities read or record that repository's local data without a GitHub
+// content read of their own. A Solo or Team admission covers every repository; a public-only
+// admission needs GitHub's authoritative visibility first.
+async function requireRepositoryContentCovered(config: BotConfig, repo: string, admission?: ProductionLicenseAdmission): Promise<void> {
+  if (admission
+    && authorizeAdmissionForVisibility(admission, "private").ok
+    && authorizeAdmissionForVisibility(admission, "public").ok) return;
+  if (!await repositoryContentCovered(new GitHubApi(config.github), repo, admission)) {
+    throw new Error("A Solo or Team license is required for this repository.");
+  }
 }
 
 async function requireClassifiedCommandAdmission(

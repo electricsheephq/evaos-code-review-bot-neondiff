@@ -878,7 +878,6 @@ describe("beta release status", () => {
     const deniedScenarioIds = [
       "unknown_repo",
       "private_denied",
-      "missing_key",
       "missing_api_url",
       "offline",
       "timeout",
@@ -890,8 +889,7 @@ describe("beta release status", () => {
       "server_error",
       "malformed_response",
       "revoked",
-      "expired",
-      "dashboard_provider_pre_activation"
+      "expired"
     ];
     const lifecycleRecords = [
       { id: "issue", outcome: "succeeded", statusCode: 200, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "issued" } },
@@ -904,6 +902,7 @@ describe("beta release status", () => {
       { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 0, licenseApiCalls: 0 },
       { id: "public_free_allowed", visibility: "public", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 0, licenseApiCalls: 0 },
       { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 1, licenseApiCalls: 1 },
+      ...["missing_key", "dashboard_provider_pre_activation", "daemon_cycle_missing_key", "review_discovery_missing_key"].map((id) => ({ id, visibility: "not_applicable", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 0, licenseApiCalls: 0 })),
       ...deniedScenarioIds.map((id) => ({
         id,
         visibility:
@@ -930,10 +929,10 @@ describe("beta release status", () => {
       totalTests: 5,
       requiredPassingTests: [
         "providers verify license admission denies before provider-key stdin or provider network",
-        "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
-        "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
-        "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
-        "local HTML dashboard serves HTML status but blocks provider verification before activation"
+        "public NeonDiff CLI surface allows provider-key stdin and provider network for public-only admission",
+        "public NeonDiff CLI surface runs public run-once dry-run without activation",
+        "public NeonDiff CLI surface allows status and coverage commands with public-only admission",
+        "local HTML dashboard serves HTML status and allows provider verification without a license key"
       ]
     };
     const artifactRecords: Record<string, unknown[]> = {

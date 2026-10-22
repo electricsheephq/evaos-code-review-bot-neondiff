@@ -26,15 +26,13 @@ const paths = [
 // These required claims keep the docs on that truth, the 1.0.x caveat, and the
 // current flat prices; the public-free and activation claims must carry their
 // 1.1.0 and 1.0.x qualifiers.
-// PM decision 2026-10-22 (PR #1171): in 1.1.0 free public review is delivered only
-// through the GitHub Action and `neondiff review-pr --ci`; the Mac app and the
-// self-hosted daemon/run-once/local review-pr still require a key until #1191.
-// Every public-free claim must name that scope (see scopedPublicFree below).
+// Owner decision #1191: the self-hosted worker joins the CI public-free scope;
+// the Mac app still requires activation until #1203.
 const required = [
   /source-available/i,
   /From (?:NeonDiff )?1\.1\.0,\s+review\s+of\s+repositories\s+that\s+GitHub\s+reports\s+as\s+public\s+is\s+free/i,
-  /through\s+the\s+GitHub\s+Action\s+and\s+`neondiff\s+review-pr\s+--ci`/i,
-  /#1191/,
+  /through\s+the\s+GitHub\s+Action,[\s\S]{0,60}review-pr\s+--ci[\s\S]{0,60}self-hosted\s+worker/i,
+  /#1203/,
   /private, internal, and unknown-visibility repositor(?:y|ies) (?:require|need)/i,
   /1\.0\.x\s+requires\s+(?:live\s+|active\s+|mandatory\s+)?API-backed\s+activation\s+for\s+every\s+repository/i,
   /\$9\/mo/,
@@ -60,6 +58,7 @@ const forbiddenClaims = [
   /\bCodeRabbit parity\b/i,
   /\bpublic launch is complete\b/i,
   /\bfree (?:for )?private repo/i,
+  /\bfree for all repositor(?:y|ies)\b/i,
   /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i
 ];
 
@@ -87,11 +86,11 @@ function sentenceAt(text, index) {
   return text.slice(...sentenceSpan(text, index));
 }
 const boundaryLanguage = /\b(?:not|avoid|unless|forbidden|never)\b/i;
-// The canonical claim keeps the strict rule: both surfaces within 200 characters, no exemption.
+// The canonical claim keeps the strict rule: all three surfaces within 350 characters, no exemption.
 const canonicalPublicFree = /reports\s+as\s+public\s+is\s+free/gi;
-const canonicalScope = /GitHub\s+Action[\s\S]{0,40}review-pr\s+--ci/i;
+const canonicalScope = /GitHub\s+Action[\s\S]{0,60}review-pr\s+--ci[\s\S]{0,60}self-hosted\s+worker/i;
 const publicFreeClaim = /public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
-const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci/i;
+const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci|self-hosted\s+worker/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenClaims) {
@@ -103,9 +102,20 @@ for (const path of paths) {
     }
   }
   for (const match of text.matchAll(canonicalPublicFree)) {
-    if (!canonicalScope.test(text.slice(match.index, match.index + 200))) {
+    if (!canonicalScope.test(text.slice(match.index, match.index + 350))) {
       const line = text.slice(0, match.index).split("\n").length;
-      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action and review-pr --ci)`);
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action, review-pr --ci, and self-hosted worker)`);
+      failed = true;
+    }
+  }
+  // Paraphrases are exempt only when boundary language precedes them ("Do not describe ... as open source"),
+  // so a trailing "never need a license" cannot excuse a broad promise.
+  for (const match of text.matchAll(publicFreeClaim)) {
+    const sentence = sentenceAt(text, match.index);
+    const before = text.slice(sentenceSpan(text, match.index)[0], match.index);
+    if (!boundaryLanguage.test(before) && !scopedPublicFree.test(sentence)) {
+      const line = text.slice(0, match.index).split("\n").length;
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action, review-pr --ci, or self-hosted worker)`);
       failed = true;
     }
   }

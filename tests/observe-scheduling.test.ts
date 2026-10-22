@@ -16,9 +16,14 @@ import {
   type ObservedPullOutcome,
   type ScheduledObserveTarget
 } from "../src/outcome-observer.js";
-import { observeScheduledOutcomes, type SchedulerGitHubApi } from "../src/scheduler.js";
+import { observeScheduledOutcomes as observeScheduledOutcomesImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { applyDeterministicReviewGate, buildFindingFingerprint } from "../src/review-gate.js";
 import type { Finding, PullFilePatch, PullRequestSummary, PullReviewComment, ReviewComment } from "../src/types.js";
+
+import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
+const observeScheduledOutcomes = (input: Omit<Parameters<typeof observeScheduledOutcomesImpl>[0], "licenseAdmission"> & { licenseAdmission?: typeof testLicenseAdmission }) => observeScheduledOutcomesImpl({ ...input, licenseAdmission: input.licenseAdmission ?? testLicenseAdmission,
+  github: { ...input.github, getPull: async (repo, number) => { const pull = await input.github.getPull(repo, number); return { ...pull, base: pull.base ?? { sha: "base", ref: "main", repo: { full_name: repo, private: false, visibility: "public" } } }; } }
+});
 
 const roots: string[] = [];
 afterEach(() => {
@@ -37,7 +42,7 @@ function baseConfigObject(overrides: Record<string, unknown> = {}): Record<strin
     pilotRepos: ["owner/repo"],
     workRoot: "/tmp/runtime",
     statePath: "/tmp/state.sqlite",
-    evidenceDir: "/tmp/evidence",
+    evidenceDir: join(tmpdir(), "neondiff-observe-evidence"),
     ...overrides
   };
 }
@@ -252,6 +257,23 @@ describe("runScheduledObservePass gating + selection (#357)", () => {
     store.close();
   });
 
+  it("cools down uncovered repositories so they cannot starve covered ones", async () => {
+    const { store, root } = newStore();
+    store.recordReviewFindings([{ ...FINDING, repo: "org/private" }, { ...FINDING, repo: "org/public", pullNumber: 2, headSha: "sha2" }]);
+    const config = { ...OBSERVE_SCHEDULE, maxPullsPerCycle: 1 };
+    const seen: string[] = [];
+    const fetchOutcome = (target: ScheduledObserveTarget) => {
+      seen.push(target.repo);
+      return target.repo === "org/private" ? undefined : fullObserved({ merged: true, revertedFlaggedChange: true });
+    };
+    await runScheduledObservePass({ state: store, config, evidenceDir: join(root, "evidence"), fetchOutcome, now: new Date("2026-07-06T10:00:00.000Z") });
+    await runScheduledObservePass({ state: store, config, evidenceDir: join(root, "evidence"), fetchOutcome, now: new Date("2026-07-06T11:01:00.000Z") });
+
+    expect(seen).toEqual(["org/private", "org/public"]);
+    expect(store.listFindingOutcomeLabels().map((label) => label.repo)).toEqual(["org/public"]);
+    store.close();
+  });
+
   it("caps at maxPullsPerCycle heads", async () => {
     const { store, root } = newStore();
     store.recordReviewFindings([
@@ -430,6 +452,17 @@ describe("runScheduledObservePass gating + selection (#357)", () => {
 });
 
 describe("observeScheduledOutcomes scheduler wiring (#357)", () => {
+  it("skips uncovered observer targets before comments, merged pulls or files", async () => {
+    const { store, root } = newStore(); store.recordReviewFindings([FINDING]);
+    const deeper = vi.fn(async () => []);
+    const github = { ...stubGithub(), getPull: vi.fn(async () => ({ number: 1, head: { sha: "sha1" }, base: { repo: { private: true, visibility: "private" } }, merged_at: "2026-07-05T00:00:00.000Z" }) as PullRequestSummary), listRecentMergedPulls: deeper, listPullFiles: deeper, listPullReviewComments: deeper };
+    const config = loadConfigFromObject(baseConfigObject({ evidenceDir: join(root, "evidence"), calibrationLoop: { observeSchedule: OBSERVE_SCHEDULE } }));
+    try {
+      await observeScheduledOutcomes({ config, github, state: store, now: new Date("2026-07-06T10:00:00.000Z"), licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: "public", privateRepoAllowed: false }) });
+      expect(github.getPull).toHaveBeenCalled(); expect(deeper).not.toHaveBeenCalled(); expect(store.listFindingOutcomeLabels()).toEqual([]);
+    } finally { store.close(); }
+  });
+
   function stubGithub(): SchedulerGitHubApi & { getPull: ReturnType<typeof vi.fn> } {
     const getPull = vi.fn(async (repo: string, pullNumber: number) => ({
       number: pullNumber,

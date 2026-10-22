@@ -601,23 +601,33 @@ describe("local HTML dashboard", () => {
     );
   });
 
-  it("serves HTML status but blocks provider verification before activation", async () => {
+  it("serves HTML status and allows provider verification without a license key", async () => {
     const fakeKey = ["sk", "dashboard-route-1234567890"].join("-");
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-keyless-"));
+    const configPath = join(root, "config.json");
+    const provider = createServer((_request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ data: [{ id: "review-model" }] }));
+    });
+    await listen(provider);
+    servers.push(provider);
     const config = loadConfigFromObject({
+      statePath: join(root, "state.sqlite"), workRoot: join(root, "runtime"), evidenceDir: join(root, "evidence"),
       providers: {
         defaultProviderId: "openai-compatible",
         providers: {
           "openai-compatible": {
             enabled: true,
-            baseUrl: "https://gateway.example.test/v1",
-            model: "review-model"
+            baseUrl: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`,
+            model: "review-model", capabilities: { review: true, jsonOutput: true, local: true, streaming: false }
           }
         }
       }
     });
+    writeFileSync(configPath, JSON.stringify(config));
     const handle = await startLocalDashboardServer({
       config,
-      configPath: "/Volumes/LEXAR/Codex/neondiff/config.local.json",
+      configPath,
       configExists: true,
       openBrowser: false,
       port: 0
@@ -638,8 +648,8 @@ describe("local HTML dashboard", () => {
       })
     });
     const resultText = await response.text();
-    expect(response.status).toBe(403);
-    expect(resultText).toContain("license missing");
+    expect(response.status).toBe(200);
+    expect(resultText).not.toContain("license missing");
     expect(resultText).not.toContain(fakeKey);
     expect(resultText).not.toContain("dashboard-route");
   });
@@ -697,7 +707,7 @@ describe("local HTML dashboard", () => {
     expect(serialized).not.toContain("preview-smoke-route");
   });
 
-  it("treats an activation-blocked provider route as loaded in setup-safe preview smoke", async () => {
+  it("treats a keyless provider route as loaded in setup-safe preview smoke", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-dashboard-preview-blocked-"));
     const smoke = await runLocalDashboardPreviewSmoke({
       config: loadConfigFromObject({}),
@@ -710,7 +720,7 @@ describe("local HTML dashboard", () => {
       ok: true,
       settledUiState: {
         providerVerifyRouteLoaded: true,
-        providerVerifyStatus: 403
+        providerVerifyStatus: 422
       }
     });
   });
