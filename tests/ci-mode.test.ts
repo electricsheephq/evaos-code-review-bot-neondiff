@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCiConfig, ciGitAuthToken, ciLicenseMachineId, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
@@ -70,7 +70,7 @@ describe("CI review", () => {
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(checkout);
     try {
       expect(() => buildCiConfig(base, ctx, { ...env, PATH: ["", ".", "bin"].join(":") })).toThrow(/codex on PATH/);
-      expect(buildCiConfig(base, ctx, { ...env, PATH: ["", ".", env.PATH].join(":") }).codexRuntime!.cliPath).toBe(join(env.PATH, "codex"));
+      expect(buildCiConfig(base, ctx, { ...env, PATH: ["", ".", env.PATH].join(":") }).codexRuntime!.cliPath).toBe(realpathSync(join(env.PATH, "codex")));
     } finally { cwd.mockRestore(); }
   });
   it("uses the fallback token for review and comment creation/update without App credentials", async () => {

@@ -229,7 +229,7 @@ export async function preparePullWorktree(input: PullWorktreeInput): Promise<Pre
     "--detach",
     worktreePath,
     `refs/pull/${input.pullNumber}/head`
-  ], timeoutMs);
+  ], timeoutMs, gitAuthToken); // Git LFS smudge downloads during checkout read the same auth header.
 
   const actualHeadSha = (await run(["-C", worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
   if (actualHeadSha !== input.expectedHeadSha) {

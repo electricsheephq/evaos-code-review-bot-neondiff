@@ -21,8 +21,9 @@ it.each([true, false])("passes clone/fetch credentials only in child env when CI
     ...(authenticated ? { gitAuthToken: token } : {}) };
   calls.fail = false;
   await preparePullWorktree(input);
-  const network = seen.filter(call => call.args.includes("clone") || call.args.includes("fetch"));
-  expect(network).toHaveLength(2);
+  const network = seen.filter(call => call.args.includes("clone") || call.args.includes("fetch") ||
+    (call.args.includes("worktree") && call.args.includes("add")));
+  expect(network).toHaveLength(3);
   for (const call of network) {
     if (authenticated) expect(call.env).toMatchObject({ GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: "AUTHORIZATION: basic " + encoded });
