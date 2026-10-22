@@ -55,7 +55,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
-import { collectAnsweredThreads, type AnsweredThread } from "./prior-thread-suppression.js";
+import { collectAnsweredThreads, suppressAnsweredDemotedComments, type AnsweredThread } from "./prior-thread-suppression.js";
 import { buildFindingFingerprint } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
@@ -2195,10 +2195,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
-    const comments = selfConsistency.comments;
+    // A P0 lowered to P2 skipped the gate's prior-thread match; re-apply it at the published severity.
+    // P2 is never REQUEST_CHANGES-eligible, so dropping one leaves selfConsistency.event unchanged.
+    const answeredDemoted = suppressAnsweredDemotedComments(selfConsistency.comments, gatedFindings, answeredThreads ?? []);
+    if (answeredDemoted.dropped.length) {
+      priorThreadEvidence.matches.push(...answeredDemoted.dropped
+        .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId })));
+      priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
+      writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
+    }
+    const comments = answeredDemoted.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
-    const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
+    const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDemoted.dropped], config.confidenceCalibration?.publicDisplay);
     const candidateEvent = selfConsistency.event;
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({

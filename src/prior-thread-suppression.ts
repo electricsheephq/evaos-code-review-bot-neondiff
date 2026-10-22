@@ -1,4 +1,5 @@
-import type { Finding, PullReviewComment } from "./types.js";
+import { buildFindingFingerprint } from "./findings.js";
+import type { DroppedFinding, Finding, PullReviewComment, ReviewComment } from "./types.js";
 
 export const PRIOR_THREAD_MAX_LINE_DELTA = 10;
 export const PRIOR_THREAD_TITLE_JACCARD_THRESHOLD = 0.5;
@@ -42,6 +43,33 @@ export function matchPriorThread(finding: Finding, threads: AnsweredThread[]): A
       wordSetJaccard(titleWords(finding.title), titleWords(thread.title)) >= PRIOR_THREAD_TITLE_JACCARD_THRESHOLD ||
       wordSetJaccard(titleWords(finding.body), titleWords(thread.body)) >= PRIOR_THREAD_BODY_JACCARD_THRESHOLD
     ));
+}
+
+/**
+ * The gate exempts P0 from prior-thread matching, but self-consistency can later publish an
+ * unconfirmed P0 as an advisory P2. Match those demoted comments again at the published severity so
+ * an answered thread is not reposted (#1172).
+ */
+export function suppressAnsweredDemotedComments<T extends ReviewComment>(
+  comments: T[],
+  findings: Finding[],
+  threads: AnsweredThread[]
+): { comments: T[]; dropped: DroppedFinding[] } {
+  if (!threads.length) return { comments, dropped: [] };
+  const kept: T[] = [];
+  const dropped: DroppedFinding[] = [];
+  for (const comment of comments) {
+    const original = comment.severityDemotedFrom === "P0"
+      ? findings.find((finding) => buildFindingFingerprint(finding) === comment.fingerprint)
+      : undefined;
+    const thread = original && matchPriorThread({ ...original, severity: comment.severity }, threads);
+    if (!thread) {
+      kept.push(comment);
+      continue;
+    }
+    dropped.push({ ...original, reason: "prior_thread_answered", threadId: thread.id });
+  }
+  return { comments: kept, dropped };
 }
 
 export function titleWords(text: string): Set<string> {
