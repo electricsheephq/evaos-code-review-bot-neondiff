@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCiConfig, readCiPullContext } from "../src/ci-mode.js";
-import { runOnce } from "../src/worker.js";
+import { buildCiConfig, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
+import { buildReviewProviderMetadata, runOnce } from "../src/worker.js";
 import { loadConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
@@ -56,6 +56,17 @@ describe("CI review", () => {
     expect(custom.codexRuntime).toMatchObject({ model: "fixture-model", reasoningEffort: "medium" });
     expect(() => buildCiConfig(base, ctx, { ...env, NEONDIFF_REASONING_EFFORT: "invalid" })).toThrow(/effort/);
   });
+  it("ignores empty and relative PATH entries so a PR-planted codex is never chosen", () => {
+    const env = context({ pull_request: { number: 1, head: { sha } } });
+    const ctx = readCiPullContext(env), base = loadConfig();
+    const checkout = mkdtempSync(join(tmpdir(), "neondiff-ci-checkout-")); roots.push(checkout);
+    const planted = join(checkout, "codex"); writeFileSync(planted, "#!/bin/sh\nexit 0\n"); chmodSync(planted, 0o700);
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(checkout);
+    try {
+      expect(() => buildCiConfig(base, ctx, { ...env, PATH: ["", ".", "bin"].join(":") })).toThrow(/codex on PATH/);
+      expect(buildCiConfig(base, ctx, { ...env, PATH: ["", ".", env.PATH].join(":") }).codexRuntime!.cliPath).toBe(join(env.PATH, "codex"));
+    } finally { cwd.mockRestore(); }
+  });
   it("uses the fallback token for review and comment creation/update without App credentials", async () => {
     const requests: { url: string; method: string; body: any }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url, init) => {
@@ -69,7 +80,9 @@ describe("CI review", () => {
     await github.createReview({ repo: "owner/repo", pullNumber: 1, headSha: sha, event: "COMMENT", body: "review", comments: [] });
     expect((await github.upsertIssueComment({ repo: "owner/repo", issueNumber: 1, marker: "marker", body: "marker" })).action).toBe("created");
     expect((await github.upsertIssueComment({ repo: "owner/repo", issueNumber: 1, marker: "marker", body: "marker" })).action).toBe("updated");
-    expect(requests.map((r) => r.method)).toEqual(["POST", "GET", "POST", "GET", "PATCH"]);
+    // The first upsert resolves the token identity once (GET /user); the fixture is not a user object, so the bot login stays.
+    expect(requests.map((r) => r.method)).toEqual(["POST", "GET", "GET", "POST", "GET", "PATCH"]);
+    expect(requests.filter((r) => r.url.endsWith("/user"))).toHaveLength(1);
   });
   it("passes API keys only through the child environment, preferring CODEX_API_KEY", () => {
     expect(buildCodexRuntimeEnv({ OPENAI_API_KEY: "fixture-openai", GITHUB_TOKEN: "fixture-github" })).toEqual({ OPENAI_API_KEY: "fixture-openai", CODEX_API_KEY: "fixture-openai" });
@@ -116,17 +129,63 @@ describe("CI review", () => {
     }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+  it("finds only this identity's NeonDiff review on the exact head", async () => {
+    const own = { login: "github-actions[bot]", type: "Bot" };
+    const body = appendReviewAttribution("review", "gpt-6.1-sol");
+    const github = (reviews: unknown[]) => ({
+      postingIdentity: async () => ({ login: "github-actions[bot]", type: "Bot" as const }),
+      listPullReviews: async () => reviews as any
+    });
+    expect(await findPostedCiReview(github([{ id: 1, commit_id: sha.toUpperCase(), body, user: own }]), "owner/repo", 1, sha)).toEqual({ id: 1 });
+    for (const other of [
+      { id: 2, commit_id: "b".repeat(40), body, user: own },
+      { id: 3, commit_id: sha, body: "another action's review", user: own },
+      { id: 4, commit_id: sha, body, user: { login: "github-actions[bot]", type: "User" } },
+      { id: 5, commit_id: sha, body, user: { login: "someone", type: "User" } },
+      { id: 6, commit_id: sha, body, user: null }
+    ]) expect(await findPostedCiReview(github([other]), "owner/repo", 1, sha)).toBeUndefined();
+  });
+  it("resolves a personal access token's own identity so marker comments are updated, not duplicated", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+      const method = init?.method ?? "GET", path = new URL(String(url)).pathname;
+      requests.push(`${method} ${path}`);
+      if (path === "/user") return new Response(JSON.stringify({ login: "maintainer", type: "User" }), { status: 200 });
+      if (method === "GET") return new Response(JSON.stringify([{ id: 5, body: "marker", user: { login: "maintainer", type: "User" } }]), { status: 200 });
+      return new Response(JSON.stringify({ id: 5 }), { status: 200 });
+    }));
+    const github = new GitHubApi({ token: "fixture-pat", botLogin: "github-actions[bot]" });
+    expect((await github.upsertIssueComment({ repo: "owner/repo", issueNumber: 1, marker: "marker", body: "marker" })).action).toBe("updated");
+    expect(await github.postingIdentity()).toEqual({ login: "maintainer", type: "User" });
+    expect(requests.filter((r) => r === "GET /user")).toHaveLength(1);
+  });
+  it("keeps the bot identity for App credentials and for tokens that cannot read /user", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: "Resource not accessible by integration" }), { status: 403 }));
+    vi.stubGlobal("fetch", fetchImpl);
+    expect(await new GitHubApi({ token: "fixture-token", botLogin: "github-actions[bot]" }).postingIdentity()).toEqual({ login: "github-actions[bot]", type: "Bot" });
+    fetchImpl.mockClear();
+    expect(await new GitHubApi({ appId: "1", privateKey: "fixture-key", botLogin: "neondiff[bot]", token: "fixture-token" }).postingIdentity()).toEqual({ login: "neondiff[bot]", type: "Bot" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it("labels API-key Codex runs in provider metadata while keeping the provider id stable", () => {
+    const config = buildCiConfig(loadConfig(), readCiPullContext(context({ pull_request: { number: 1, head: { sha } } })), context({ pull_request: { number: 1, head: { sha } } }));
+    expect(buildReviewProviderMetadata(config, { OPENAI_API_KEY: "fixture" })).toMatchObject({ providerId: "codex-cli-oauth", displayName: "Codex CLI (API key)" });
+    expect(buildReviewProviderMetadata(config, { CODEX_API_KEY: "fixture" }).displayName).toBe("Codex CLI (API key)");
+    expect(buildReviewProviderMetadata(config, {})).toMatchObject({ providerId: "codex-cli-oauth", displayName: "Codex CLI (existing OAuth session)" });
+  });
 
 });
 
 
 // Exercise argument routing through the real CLI with only its execution seam mocked.
-async function invokeCiCli(event: unknown, eventName: string, extra: string[] = []) {
+async function invokeCiCli(event: unknown, eventName: string, extra: string[] = [], reviews: unknown[] = [], expectRun = true) {
   vi.resetModules();
   const env = context(event, eventName);
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   const { GitHubApi: CliGitHub } = await import("../src/github.js");
   const getPull = vi.spyOn(CliGitHub.prototype, "getPull").mockResolvedValue({ head: { sha } } as any);
+  const listPullReviews = vi.spyOn(CliGitHub.prototype, "listPullReviews").mockResolvedValue(reviews as any);
+  vi.spyOn(CliGitHub.prototype, "postingIdentity").mockResolvedValue({ login: "github-actions[bot]", type: "Bot" });
   const run = vi.fn(async (_input: unknown) => ({ output: JSON.stringify({ ok: true }), exitCode: 0 }));
   vi.doMock("../src/run-once-cli.js", () => ({ runOnceCliCommand: run }));
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -135,8 +194,8 @@ async function invokeCiCli(event: unknown, eventName: string, extra: string[] = 
     process.argv = [argv[0], "src/cli.ts", "review-pr", "--ci", ...extra];
     await import("../src/cli.js");
     await vi.waitFor(() => expect(log).toHaveBeenCalled());
-    expect(run).toHaveBeenCalledOnce();
-    return { input: run.mock.calls[0][0] as any, getPull };
+    if (expectRun) expect(run).toHaveBeenCalledOnce(); else expect(run).not.toHaveBeenCalled();
+    return { input: run.mock.calls[0]?.[0] as any, getPull, listPullReviews, output: JSON.parse(String(log.mock.calls.at(-1)?.[0])) };
   } finally { process.argv = argv; vi.doUnmock("../src/run-once-cli.js"); }
 }
 
@@ -148,8 +207,19 @@ describe("CI CLI routing", () => {
     expect(getPull).not.toHaveBeenCalled();
   });
   it("fetches the issue-comment PR head and honours explicit dry run", async () => {
-    const { input, getPull } = await invokeCiCli({ issue: { number: 4, pull_request: {} } }, "issue_comment", ["--dry-run", "true"]);
+    const { input, getPull, listPullReviews } = await invokeCiCli({ issue: { number: 4, pull_request: {} } }, "issue_comment", ["--dry-run", "true"]);
     expect(getPull).toHaveBeenCalledWith("owner/repo", 4);
     expect(input.options).toMatchObject({ dryRun: true, expectedHeadSha: sha, processedHeadPolicy: "refresh_dry_run" });
+    expect(listPullReviews).not.toHaveBeenCalled();
+  });
+  it("rejects an unparseable --dry-run instead of posting live", async () => {
+    const { output } = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target", ["--dry-run", "ture"], [], false);
+    expect(output).toMatchObject({ ok: false, command: "review-pr", error: "--dry-run must be true or false" });
+  });
+  it("skips a head that this token already reviewed in an earlier workflow run", async () => {
+    const reviewed = [{ id: 9, commit_id: sha, html_url: "https://github.com/owner/repo/pull/3#pullrequestreview-9", body: appendReviewAttribution("review", "gpt-6.1-sol"), user: { login: "github-actions[bot]", type: "Bot" } }];
+    const { output, listPullReviews } = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target", [], reviewed, false);
+    expect(listPullReviews).toHaveBeenCalledWith("owner/repo", 3);
+    expect(output).toMatchObject({ ok: true, status: "skipped_already_reviewed", headSha: sha, reviewUrl: reviewed[0].html_url });
   });
 });

@@ -184,13 +184,16 @@ function recordConsumedAuthorizationIncident(input: {
   });
 }
 
-export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+export function buildReviewProviderMetadata(config: BotConfig, env: NodeJS.ProcessEnv = process.env): ReviewProviderMetadata {
   if (config.codexRuntime?.enabled) {
+    // providerId stays the stable registry/ledger key; the display name says which credential Codex
+    // uses. buildCodexRuntimeEnv passes either API key to the child, and Codex prefers it over OAuth.
+    const apiKey = Boolean(env.CODEX_API_KEY || env.OPENAI_API_KEY);
     return {
       providerId: "codex-cli-oauth",
       adapter: "codex-cli",
       model: config.codexRuntime.model,
-      displayName: "Codex CLI (existing OAuth session)"
+      displayName: apiKey ? "Codex CLI (API key)" : "Codex CLI (existing OAuth session)"
     };
   }
   const providerId = resolveReviewRegistryProviderId(config);
