@@ -1821,6 +1821,7 @@ function reviewResultStatusCommentState(
     case "skipped_base_merge_only":
       return undefined;
     case "untrusted_author_public_repo":
+    case "untrusted_author_restricted_unavailable":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -2020,6 +2021,7 @@ function readinessStateForReviewResult(
       return "closed";
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_restricted_unavailable":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_command_stop":
@@ -2065,6 +2067,7 @@ function readinessReasonForReviewResult(
     case "skipped_base_merge_only":
       return "base_merge_only";
     case "untrusted_author_public_repo":
+    case "untrusted_author_restricted_unavailable":
       return status;
     case "skipped_draft":
       return "draft_pr";
@@ -2282,6 +2285,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
       return;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_restricted_unavailable":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -2434,6 +2438,7 @@ function updateQueueJobAfterReviewStatus(input: {
       return;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_restricted_unavailable":
       // Terminal: a leasable blocked job would be re-leased every cycle. If the gate later allows
       // the head, discovery enqueues a fresh job after this terminal one.
       input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired",
@@ -2717,6 +2722,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       break;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_restricted_unavailable":
       result.skippedPolicy += 1;
       result.queue.staleRetired += 1;
       break;

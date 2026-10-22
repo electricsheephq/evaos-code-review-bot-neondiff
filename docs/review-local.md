@@ -5,6 +5,8 @@ uses the configured Codex CLI session, NeonDiff prompt, context budget and
 deterministic findings gate. It opens no state database and runs no
 self-consistency verifier. Model providers receive the review context.
 
+review-local treats the checkout as trusted; run it only on code you would run Codex on directly. Unattended reviews of outside contributors' PRs belong in the daemon or `review-pr --ci`, which apply restricted mode.
+
 ```sh
 neondiff review-local --repo-path ./checkout --base <base-sha> \
   --repo owner/name --pr-number 123 --title 'Change title' --out findings.json
