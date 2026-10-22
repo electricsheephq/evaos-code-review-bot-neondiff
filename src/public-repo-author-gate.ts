@@ -32,7 +32,8 @@ function matchesTrustedAuthor(config: BotConfig, pull: PullRequestSummary): bool
 export function isUntrustedPublicAuthor(
   config: BotConfig, pull: PullRequestSummary, visibility = visibilityFromPullSummary(pull)
 ): boolean {
-  return visibility === "public" && !matchesTrustedAuthor(config, pull);
+  // Like the author gate, only a known-private repository is exempt; unknown visibility is restricted.
+  return visibility !== "private" && !matchesTrustedAuthor(config, pull);
 }
 
 export function isPublicRepoAuthorBlocked(

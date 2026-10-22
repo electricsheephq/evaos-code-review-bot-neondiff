@@ -442,6 +442,21 @@ function checkoutReadPermissionArgs(readableRoots: string[], restrictTools = fal
   ];
 }
 
+// Restricted reviews take Codex 0.163's own isolated structured-request overrides
+// (codex-rs/tui/src/temporary_structured_request.rs): no tool, skill, plugin, hook or image reader
+// reaches the model, and project docs are off. The base invocation already disables apps and multi-agent.
+const RESTRICTED_TOOL_ARGS = [
+  "-c", "project_doc_max_bytes=0",
+  ...["shell_tool", "unified_exec", "shell_snapshot", "view_image", "image_generation", "code_mode", "code_mode_only",
+    "context_management", "current_time_reminder", "deferred_executor", "goals", "hooks", "memories", "plugins",
+    "request_permissions_tool", "standalone_web_search", "token_budget", "tool_suggest"].flatMap((feature) => ["--disable", feature]),
+  "-c", "cloud.skills.enabled=false",
+  "-c", "skills.include_instructions=false",
+  "-c", "tools.experimental_request_user_input.enabled=false",
+  "-c", "tools.update_plan.enabled=false",
+  "-c", 'web_search="disabled"'
+];
+
 export function buildCodexExecInvocation(input: {
   cliPath: string;
   cwd: string;
@@ -464,7 +479,7 @@ export function buildCodexExecInvocation(input: {
       "--disable", "apps",
       "--disable", "multi_agent",
       "--disable", "multi_agent_v2",
-      ...(input.restrictTools ? ["--disable", "shell_tool", "-c", "project_doc_max_bytes=0"] : []),
+      ...(input.restrictTools ? RESTRICTED_TOOL_ARGS : []),
       "-c", "approval_policy=\"never\"",
       "-c", `model_reasoning_effort=\"${input.reasoningEffort}\"`,
       "--model", input.model,

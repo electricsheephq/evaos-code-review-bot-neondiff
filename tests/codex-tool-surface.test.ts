@@ -14,7 +14,7 @@ function fixture() {
   const cwd = join(root, "checkout"); const home = join(root, "home");
   mkdirSync(cwd); mkdirSync(home); mkdirSync(join(home, ".codex"));
   const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: join(home, ".codex"), TMPDIR: tmpdir() };
-  const cli = process.platform === "darwin" ? "/Users/m1/.local/bin/codex" : "codex";
+  const cli = process.env.NEONDIFF_CODEX_CLI ?? "codex";
   return { root, cwd, env, cli };
 }
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
@@ -32,6 +32,9 @@ it.skipIf(!enabled)("real Codex omits shell tools and project docs, with a trust
   const { root, cwd, env, cli } = fixture();
   const marker = "NEONDIFF_UNTRUSTED_PROJECT_DOC_MARKER";
   writeFileSync(join(cwd, "AGENTS.md"), marker);
+  const skillMarker = "NEONDIFF_UNTRUSTED_SKILL_MARKER";
+  mkdirSync(join(cwd, ".agents", "skills", "probe"), { recursive: true });
+  writeFileSync(join(cwd, ".agents", "skills", "probe", "SKILL.md"), `---\nname: probe\ndescription: ${skillMarker}\n---\n${skillMarker}\n`);
   const schemaPath = join(root, "schema.json");
   writeFileSync(schemaPath, JSON.stringify({ type: "object", properties: {}, additionalProperties: false }));
   const requests: Array<{ url?: string; body: { input?: unknown[] } }> = [];
@@ -55,11 +58,17 @@ it.skipIf(!enabled)("real Codex omits shell tools and project docs, with a trust
       const additionalTools = request!.body.input?.find(item => JSON.stringify(item).includes("additional_tools"));
       expect(additionalTools, "request must include the additional_tools input item").toBeDefined();
       const toolText = JSON.stringify(additionalTools);
+      const toolNames = [...toolText.matchAll(/### `([^`]+)`/g)].map((match) => match[1]).sort();
       if (restrictTools) {
-        expect(toolText).not.toMatch(/### `(?:exec_command|write_stdin)`/);
+        // Exact allowlist for the CI-pinned Codex 0.163: apply_patch cannot write under the read-only
+        // profile, and the MCP resource tools have no servers (--ignore-user-config).
+        expect(toolNames).toEqual(["apply_patch", "clock__curr_time", "list_mcp_resource_templates", "list_mcp_resources", "read_mcp_resource"]);
         expect(JSON.stringify(request!.body)).not.toContain(marker);
+        expect(JSON.stringify(request!.body)).not.toContain(skillMarker);
       } else {
         expect(toolText).toContain("### `exec_command`");
+        expect(toolNames).toContain("view_image");
+        expect(JSON.stringify(request!.body)).toContain(skillMarker);
         expect(JSON.stringify(request!.body)).toContain(marker);
       }
     }

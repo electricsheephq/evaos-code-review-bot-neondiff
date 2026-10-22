@@ -1590,15 +1590,16 @@ export function recordPublicRepoAuthorGateSkip(input: {
 
 // A processed row keeps discovery from re-enqueueing the head on every poll; recordPublicRepoAuthorGateSkip
 // clears it once the author is trusted, and a new head is decided afresh.
-function recordRestrictedReviewUnavailable(
+export function recordRestrictedReviewUnavailable(
   state: ReviewStateStore, repo: string, pull: PullRequestSummary
 ): "untrusted_author_restricted_unavailable" {
   const reason = "untrusted_author_restricted_unavailable";
   const existing = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  // A kept processed row (for example a posted review reached again by a manual command) keeps its readiness too.
   if (!existing || existing.status === "failed") {
     state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "skipped", error: reason });
+    state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha, state: "skipped", reason });
   }
-  state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha, state: "skipped", reason });
   return reason;
 }
 

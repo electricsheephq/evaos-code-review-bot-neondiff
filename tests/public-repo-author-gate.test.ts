@@ -8,7 +8,7 @@ import { codexChildUsesApiKeyOnly, isPublicRepoAuthorBlocked, isUntrustedPublicA
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { recordPublicRepoAuthorGateSkip, reviewPull, retryFailedHeadWithDeps } from "../src/worker.js";
+import { recordPublicRepoAuthorGateSkip, recordRestrictedReviewUnavailable, reviewPull, retryFailedHeadWithDeps } from "../src/worker.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { runScheduledCycleWithDeps } from "../src/scheduler.js";
 import { buildOperatorDashboard, formatOperatorDashboardHuman } from "../src/operator-cli.js";
@@ -77,6 +77,21 @@ describe("Codex child authentication", () => {
   });
 });
 
+describe("restricted review unavailable", () => {
+  it("keeps the readiness of a processed row it does not replace", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-restricted-readiness-")); roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const pr = pull("public", "NONE");
+    try {
+      state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, status: "posted" });
+      state.recordReviewReadiness({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, state: "posted", reason: "review posted" });
+      expect(recordRestrictedReviewUnavailable(state, "org/repo", pr)).toBe("untrusted_author_restricted_unavailable");
+      expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "posted" });
+      expect(state.getReviewReadiness("org/repo", 1, pr.head.sha)).toMatchObject({ state: "posted" });
+    } finally { state.close(); }
+  });
+});
+
 describe("public repository author gate", () => {
   for (const key of [undefined, "codex", "openai"]) {
     for (const visibility of ["public", "private", "internal", "unknown"]) {
@@ -90,7 +105,7 @@ describe("public repository author gate", () => {
           const blocked = !keyReachesCodex && ["public", "unknown"].includes(visibility) &&
             !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "");
           expect(isPublicRepoAuthorBlocked(cfg, pr)).toBe(blocked);
-          expect(isUntrustedPublicAuthor(cfg, pr)).toBe(visibility === "public" && !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? ""));
+          expect(isUntrustedPublicAuthor(cfg, pr)).toBe(["public", "unknown"].includes(visibility) && !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? ""));
           const root = mkdtempSync(join(tmpdir(), "neondiff-author-gate-")); roots.push(root);
           cfg.evidenceDir = join(root, "evidence"); cfg.workRoot = join(root, "work");
           const state = new ReviewStateStore(join(root, "state.sqlite"));
