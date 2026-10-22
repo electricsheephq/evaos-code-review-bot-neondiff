@@ -70,14 +70,19 @@ it.skipIf(!enabled || process.platform !== "linux" || !process.env.CI)("Linux pe
   expect(runnerTemp).toBeTruthy();
   // A private subdirectory avoids collisions with other jobs sharing RUNNER_TEMP.
   const runnerDir = mkdtempSync(join(runnerTemp, "neondiff-probe-")); roots.push(runnerDir);
-  writeFileSync(join(runnerDir, "x"), "fixture"); const outside = join(root, "outside"); writeFileSync(outside, "fixture");
+  const runnerFile = join(runnerDir, "x"); writeFileSync(runnerFile, "fixture");
+  const outside = join(root, "outside"); writeFileSync(outside, "fixture");
+  const inside = join(cwd, "inside"); writeFileSync(inside, "fixture");
   const invocation = buildCodexExecInvocation({ cliPath: cli, cwd, model: "fixture", reasoningEffort: "high", schemaPath: "unused", outputPath: "unused",
     restrictTools: true, readConfinement: resolveCodexReadConfinement(cwd, cli, env, true) });
   const flags = invocation.args.flatMap((arg, i, args) => arg === "-c" ? [arg, args[i + 1]!] : []);
-  const script = 'bad=0; for path in /proc/self/environ /proc/$PPID/environ "$RUNNER_TEMP/x" "$1"; do if cat "$path" >/dev/null 2>&1; then printf "READABLE:%s\\n" "$path"; bad=1; else printf "DENIED:%s\\n" "$path"; fi; done; exit "$bad"';
-  const result = await run(invocation.command, ["sandbox", "linux", "--ignore-user-config", ...flags, "--", "/bin/sh", "-c", script, "probe", outside], cwd,
-    { ...env, RUNNER_TEMP: runnerDir });
-  expect(result.output, "sandbox must actually execute the probe").toContain("DENIED:/proc/self/environ");
-  expect(result.output).not.toContain("READABLE:");
+  // Exact paths arrive as arguments (the sandbox may not forward RUNNER_TEMP); the checkout file is the positive control.
+  const script = 'for path in "$@" /proc/$PPID/environ; do if cat "$path" >/dev/null 2>&1; then printf "READABLE:%s\\n" "$path"; else printf "DENIED:%s\\n" "$path"; fi; done';
+  const result = await run(invocation.command, ["sandbox", "linux", "--ignore-user-config", ...flags, "--", "/bin/sh", "-c", script, "probe",
+    inside, "/proc/self/environ", runnerFile, outside], cwd, env);
   expect(result.code, result.output).toBe(0);
+  expect(result.output, "the probe must be able to read the checkout").toContain(`READABLE:${inside}\n`);
+  for (const path of ["/proc/self/environ", runnerFile, outside]) expect(result.output, result.output).toContain(`DENIED:${path}\n`);
+  expect(result.output).toMatch(/DENIED:\/proc\/\d+\/environ\n/);
+  expect(result.output.match(/READABLE:/g)).toHaveLength(1);
 });

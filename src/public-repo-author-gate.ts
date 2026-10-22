@@ -29,8 +29,10 @@ function matchesTrustedAuthor(config: BotConfig, pull: PullRequestSummary): bool
     (pull.authorLogin && gate.allowedLogins.some(login => login.toLowerCase() === pull.authorLogin!.toLowerCase())));
 }
 
-export function isUntrustedPublicAuthor(config: BotConfig, pull: PullRequestSummary): boolean {
-  return visibilityFromPullSummary(pull) === "public" && !matchesTrustedAuthor(config, pull);
+export function isUntrustedPublicAuthor(
+  config: BotConfig, pull: PullRequestSummary, visibility = visibilityFromPullSummary(pull)
+): boolean {
+  return visibility === "public" && !matchesTrustedAuthor(config, pull);
 }
 
 export function isPublicRepoAuthorBlocked(

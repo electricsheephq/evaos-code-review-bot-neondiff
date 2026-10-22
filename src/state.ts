@@ -965,14 +965,19 @@ export class ReviewStateStore {
     return row ? mapProcessedReviewRow(row) : undefined;
   }
 
-  /** Removes only a public-repo author-gate skip, so a later allowed decision can review the head. */
-  clearAuthorGateSkip(repo: string, pullNumber: number, headSha: string): boolean {
+  /** Removes only an author-trust skip, so a later allowed decision can review the head. */
+  clearAuthorGateSkip(
+    repo: string,
+    pullNumber: number,
+    headSha: string,
+    reason: "untrusted_author_public_repo" | "untrusted_author_restricted_unavailable" = "untrusted_author_public_repo"
+  ): boolean {
     const result = this.db
       .prepare(
         `delete from processed_reviews
-         where repo = ? and pull_number = ? and head_sha = ? and status = 'skipped' and error = 'untrusted_author_public_repo'`
+         where repo = ? and pull_number = ? and head_sha = ? and status = 'skipped' and error = ?`
       )
-      .run(repo, pullNumber, headSha);
+      .run(repo, pullNumber, headSha, reason);
     return Number(result.changes) > 0;
   }
 

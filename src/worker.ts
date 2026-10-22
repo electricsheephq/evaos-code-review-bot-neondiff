@@ -1461,7 +1461,8 @@ export function restoreFailedRetryRowIfNeeded(input: {
   if (current?.status === "posted") return;
   if (current?.status === "skipped" && current.error === "base_merge_only") return;
   if (current?.status === "failed") return;
-  if (current?.status === "skipped" && current.error === "untrusted_author_public_repo") return;
+  if (current?.status === "skipped"
+    && (current.error === "untrusted_author_public_repo" || current.error === "untrusted_author_restricted_unavailable")) return;
 
   const restoreAsProviderCooldown =
     input.retryTarget.previousStatus === "skipped" &&
@@ -1554,6 +1555,11 @@ export function recordPublicRepoAuthorGateSkip(input: {
   if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility)) {
     // The gate decision can change (mode, allowlist); a gate skip must not pin the head as processed.
     if (alreadySkipped) input.state.clearAuthorGateSkip(input.repo, input.pull.number, input.pull.head.sha);
+    // Likewise a restricted-review skip once the author is trusted (a trusted review needs no confinement).
+    if (existing?.status === "skipped" && existing.error === "untrusted_author_restricted_unavailable"
+      && !isUntrustedPublicAuthor(input.config, input.pull, visibility)) {
+      input.state.clearAuthorGateSkip(input.repo, input.pull.number, input.pull.head.sha, "untrusted_author_restricted_unavailable");
+    }
     return false;
   }
   if (alreadySkipped) return true;
@@ -1573,6 +1579,20 @@ export function recordPublicRepoAuthorGateSkip(input: {
       state: "skipped", reason });
   }
   return true;
+}
+
+// A processed row keeps discovery from re-enqueueing the head on every poll; recordPublicRepoAuthorGateSkip
+// clears it once the author is trusted, and a new head is decided afresh.
+function recordRestrictedReviewUnavailable(
+  state: ReviewStateStore, repo: string, pull: PullRequestSummary
+): "untrusted_author_restricted_unavailable" {
+  const reason = "untrusted_author_restricted_unavailable";
+  const existing = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  if (!existing || existing.status === "failed") {
+    state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "skipped", error: reason });
+  }
+  state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha, state: "skipped", reason });
+  return reason;
 }
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
@@ -1945,6 +1965,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     mkdirSync(evidenceDir, { recursive: true });
 
+    // All main/chunk/ensemble calls share runConfiguredReview; severe/self-consistency
+    // calls share resolveSelfConsistencyBackend. Reject either non-Codex route before any model call.
+    const restrictTools = isUntrustedPublicAuthor(config, pull, visibility);
+    if (restrictTools && input.useZCode) {
+      const selfConsistency = config.reviewGate?.selfConsistency;
+      const unavailableBackend = !config.codexRuntime?.enabled
+        ? `restricted review needs the Codex main review; configured provider=${config.zcode.providerId ?? "ZCode"} cannot be confined`
+        : selfConsistency?.enabled && !resolveSelfConsistencyBackend(config, selfConsistency).useCodex
+          ? `restricted review needs a confinable Codex verifier; reviewGate.selfConsistency.provider=${selfConsistency.provider} cannot be confined`
+          : undefined;
+      if (unavailableBackend) {
+        const reason = "untrusted_author_restricted_unavailable";
+        const detail = redactSecrets(unavailableBackend);
+        writeRedactedJson(join(evidenceDir, "author-trust.json"), { restricted: true, reason, detail });
+        console.warn(`[author-trust] ${reason}: ${detail}`);
+        return recordRestrictedReviewUnavailable(state, repo, pull);
+      }
+    }
+
     const files = await github.listPullFiles(repo, pull.number);
     let reviewFiles = filterPullFilesForProfile(files, repoPolicy.profile);
     const filterImpact = buildPullFileFilterImpact(files, repoPolicy.profile);
@@ -2035,7 +2074,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       evidenceDir
     });
-    const repoWikiContext = analysisPlan?.repoWikiContext === false
+    const repoWikiContext = restrictTools || analysisPlan?.repoWikiContext === false
       ? {}
       : buildRepoWikiContext({
           config,
@@ -2076,21 +2115,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
     // schema, sandbox and citation checks all agree on the fallback.
-    const restrictTools = config.codexRuntime?.enabled === true && isUntrustedPublicAuthor(config, pull);
     const checkoutReads = config.codexRuntime?.enabled
       ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, restrictTools, cwd: worktree.path, cliPath: reviewCliPath!,
           sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
             "private key": config.github.privateKeyPath, "state DB": config.statePath,
             "license key": process.env.NEONDIFF_LICENSE_KEY_FILE || config.license?.keyPath, evidence: config.evidenceDir } })
       : { status: "disabled" as const };
-    if (restrictTools) {
-      writeRedactedJson(join(evidenceDir, "author-trust.json"), { restricted: true, reason: "untrusted_author_public_repo",
+    if (restrictTools && input.useZCode) {
+      const confined = checkoutReads.status === "enabled" && Boolean(checkoutReads.confinement);
+      const reason = confined ? "untrusted_author_public_repo" : "untrusted_author_restricted_unavailable";
+      writeRedactedJson(join(evidenceDir, "author-trust.json"), { restricted: true, reason,
         confinement: checkoutReads.status, detail: checkoutReads.detail });
-      if (checkoutReads.status !== "enabled" || !checkoutReads.confinement) {
-        const reason = "untrusted_author_restricted_unavailable";
+      if (!confined) {
         console.warn(`[author-trust] ${reason}: ${checkoutReads.detail ?? "confinement unavailable"}`);
-        state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha, state: "skipped", reason });
-        return reason;
+        return recordRestrictedReviewUnavailable(state, repo, pull);
       }
     }
     const reviewConfig: BotConfig = config.codexRuntime?.enabled
@@ -2239,7 +2277,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
     const zcodeResult = zcodeExecution.result;
-    if (restrictTools) (zcodeResult.runtime.notes ??= []).push("Untrusted public author: shell tools and project docs disabled; diff-only review with confined reads.");
+    if (restrictTools && input.useZCode) (zcodeResult.runtime.notes ??= []).push("Untrusted public author: shell tools and project docs disabled; diff-only review with confined reads.");
     if (checkoutReads.status.startsWith("unavailable:") && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(`Checkout reads ${checkoutReads.status}; this was a diff-only review.`);
     }
