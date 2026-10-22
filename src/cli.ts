@@ -2231,7 +2231,8 @@ async function main(): Promise<void> {
         return;
       }
     }
-    const useZCode = !ci && args.zcode !== "false";
+    // CI runs the configured review like any live review; only an explicit --zcode false disables it.
+    const useZCode = args.zcode !== "false";
     const expectedConfigRevision = args["expected-config-revision"]
       ? parseSingleArg(args["expected-config-revision"], "--expected-config-revision")
       : undefined;

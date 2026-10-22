@@ -53,6 +53,7 @@ it("runs the real parser and gate without GitHub, license or state and atomicall
   expect(fs.readdirSync(root).some(x => x.includes(".tmp-"))).toBe(false);
   expect(GitHubApi).not.toHaveBeenCalled(); expect(ReviewStateStore).not.toHaveBeenCalled(); expect(requireActiveProductionLicense).not.toHaveBeenCalled();
   // Checkout reads default on from 1.1.0 (#1184); the module mock reports them available.
+  expect(resolveCheckoutReadsStatus).toHaveBeenCalledWith(expect.objectContaining({ probeSandbox: true }));
   expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ cwd: repo, checkoutReads: true }), expect.any(Object));
   const before = fs.readFileSync(args().out, "utf8");
   rename.mockImplementationOnce(() => { throw Error("atomic rename failure"); });

@@ -124,7 +124,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   const runtime = config.codexRuntime;
   const agent = arg("agent") ?? env.RB_AGENT ?? "neondiff";
   // Decided once, as in the worker: without a supported Codex CLI or confinement the review falls back to diff-only.
-  const readsStatus = resolveCheckoutReadsStatus({ checkoutReads: runtime.checkoutReads, cwd: repoPath, cliPath: runtime.cliPath });
+  const readsStatus = resolveCheckoutReadsStatus({ checkoutReads: runtime.checkoutReads, probeSandbox: true, cwd: repoPath, cliPath: runtime.cliPath });
   const checkoutReads = readsStatus.status === "enabled";
   if (checkoutReads && git("status", "--porcelain=v1", "--untracked-files=all").trim()) {
     throw new Error("review-local --checkout-reads requires a clean checkout (commit/stash or use a detached worktree)");

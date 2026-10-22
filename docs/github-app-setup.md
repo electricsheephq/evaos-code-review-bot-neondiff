@@ -355,6 +355,10 @@ neondiff review-pr \
   --zcode true
 ```
 
+On a Linux worker, first allow the Codex sandbox
+([SETUP: Codex sandbox on Linux](SETUP.md#codex-sandbox-on-linux)); otherwise the
+review runs diff-only with a `[checkout-reads]` warning.
+
 Use the exact `configRevision` returned by the successful provider verification.
 Only move to live review after the dry-run output and evidence are inspected and
 the exact repo, PR, head SHA, config path, and posting intent are recorded in

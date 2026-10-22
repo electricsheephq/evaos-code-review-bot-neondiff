@@ -332,6 +332,11 @@ Platform operator paths:
 | CI runners | One-shot review or dry-run with [docs/ci-runner.md](docs/ci-runner.md) | Documented for Ubuntu-style runners |
 | Windows | CLI-only source/package usage | Untested; no supervised daemon claim |
 
+On Linux (hosts, Docker and CI runners), Codex checkout reads need unprivileged
+user namespaces, which Ubuntu 23.10 and later block by default. NeonDiff checks
+this before using checkout reads and falls back to diff-only with a warning; see
+[Codex sandbox on Linux](docs/SETUP.md#codex-sandbox-on-linux) to enable them.
+
 ## Provider Resources And Compatibility
 
 NeonDiff is local-first for checkout state, credentials, config, evidence, and

@@ -187,6 +187,13 @@ function recordConsumedAuthorizationIncident(input: {
   });
 }
 
+/** Which credential a Codex review used, for the runtime evidence; it agrees with the provider display name. */
+export function codexRuntimeCredentialNote(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CODEX_API_KEY || env.OPENAI_API_KEY
+    ? "Codex CLI used the API key from its environment; NeonDiff did not log or store it."
+    : "Codex CLI used its existing authenticated session; NeonDiff did not read or receive OAuth material.";
+}
+
 export function buildReviewProviderMetadata(config: BotConfig, env: NodeJS.ProcessEnv = process.env): ReviewProviderMetadata {
   if (config.codexRuntime?.enabled) {
     // providerId stays the stable registry/ledger key; the display name says which credential Codex
@@ -2126,7 +2133,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // schema, sandbox and citation checks all agree on the fallback.
     // Only a review that spawns Codex probes it: the probe runs the pinned binary, never a PATH lookup.
     const checkoutReads = config.codexRuntime?.enabled && input.useZCode
-      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, restrictTools, cwd: worktree.path, cliPath: reviewCliPath!,
+      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, restrictTools, probeSandbox: true, cwd: worktree.path, cliPath: reviewCliPath!,
           sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
             "private key": config.github.privateKeyPath, "state DB": config.statePath,
             // Both license paths: an inherited env file must not hide the configured key.
@@ -4866,7 +4873,7 @@ async function runConfiguredReview(input: {
       providerAttempts: 1,
       notes: [
         `Codex CLI reasoning effort: ${input.config.codexRuntime.reasoningEffort}.`,
-        "Codex CLI used its existing authenticated session; NeonDiff did not read or receive OAuth material.",
+        codexRuntimeCredentialNote(),
         "Codex runtime retries are disabled; a failed invocation returns one terminal queue failure."
       ]
     }
