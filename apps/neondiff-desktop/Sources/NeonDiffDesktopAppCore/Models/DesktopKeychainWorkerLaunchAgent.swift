@@ -297,8 +297,8 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         Sealed worker: \(sealedWorkerPath)
         EnvironmentVariables: none
         Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua; stdout=/dev/null; stderr=/dev/null.
-        Background PR review lane: held.
-        Live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only.
+        The background worker reviews new pull requests on the repositories you enrolled and posts its reviews; in dry-run mode it writes them to local evidence instead.
+        One-off native live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only.
         Credentials: Keychain-only at runtime; no secret values in the plist, arguments, or environment.
         Repository allowlist: preserved unchanged (\(preservedRepositoryCount) configured \(repositoryLabel)); no config write.
         Mutation: write only the selected user LaunchAgent, then restart that exact service.

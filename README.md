@@ -209,12 +209,14 @@ public App ID, config path, launchd label, the non-secret broker device ID used
 by the existing API-backed activation, and the signed app path—never a key
 value or key-file path. The headless app re-derives that device ID from its
 Keychain identity and rejects a mismatched plist before releasing credentials.
-Review and daemon readiness remain separate gates. The LaunchAgent's background
-PR review lane remains held: the daemon may run the independently admitted
-issue-enrichment lane, but a heartbeat proves service liveness only and never
-authorizes a PR post. Issue-enrichment success requires lane-specific result
-evidence. Native live PR posting uses only the exact scoped `review-pr` dry
-review plus explicit same-head confirmation; the matching approval is consumed
+Review and daemon readiness remain separate gates.
+The background worker reviews new pull requests on the repositories you
+enrolled and posts its reviews; in dry-run mode it writes them to local
+evidence instead.
+The daemon may also run the independently admitted issue-enrichment lane. A
+heartbeat proves service liveness only and never authorizes a PR post.
+Issue-enrichment success requires lane-specific result evidence. One-off native live PR posting outside the background worker uses only the exact scoped `review-pr` dry review plus explicit same-head
+confirmation; the matching approval is consumed
 atomically.
 The immutable published prerelease and clean-Mac artifact proof remain
 distribution gates. Unsigned development builds still require an executable
@@ -268,8 +270,10 @@ Keychain, arguments, logs, or UI. Overview can then run `review-pr` for one
 selected repository and pull request through the configured provider. Live
 posting remains disabled until that exact target and config revision return a
 successful dry-run head and the user confirms the pinned head. A transport
-failure revokes that approval instead of permitting a blind retry. For that
-multi-repository worker, daemon-wide start remains blocked. The selection and
+failure revokes that approval instead of permitting a blind retry. For a
+customer multi-repository worker, daemon-wide start remains blocked; a verified
+internal-admin worker may start it and then reviews its whole allowlist, with
+license admission checked for every pull request. The selection and
 dry-run approval fail closed if the config, target, pull request, workspace, or
 head changes.
 The same **Verify existing access** action then runs credential-free
