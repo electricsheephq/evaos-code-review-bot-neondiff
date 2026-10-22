@@ -58,6 +58,8 @@ const REVIEW_INTERNAL_PROMPT_LINES = [
 
 const REVIEW_INTERNAL_PUBLIC_FRAGMENTS = [
   "You are NeonDiff, a code reviewer",
+  "Review this pull request for every real defect",
+  "Use P2 for real defects with limited impact",
   "Do not modify files",
   "Do not run project tests",
   "Do not call Bash or shell commands",

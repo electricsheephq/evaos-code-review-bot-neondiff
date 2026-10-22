@@ -19,6 +19,8 @@ and `--agent` to select settings. Codex is enabled by default. Evidence uses a
 temporary directory; `--evidence-dir` selects its location and `--keep-evidence`
 preserves it. Settings print to stdout before execution.
 
+When checkout reads are enabled, commit or stash tracked and untracked changes, or use a clean detached worktree at the review head; ignored files such as `node_modules` are allowed.
+
 For ReviewBench, use `review-local --reviewbench-env --format reviewbench`.
 Inputs come from `RB_REPO` (default `/work/repo`), `RB_BASE`, `RB_HEAD`, `RB_DIFF`,
 `RB_PR_JSON`, `RB_NWO`, `RB_PR_NUMBER`, `RB_OUT`, `RB_AGENT`, and settings from

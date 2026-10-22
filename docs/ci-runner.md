@@ -9,53 +9,74 @@ normal current-head checks.
 
 ## GitHub Actions
 
-Use an Ubuntu runner, install Node.js 26, and run a dry-run review or setup
-smoke with credentials supplied by the repository or organization secret store.
+For NeonDiff 1.1.0, save the following as `.github/workflows/neondiff.yml`
+on the default branch. Add your own `OPENAI_API_KEY` in repository or
+organization Actions secrets. NeonDiff uses your model access and never pays
+for or proxies model calls. Public repositories need no activation on this CI
+path; private repositories also need the `NEONDIFF_LICENSE_KEY` secret described
+below. Each license covers one GitHub organization or user account: Solo is
+$9/mo or $90/yr, Team is $290/yr.
+
+This workflow posts a current-head review when a PR opens or becomes ready,
+or when an OWNER, MEMBER, or COLLABORATOR comments `/neondiff review` on a PR.
+It never checks out PR code into the workflow job. NeonDiff fetches the diff and
+uses its confined review checkout; repository contents remain untrusted input.
+The separate `electricsheephq/neondiff-action` repository is not available yet;
+this workflow uses the versioned CLI directly once 1.1.0 is published.
 
 ```yaml
-name: NeonDiff dry-run
+name: NeonDiff review
 on:
-  pull_request:
+  pull_request_target:
+    types: [opened, ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
-  pull-requests: read
-  checks: read
+  pull-requests: write
+  issues: write
 
 jobs:
   neondiff:
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/neondiff review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 26
-          cache: npm
-      - run: npm install -g neondiff
-      - name: Prepare dry-run config
-        run: cp config.example.json "$RUNNER_TEMP/config.local.json"
-      - name: Write GitHub App key
+      - run: npm install -g @openai/codex@0.163.0
+      - name: Write private repository license file
+        if: github.event.repository.private == true
+        env:
+          ACTION_LICENSE_KEY: ${{ secrets.NEONDIFF_LICENSE_KEY }}
         run: |
-          install -m 600 /dev/null "$RUNNER_TEMP/neondiff.private-key.pem"
-          printf '%s' "${NEONDIFF_GITHUB_APP_PRIVATE_KEY}" > "$RUNNER_TEMP/neondiff.private-key.pem"
+          install -m 600 /dev/null "$RUNNER_TEMP/neondiff-license-key"
+          printf '%s' "$ACTION_LICENSE_KEY" > "$RUNNER_TEMP/neondiff-license-key"
+          printf 'NEONDIFF_LICENSE_KEY_FILE=%s\n' "$RUNNER_TEMP/neondiff-license-key" >> "$GITHUB_ENV"
+      - name: Review current PR head
         env:
-          NEONDIFF_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NEONDIFF_GITHUB_APP_PRIVATE_KEY }}
-      - run: neondiff doctor github --config "$RUNNER_TEMP/config.local.json" --json
-        env:
-          NEONDIFF_GITHUB_APP_ID: ${{ secrets.NEONDIFF_GITHUB_APP_ID }}
-          NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: ${{ runner.temp }}/neondiff.private-key.pem
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MODEL: ${{ vars.NEONDIFF_MODEL }}
+          EFFORT: ${{ vars.NEONDIFF_REASONING_EFFORT }}
+        run: |
+          if [ -n "$MODEL" ]; then export NEONDIFF_MODEL="$MODEL"; fi
+          if [ -n "$EFFORT" ]; then export NEONDIFF_REASONING_EFFORT="$EFFORT"; fi
+          npx --yes neondiff@1.1.0 review-pr --ci
 ```
 
-For CI-hosted dry-run review, write the App private key to
-`$RUNNER_TEMP/neondiff.private-key.pem` with restricted permissions as shown
-above, run `neondiff review-pr --dry-run true`, and upload only redacted
-evidence.
-
-`--dry-run true` never posts GitHub comments. Live CI posting still inherits the
-normal NeonDiff gates: the target head must be current, duplicate suppression
-must allow the head, and the public alias must be invoked with
-`--dry-run false --confirm true` after the repo, PR, head SHA, and config path
-are approved.
+Optionally set repository Actions variables `NEONDIFF_MODEL` and
+`NEONDIFF_REASONING_EFFORT`; leaving them unset preserves CLI defaults.
+Do not interpolate PR titles, bodies, or comment text into shell commands.
+For a local non-posting development review, use [review-local](review-local.md).
+The generic config-based dry-run path below still needs worker activation and
+GitHub App credentials; it is separate from this CI path.
 
 ## Private repositories
 

@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,4 +36,16 @@ it("atomically writes validated ReviewBench findings, including empty findings",
   expect(readdirSync(root).some(x => x.includes(".tmp-"))).toBe(false);
   expect(() => writeFindingsFile(out, task, "x", [{ ...finding, file: "../escape" }], {})).toThrow(/finding/i);
   expect(nativePrompt(task)).toBe(`Review the change between ${task.base} and ${task.head} in this repository (the diff is in diff.patch). Report real defects introduced by the change: file, start_line, end_line at head, and a message that says what is wrong and why. Report nothing if there are none.`);
+});
+
+it.each(["neondiff", "codex-native"])("records effective checkout access for %s without fetching or running models", (arm) => {
+  const { root } = fixture();
+  const bin = join(root, "bin"); mkdirSync(bin);
+  writeFileSync(join(bin, "git"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const run = join(root, "run");
+  const result = spawnSync(process.execPath, [resolve("scripts/reviewbench/run-local.mjs"), "--reviewbench", root, "--run", run, "--arm", arm], { encoding: "utf8", env: { ...process.env, PATH: bin } });
+  expect(result.status).toBe(1);
+  const reads = arm === "neondiff" ? "false" : "checkout";
+  expect(JSON.parse(readFileSync(join(run, "settings.json"), "utf8")).checkout_reads).toBe(reads);
+  expect(result.stdout).toContain(`checkout_reads=${reads}`);
 });
