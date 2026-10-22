@@ -1794,6 +1794,7 @@ describe("worker context budget preflight", () => {
 
   it("defaults an omitted checkoutReads config key to the shell_read_only worker prompt", async () => {
     const codex = await import("../src/codex-runtime.js");
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
     const root = mkdtempSync(join(tmpdir(), "neondiff-checkout-default-")); roots.push(root);
     const configPath = join(root, "config.json");
     writeFileSync(configPath, JSON.stringify({ ...minimalConfig(root), codexRuntime: { enabled: true } }));
@@ -1811,7 +1812,7 @@ describe("worker context budget preflight", () => {
       expect(spy).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true,
         prompt: expect.stringContaining("The working directory is a read-only checkout") }));
       expect(spy.mock.calls[0]![0].prompt).not.toContain("Do not call Bash");
-    } finally { spy.mockRestore(); state.close(); }
+    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
   it("merges evidence drops across Codex context chunks separately from schema drops", async () => {
