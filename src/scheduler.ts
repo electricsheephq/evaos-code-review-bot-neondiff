@@ -213,7 +213,8 @@ export async function runScheduledCycleWithDeps(input: {
       repo,
       pulls,
       scopedPullNumber: input.options.pullNumber,
-      now
+      now,
+      licenseAdmission: input.licenseAdmission
     });
     result.baselinedExisting += activation.baselined;
     const admittedPulls = pulls.filter((pull) => {

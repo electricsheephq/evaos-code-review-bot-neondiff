@@ -6,6 +6,7 @@ import { isPreActivationExistingPull } from "../src/activation-policy.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { activateRepoForNewOnlyReview } from "../src/worker.js";
+import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 
 describe("new-only repo activation", () => {
   const roots: string[] = [];
@@ -108,6 +109,28 @@ describe("new-only repo activation", () => {
         status: "skipped"
       })
     ]);
+  });
+
+  it("defers activation while the license admission does not cover the repository", async () => {
+    const store = createStore(roots);
+    const repo = "org/private";
+    const pulls = [withVisibility(pull(7, "private-head"), "private")];
+    const publicOnly = await createTestLicenseAdmission({ scope: "public", privateRepoAllowed: false });
+
+    const keyless = activateRepoForNewOnlyReview({ config: newOnlyConfig(), state: store, repo, pulls, licenseAdmission: publicOnly });
+    expect(keyless).toEqual({ activated: false, baselined: 0 });
+    expect(store.hasRepoActivation(repo)).toBe(false);
+    expect(store.hasProcessed(repo, 7, "private-head")).toBe(false);
+
+    const publicRepo = activateRepoForNewOnlyReview({ config: newOnlyConfig(), state: store, repo: "org/public",
+      pulls: [withVisibility(pull(8, "public-head"), "public")], licenseAdmission: publicOnly });
+    expect(publicRepo).toEqual({ activated: true, baselined: 1 });
+
+    const licensed = activateRepoForNewOnlyReview({ config: newOnlyConfig(), state: store, repo, pulls,
+      licenseAdmission: await createTestLicenseAdmission({ scope: "all", privateRepoAllowed: true }) });
+    expect(licensed).toEqual({ activated: true, baselined: 1 });
+    expect(store.hasProcessed(repo, 7, "private-head")).toBe(true);
+    store.close();
   });
 
   it("can intentionally review existing open PR heads when configured", () => {
@@ -240,4 +263,8 @@ function pull(number: number, sha: string, draft = false, createdAt?: string): P
     },
     html_url: `https://github.test/owner/repo/pull/${number}`
   };
+}
+
+function withVisibility(summary: PullRequestSummary, visibility: "public" | "private"): PullRequestSummary {
+  return { ...summary, base: { ...summary.base, repo: { ...summary.base.repo, private: visibility === "private", visibility } } };
 }

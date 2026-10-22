@@ -60,6 +60,33 @@ describe("provider-aware review scheduler", () => {
     } finally { state.close(); }
   });
 
+  it("starts new-only review of a private repository when a license first covers it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-deferred-activation-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/private"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    const state = new ReviewStateStore(config.statePath);
+    const pulls = new Map([["org/private", [pull("org/private", 1, HEAD_A, "base", { visibility: "private" })]]]);
+    const reviewed: string[] = [];
+    const cycle = async (paid: boolean) => runScheduledCycleWithDeps({ config, state, options: { dryRun: true }, github: githubFromMap(pulls),
+      licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: paid ? "all" : "public", privateRepoAllowed: paid }),
+      reviewPullImpl: async (input) => { reviewed.push(`${input.repo}#${input.pull.number}@${input.pull.head.sha.slice(0, 1)}`); return "reviewed"; } });
+    try {
+      const keyless = await cycle(false);
+      expect(keyless).toMatchObject({ skippedLicenseGate: 1, baselinedExisting: 0 });
+      expect(state.hasRepoActivation("org/private")).toBe(false);
+      expect(state.hasProcessed("org/private", 1, HEAD_A)).toBe(false);
+      // A pull opened while the worker had no license is still an existing pull when the license
+      // arrives, exactly as if the repository had been added to a licensed worker at that moment.
+      pulls.set("org/private", [...pulls.get("org/private")!, pull("org/private", 2, HEAD_C, "base", { visibility: "private" })]);
+      const licensed = await cycle(true);
+      expect(licensed.baselinedExisting).toBe(2);
+      expect(state.hasRepoActivation("org/private")).toBe(true);
+      pulls.set("org/private", [pull("org/private", 1, HEAD_B, "base", { visibility: "private" })]);
+      await cycle(true);
+      expect(reviewed).toEqual(["org/private#1@b"]);
+    } finally { state.close(); }
+  });
+
   it.each([false, true])("reviews only covered repositories with paid=%s", async (paid) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-public-worker-"));
     roots.push(root);

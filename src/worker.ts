@@ -549,7 +549,8 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         state,
         repo,
         pulls,
-        scopedPullNumber: options.pullNumber
+        scopedPullNumber: options.pullNumber,
+        licenseAdmission
       });
       result.baselinedExisting += activation.baselined;
       for (const pull of pulls) {
@@ -3221,12 +3222,20 @@ export function activateRepoForNewOnlyReview(input: {
   pulls: PullRequestSummary[];
   scopedPullNumber?: number;
   now?: Date;
+  licenseAdmission?: ProductionLicenseAdmission;
 }): { activated: boolean; baselined: number } {
   const { config, state, repo, pulls } = input;
   if (input.scopedPullNumber !== undefined) return { activated: false, baselined: 0 };
   const repoHasCanaryOverride = (config.canaryPulls ?? []).some((entry) => entry.startsWith(`${repo}#`));
   if (repoHasCanaryOverride) return { activated: false, baselined: 0 };
   if (state.hasRepoActivation(repo)) return { activated: false, baselined: 0 };
+  // A worker whose admission does not cover this repository (a keyless worker on a private
+  // repository) is not watching it yet. Activation waits for the first covered discovery, so the
+  // repository starts new-only review from the moment a license covers it.
+  const admission = input.licenseAdmission;
+  if (admission && pulls.some((pull) => !authorizeAdmissionForVisibility(admission, visibilityFromPullSummary(pull)).ok)) {
+    return { activated: false, baselined: 0 };
+  }
 
   if (config.activation.reviewExistingOpenPrsOnActivation) {
     state.recordRepoActivation(repo, (input.now ?? new Date()).toISOString());
