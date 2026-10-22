@@ -960,6 +960,17 @@ export class ReviewStateStore {
     return row ? mapProcessedReviewRow(row) : undefined;
   }
 
+  /** Removes only a public-repo author-gate skip, so a later allowed decision can review the head. */
+  clearAuthorGateSkip(repo: string, pullNumber: number, headSha: string): boolean {
+    const result = this.db
+      .prepare(
+        `delete from processed_reviews
+         where repo = ? and pull_number = ? and head_sha = ? and status = 'skipped' and error = 'untrusted_author_public_repo'`
+      )
+      .run(repo, pullNumber, headSha);
+    return Number(result.changes) > 0;
+  }
+
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[] {
     const rows = this.db
       .prepare(
