@@ -128,7 +128,7 @@
     "requestTimeoutMs": 10000,
     "_offlineGraceMsComment": "v1.0.4 grants no offline cache authority; setup and diagnostics remain available during outages.",
     "offlineGraceMs": 0,
-    "publicReposFree": false,
+    "publicReposFree": true,
     "privateReposRequireEntitlement": true,
     "updateEntitlementRequiresLicense": true
   },
