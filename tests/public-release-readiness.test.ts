@@ -60,7 +60,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("1.0.6");
+    expect(pkg.version).toBe("1.1.0");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -95,10 +95,10 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("1.0.6");
+    expect(lock.version).toBe("1.1.0");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "1.0.6",
+      version: "1.1.0",
       license: "SEE LICENSE IN LICENSE.md",
       bin: { neondiff: "dist/src/cli.js" }
     });
@@ -895,7 +895,7 @@ describe("NeonDiff public release readiness", () => {
 
     expect(publish).toMatch(/id-token:\s*write/);
     expect(publish).toMatch(/attestations:\s*read/);
-    expect(publish).toMatch(/concurrency:\s*\n\s*group:\s*publish-npm-neondiff/);
+    expect(publish).toMatch(/concurrency:\s*\n(?:\s*#.*\n)*\s*group:.*\|\| 'publish-npm-neondiff' \}\}/);
     expect(publish).toMatch(/cancel-in-progress:\s*false/);
     expect(publish).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0");
     expect(publish).toContain("actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5");
