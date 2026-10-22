@@ -196,7 +196,7 @@ describe("run-once CLI reporting", () => {
   });
 
   const normalCiSkips = [
-    "skipped_draft", "skipped_stale_head", "skipped_closed", "skipped_processed",
+    "skipped_draft", "skipped_stale_head", "skipped_closed",
     "skipped_base_merge_only", "skipped_finishing_touch_draft",
     "untrusted_author_restricted_unavailable", "untrusted_author_public_repo",
     "skipped_command_stop", "skipped_command_explain"
@@ -231,7 +231,7 @@ describe("run-once CLI reporting", () => {
   it.each([
     "skipped_license_gate", "skipped_policy", "skipped_capacity", "skipped_context_budget",
     "skipped_provider_cooldown", "posted_stale_head", "posted_head_unverified",
-    "skipped_consumed_authorization", "skipped_canary"
+    "skipped_consumed_authorization", "skipped_canary", "skipped_processed"
   ] as const)("keeps CI non-posting outcome %s nonzero", (scopedStatus) => {
     const result = runOnceResult({ scopedPull });
     applyReviewPullResultToRunOnceResult(result, scopedStatus);

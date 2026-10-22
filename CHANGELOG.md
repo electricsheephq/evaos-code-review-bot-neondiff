@@ -18,9 +18,10 @@ for the semver/GA-line and npm dist-tag policy.
 
 ### Fixed
 
-- `review-pr --ci` exits 0 with a GitHub Actions notice on a normal skip
-  (draft, head moved, restricted review unavailable); license-gate skips and
-  failures still exit 1.
+- `review-pr --ci` exits 0 on a normal skip: a notice for a draft, a moved
+  head or a closed pull request, and a warning when restricted review is
+  unavailable. License-gate skips, failures and heads marked processed only in
+  local state still exit 1.
 - The secret-rule differential test allows a cold Swift compile (240 s).
 
 ### Docs
