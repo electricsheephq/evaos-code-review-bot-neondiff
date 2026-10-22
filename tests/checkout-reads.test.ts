@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, parseCodexCommands, runCodexReview } from "../src/codex-runtime.js";
+import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, parseCodexCommands, resolveCodexReadConfinement, runCodexReview } from "../src/codex-runtime.js";
 import { buildSkillPackContextPacket } from "../src/skill-packs.js";
-import { verifySourceRef } from "../src/issue-analysis.js";
+import { createSourceRefReadBudget, verifySourceRef } from "../src/issue-analysis.js";
 import { loadConfigFromObject } from "../src/config.js";
 import { buildFindingFingerprint, parseFindings } from "../src/findings.js";
 import { buildReviewPrompt, reviewPromptForbiddenFragments } from "../src/zcode.js";
@@ -100,7 +101,7 @@ describe("checkout reads", () => {
     const findings = [{ ...finding, evidence: [{ ...ref, excerpt: "false" }] },
       { ...finding, title: "Valid citation", evidence: [ref] }, { ...finding, title: "Diff only", evidence: [] }];
     const result = await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex", model: "gpt-6.1-sol", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000, checkoutReads }, {
-      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [cwd] }), runProcess: async invocation => {
         writeFileSync(invocation.outputPath, JSON.stringify({ findings, summary }));
         return { stdout: "", stderr: `user\n${invocation.stdin}\n${fixture("codex-v0163-stderr.txt")}`, status: 0, signal: null };
       }
@@ -118,7 +119,7 @@ describe("checkout reads", () => {
       [{ ...ref, excerpt: "x".repeat(1001) }], Array(6).fill(ref)];
     const result = await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex",
       model: "gpt-6.1-sol", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000, checkoutReads }, {
-      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [cwd] }), runProcess: async invocation => {
         writeFileSync(invocation.outputPath, JSON.stringify({ findings: malformed.map(evidence => ({ ...finding, evidence })), summary }));
         return { stdout: "", stderr: "", status: 0, signal: null };
       }
@@ -136,6 +137,95 @@ describe("checkout reads", () => {
       expect(result.findings).toEqual(malformed.map(() => finding));
       expect(result.droppedFromEvidence).toBeUndefined();
     }
+  });
+  it("confines checkout-read shell reads with a permission profile instead of the read-only sandbox", () => {
+    const base = { cliPath: "codex", cwd: "/work/tree", model: "gpt-6.1-sol", reasoningEffort: "high" as const,
+      schemaPath: "/evidence/schema.json", outputPath: "/evidence/result.json" };
+    const open = buildCodexExecInvocation(base);
+    expect(open.args).toContain("--sandbox");
+    const confined = buildCodexExecInvocation({ ...base,
+      readConfinement: { command: "/opt/codex/bin/codex", readableRoots: ["/work/tree", "/work/mirrors/r.git", "/opt/codex/bin"] } });
+    expect(confined.command).toBe("/opt/codex/bin/codex");
+    expect(confined.args).not.toContain("--sandbox");
+    expect(confined.args).toContain('default_permissions="neondiff_checkout_read"');
+    expect(confined.args).toContain('permissions.neondiff_checkout_read.filesystem={":minimal"="read", ":workspace_roots"="read", ' +
+      '"/work/tree"="read", "/work/mirrors/r.git"="read", "/opt/codex/bin"="read"}');
+    expect(confined.args).toContain('shell_environment_policy.set={GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1"}');
+    expect(confined.args.slice(confined.args.indexOf("--cd"))).toEqual(open.args.slice(open.args.indexOf("--cd")));
+  });
+  it("resolves read roots to the checkout, its git mirror and the real Codex binary, and refuses CODEX_HOME", () => {
+    const top = realpathSync(root());
+    const bin = join(top, "release", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "codex"), "#!/bin/sh\n");
+    chmodSync(join(bin, "codex"), 0o755);
+    mkdirSync(join(top, "path"));
+    symlinkSync(join(bin, "codex"), join(top, "path", "codex"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: top, stdio: "pipe" });
+    git("init", "-q", "src");
+    writeFileSync(join(top, "src", "f.txt"), "x\n");
+    git("-C", "src", "add", "f.txt");
+    git("-C", "src", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "init");
+    git("clone", "-q", "--mirror", "src", "mirror.git");
+    git("--git-dir", "mirror.git", "worktree", "add", "-q", "--detach", join(top, "wt"), "HEAD");
+    const env = { PATH: `${join(top, "path")}:${process.env.PATH}`, HOME: join(top, "home") };
+    expect(resolveCodexReadConfinement(join(top, "wt"), "codex", env)).toEqual({
+      command: join(bin, "codex"), readableRoots: [join(top, "wt"), bin, join(top, "mirror.git")]
+    });
+    expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { ...env, CODEX_HOME: bin })).toThrow("CODEX_HOME");
+    expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { PATH: join(top, "missing") })).toThrow("not found");
+   }, 30_000);
+  it.each([true, false])("passes read confinement to Codex only when checkoutReads=%s", async checkoutReads => {
+    const cwd = root();
+    let args: string[] = [];
+    let resolved = 0;
+    await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex", model: "gpt-6.1-sol",
+      reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000, checkoutReads }, {
+      captureWorktreeState: () => "unchanged",
+      resolveReadConfinement: () => { resolved++; return { command: "/real/codex", readableRoots: [cwd] }; },
+      runProcess: async invocation => {
+        args = invocation.args;
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [], summary }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    expect(resolved).toBe(checkoutReads ? 1 : 0);
+    expect(args.includes("--sandbox")).toBe(!checkoutReads);
+  });
+  it("withholds the model summary when a citation fails verification", async () => {
+    const cwd = root();
+    writeFileSync(join(cwd, "context.ts"), "// not in diff\nconst guard = true;\n");
+    const claimed = { changedBehavior: ["Unverified caller claim"], invariants: ["Unverified invariant"], evidence: ["context.ts:9"],
+      limitations: ["Fixture"], noFindingRationale: "Fixture" };
+    const run = (evidence: unknown[]) => runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex",
+      model: "gpt-6.1-sol", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000, checkoutReads: true }, {
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [cwd] }),
+      runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [{ ...finding, evidence }], summary: claimed }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    expect((await run([ref])).summary).toEqual(claimed);
+    const withheld = (await run([{ ...ref, excerpt: "false claim" }])).summary;
+    expect(JSON.stringify(withheld)).not.toContain("Unverified");
+    expect(withheld).toMatchObject({ changedBehavior: [], invariants: [], evidence: [] });
+    expect(withheld.limitations).toHaveLength(1);
+  });
+  it("reads each cited file once and bounds file size and citation count", () => {
+    const cwd = root();
+    writeFileSync(join(cwd, "context.ts"), "// outside the diff\nconst guard = true;\n");
+    writeFileSync(join(cwd, "big.bin"), "x".repeat(1024 * 1024 + 1));
+    const budget = createSourceRefReadBudget();
+    expect(verifySourceRef(cwd, ref, budget)).toBeNull();
+    rmSync(join(cwd, "context.ts"));
+    expect(verifySourceRef(cwd, ref, budget)).toBe("path_missing");
+    writeFileSync(join(cwd, "context.ts"), "// outside the diff\nconst guard = true;\n");
+    expect(verifySourceRef(cwd, ref, budget)).toBeNull();
+    expect(budget.bytesRead).toBe(Buffer.byteLength("// outside the diff\nconst guard = true;\n"));
+    expect(verifySourceRef(cwd, { path: "big.bin", startLine: 1, endLine: 1, excerpt: "x" }, budget)).toBe("citation_budget_exceeded");
+    expect(verifySourceRef(cwd, { path: "big.bin", startLine: 1, endLine: 1, excerpt: "x" })).toBeNull();
+    const flood = { ...createSourceRefReadBudget(), maxCitations: 2 };
+    expect([1, 2, 3].map(() => verifySourceRef(cwd, ref, flood))).toEqual([null, null, "citation_budget_exceeded"]);
   });
   it("parses the captured v0.163 exec block and audits read commands and executable commands", () => {
     expect(parseCodexCommands(fixture("codex-v0163-stderr.txt"))).toMatchObject({ commands: [{ command: "env | cut -d= -f1 | sort", cwd: "/fixture/repo", exitStatus: 0, flagged: true }] });

@@ -433,9 +433,17 @@ and elapsed milliseconds. This evidence does not establish live posting or cost.
 `true` allows read-only PR-head checkout inspection and requires verbatim evidence
 for claims outside changed lines. Unverified citations drop only their finding;
 empty evidence is allowed for diff-only claims. Citations stay in local evidence.
+With checkout reads on, Codex runs under a named permission profile instead of
+`--sandbox read-only`: the shell tool can read only the checkout, its git mirror,
+the Codex install and system files, so absolute paths, `../` and symlinks in the
+PR tree cannot reach other host files such as `$CODEX_HOME/auth.json`. If those
+read roots cannot be resolved, the review fails closed. Citation checks read at
+most 200 citations and 16 MiB of files (1 MiB per file); a citation over that
+budget drops its finding. When any finding is dropped for evidence, the model
+summary from that response is withheld.
 Every Codex call filters its shell environment to core variables and excludes
 secret-named variables. Every review writes a bounded, detect-only
 `codex-commands.json` audit; flagged commands do not fail the review.
-The audit is best-effort telemetry, not a security boundary: shell quoting, option abbreviations and shell-specific syntax can hide a non-read command from it. The boundary is the read-only sandbox and the filtered shell environment.
+The audit is best-effort telemetry, not a security boundary: shell quoting, option abbreviations and shell-specific syntax can hide a non-read command from it. The boundary is the sandbox (the checkout-read permission profile when enabled) and the filtered shell environment.
 A review fails closed if the model quotes secret-like text, including in a citation.
 Human-format stderr can imitate exec blocks, so this audit cannot establish execution with certainty.

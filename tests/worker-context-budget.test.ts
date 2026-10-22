@@ -1785,7 +1785,8 @@ describe("worker context budget preflight", () => {
     const candidate = { ...finding("src/a.ts", "Unverified citation"),
       evidence: [{ path: "missing.ts", startLine: 1, endLine: 1, excerpt: "not there" }] };
     const spy = vi.spyOn(codex, "runCodexReview").mockImplementation(input => runReview(input, {
-      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/unused/codex", readableRoots: [input.cwd] }),
+      runProcess: async invocation => {
         writeFileSync(invocation.outputPath, JSON.stringify({ findings: [candidate],
           summary: { changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture" } }));
         return { stdout: "", stderr: "", status: 0, signal: null };
@@ -1826,7 +1827,7 @@ describe("worker context budget preflight", () => {
     const candidate = { ...finding("src/a.ts", "Invalid checkout citation"),
       evidence: [{ path: "missing.ts", startLine: 1, endLine: 1, excerpt: "not there" }] };
     const spy = vi.spyOn(codex, "runCodexReview").mockImplementation(input => runReview(input, {
-      captureWorktreeState: () => "unchanged",
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/unused/codex", readableRoots: [input.cwd] }),
       runProcess: async invocation => {
         writeFileSync(invocation.outputPath, JSON.stringify({ findings: [candidate],
           summary: { changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture" },
