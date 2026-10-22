@@ -1,8 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "../src/findings-schema.js";
-import { decideReviewEvent, formatReviewComment, normalizeFindingsForReview, parseFindings, suppressSameRunNearDuplicates } from "../src/findings.js";
+import { decideReviewEvent, demoteReviewComment, formatReviewComment, normalizeFindingsForReview, parseFindings, SEVERITY_DEMOTION_NOTE, suppressSameRunNearDuplicates } from "../src/findings.js";
 import type { PublicConfidenceDisplayPolicy } from "../src/public-confidence.js";
-import type { Finding } from "../src/types.js";
+import type { Finding, ReviewComment } from "../src/types.js";
+
+describe("demoteReviewComment", () => {
+  const original: ReviewComment = {
+    path: "src/save.ts", line: 2, side: "RIGHT", severity: "P1", category: "data_loss",
+    title: "Saved rows lost", confidence: 0.91, fingerprint: "original-fingerprint",
+    body: "**P1: Saved rows lost**\n\nLater **P1: text stays.\n\nCategory: Data loss"
+  };
+
+  it.each(["P0", "P1"] as const)("rewrites only the leading %s prefix and preserves every other field", (severity) => {
+    const input = { ...original, severity, body: original.body.replace(/^\*\*P1: /, `**${severity}: `) };
+    const snapshot = { ...input };
+    const result = demoteReviewComment(input, SEVERITY_DEMOTION_NOTE);
+    expect(SEVERITY_DEMOTION_NOTE).toBe("a second check did not confirm it.");
+    expect(result).toEqual({ ...input, severity: "P2", severityDemotedFrom: severity,
+      severityDemotionReason: SEVERITY_DEMOTION_NOTE,
+      body: `**P2: ${input.body.slice(6)}\n\n_Severity lowered from ${severity}: a second check did not confirm it._` });
+    expect(result).not.toBe(input);
+    expect(input).toEqual(snapshot);
+  });
+
+  it("fails closed for advisory comments and mismatched prefixes", () => {
+    for (const severity of ["P2", "P3"] as const) {
+      expect(demoteReviewComment({ ...original, severity }, SEVERITY_DEMOTION_NOTE)).toBeUndefined();
+    }
+    for (const body of ["No prefix", "**P0: Wrong severity**", " **P1: Leading space**"]) {
+      expect(demoteReviewComment({ ...original, body }, SEVERITY_DEMOTION_NOTE)).toBeUndefined();
+    }
+  });
+});
 
 describe("finding normalization and review policy", () => {
   it("exports a canonical JSON schema matching the parseFindings envelope", () => {

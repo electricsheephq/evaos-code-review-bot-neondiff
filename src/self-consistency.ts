@@ -1,4 +1,4 @@
-import { decideReviewEvent } from "./findings.js";
+import { decideReviewEvent, demoteReviewComment, SEVERITY_DEMOTION_NOTE } from "./findings.js";
 import { isRequestChangesEligible, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { canonicalizeSevereVerificationReceipt, type CanonicalSevereVerificationReceipt } from "./severe-verification-receipt-canonical.js";
 import type { SevereVerificationReceipt } from "./severe-verification-receipt-schema.js";
@@ -11,6 +11,7 @@ export interface SelfConsistencyRecheckConfig {
   severities?: Array<"P0" | "P1">;
   provider?: string;
   maxFindingsPerReview?: number;
+  onUnsupported?: "suppress" | "demote";
 }
 
 export interface SelfConsistencySecondDrawInput {
@@ -33,6 +34,8 @@ interface SelfConsistencyCanonicalResult extends CanonicalSevereVerificationRece
 }
 
 export interface SelfConsistencyVerdict {
+  action: "retained" | "suppressed" | "demoted";
+  demotionSkipped?: boolean;
   path: string;
   line: number;
   severity: Severity;
@@ -53,7 +56,8 @@ const DEFAULT_MAX_FINDINGS = 5;
  * severity (post-dedup, pre-event-decision; capped by maxFindingsPerReview in the ranked order the
  * gate already produced), issue ONE bounded second draw. Only a canonical, complete, confirmed and
  * retained receipt bound to the current review context keeps a severe comment. Every invalid,
- * failed, stale, incomplete, refuted, or capped result suppresses that severe comment. Advisory
+ * failed, stale, incomplete, refuted, or capped result suppresses that severe comment by default,
+ * or lowers it to P2 with a note in demote mode (malformed comment prefixes still suppress). Advisory
  * P2/P3 comments are never sent to the verifier and remain available. Disabled ⇒ no second draw,
  * byte-identical output. The second-draw runner is injected so callers pick the provider and tests
  * stay hermetic.
@@ -82,12 +86,26 @@ export async function runSelfConsistencyRecheck(input: {
 
   // input.comments is already in the gate's ranked (highest-confidence-first) order.
   const comments: ReviewComment[] = [];
+  function handleUnsupported(comment: ReviewComment, verdict: SelfConsistencyVerdict): void {
+    if (input.config.onUnsupported === "demote") {
+      const demoted = demoteReviewComment(comment, SEVERITY_DEMOTION_NOTE);
+      if (demoted) {
+        comments.push(demoted);
+        verdicts.push({ ...verdict, action: "demoted" });
+        return;
+      }
+      verdicts.push({ ...verdict, action: "suppressed", demotionSkipped: true });
+      return;
+    }
+    verdicts.push(verdict);
+  }
   for (const comment of input.comments) {
     if (!severities.has(comment.severity)) {
       comments.push(comment);
       continue;
     }
     const base: SelfConsistencyVerdict = {
+      action: "suppressed",
       path: comment.path,
       line: comment.line,
       severity: comment.severity,
@@ -95,7 +113,7 @@ export async function runSelfConsistencyRecheck(input: {
       originalConfidence: comment.confidence
     };
     if (rechecked >= maxFindings) {
-      verdicts.push({ ...base, error: "severe_verifier_cap_exceeded", refuted: true });
+      handleUnsupported(comment, { ...base, error: "severe_verifier_cap_exceeded", refuted: true });
       continue;
     }
     rechecked += 1;
@@ -104,25 +122,25 @@ export async function runSelfConsistencyRecheck(input: {
     try {
       draw = await input.secondDraw({ comment, hunk: extractHunk(comment, input.files) });
     } catch {
-      verdicts.push({ ...base, error: "severe_verifier_unavailable", refuted: true });
+      handleUnsupported(comment, { ...base, error: "severe_verifier_unavailable", refuted: true });
       continue;
     }
 
     const canonical = parseCanonicalResult(draw);
     if (!canonical) {
-      verdicts.push({ ...base, error: "severe_verifier_receipt_invalid", refuted: true });
+      handleUnsupported(comment, { ...base, error: "severe_verifier_receipt_invalid", refuted: true });
       continue;
     }
     const receipt = canonical.receipt;
     if (retainsSevereFinding(receipt, comment, input.reviewContext)) {
       // Agreement: never raise confidence; keep the original.
-      verdicts.push({ ...base, ...(receipt.confidence === undefined ? {} : { secondConfidence: receipt.confidence }), agreed: true, refuted: false, receipt });
+      verdicts.push({ ...base, action: "retained", ...(receipt.confidence === undefined ? {} : { secondConfidence: receipt.confidence }), agreed: true, refuted: false, receipt });
       comments.push(comment);
       continue;
     }
 
-    // Any non-retained receipt is quieter-only: suppress the severe publication.
-    verdicts.push({ ...base, ...(receipt.confidence === undefined ? {} : { secondConfidence: receipt.confidence }), agreed: false, refuted: true, receipt });
+    // Policy applies after receipt validation; the receipt's disposition stays unchanged.
+    handleUnsupported(comment, { ...base, ...(receipt.confidence === undefined ? {} : { secondConfidence: receipt.confidence }), agreed: false, refuted: true, receipt });
   }
 
   // Re-derive the event from only comments that remain publishable after the gate.

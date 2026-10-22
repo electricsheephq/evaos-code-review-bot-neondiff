@@ -293,7 +293,7 @@ export interface EvalSuitePromotionInput {
   scorecards: EvalScorecard[];
 }
 
-interface NormalizedEvalFinding extends Finding {
+interface NormalizedEvalFinding extends Omit<Finding, "evidence"> {
   id: string;
   source: "bot" | EvalLabelSource;
   evidence?: Record<string, string>;

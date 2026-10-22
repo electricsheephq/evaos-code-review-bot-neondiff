@@ -1,3 +1,5 @@
+import type { GitHubApi } from "./github.js";
+import type { ReviewStateStore } from "./state.js";
 import { redactSecrets } from "./secrets.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import {
@@ -165,6 +167,33 @@ export async function postReviewStatusComment(input: {
       state: input.state,
       error: redactSecrets(error instanceof Error ? error.message : String(error))
     };
+  }
+}
+
+/** Settle an existing head marker only; a carried review must never create a new comment. */
+export async function settleBaseMergeOnlyStatusComment(input:
+  Omit<Parameters<typeof postReviewStatusComment>[0], "state" | "reviewUrl"> & {
+    github: ReviewStatusCommentGithub & Pick<GitHubApi, "listIssueComments">;
+    stateStore: Pick<ReviewStateStore, "getProcessedReview">;
+    botLogin: string;
+  }
+): Promise<ReviewStatusCommentPostResult | undefined> {
+  if (!input.enabled || input.dryRun || !input.github.canPost()) return;
+  const processed = input.stateStore.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+  if (processed?.status !== "skipped" || processed.error !== "base_merge_only" || !processed.carriedFromHead) return;
+  const anchor = input.stateStore.getProcessedReview(input.repo, input.pullNumber, processed.carriedFromHead);
+  if (anchor?.status !== "posted" || !anchor.reviewUrl) return;
+  try {
+    const marker = buildReviewStatusMarker(input);
+    const comments = await input.github.listIssueComments(input.repo, input.pullNumber);
+    const existing = comments.find((comment) => comment.body?.includes(marker) &&
+      comment.user?.type === "Bot" && comment.user.login === input.botLogin);
+    if (!existing || (parseReviewStatusCommentState(existing.body) === "completed" && existing.body?.includes(anchor.reviewUrl))) return;
+    return await postReviewStatusComment({ ...input, state: "completed", reviewUrl: anchor.reviewUrl,
+      details: `Review carried from ${anchor.headSha.slice(0, 12)} via a base-merge-only push.` });
+  } catch (error) {
+    return { posted: false, reason: "upsert_failed", state: "completed",
+      error: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }
 }
 
