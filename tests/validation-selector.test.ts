@@ -270,6 +270,49 @@ describe("changed-surface validation selector", () => {
     }
   });
 
+  it("keeps historical scope through blockquotes, Setext headings, long fences and standalone labels", () => {
+    const cases: Array<[string, "sufficient" | "missing"]> = [
+      ["> ## Previous validation\n> - build passed\n> - tests passed", "missing"],
+      ["> ## Validation\n> - build passed\n> - tests passed", "sufficient"],
+      ["Previous validation\n===================\nBuild passed.\nTests passed.", "missing"],
+      ["Previous validation\n---\n- build passed\n- tests passed", "missing"],
+      ["Previous validation\n===\nOld.\n\nValidation\n===\nBuild passed.\nTests passed.", "sufficient"],
+      ["Some notes.\n\n---\n\n- build passed\n- tests passed", "sufficient"],
+      ["## Previous validation\n````md\n```\n## Example\n```\n````\n- build passed\n- tests passed", "missing"],
+      ["## Validation\n~~~\n```\n## Previous validation\n~~~\n- build passed\n- tests passed", "sufficient"],
+      ["**Previous validation**\nBuild passed.\nTests passed.", "missing"],
+      ["Current head:\nPrevious validation\nBuild passed.\nTests passed.", "missing"],
+      ["**Previous validation**\n\nBuild passed.\nTests passed.", "sufficient"]
+    ];
+
+    for (const [body, expected] of cases) {
+      const pullWithBody = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithBody,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithBody, validation }).status, body).toBe(expected);
+    }
+  });
+
+  it("applies Unity qualifiers to screenshot and recording proof", () => {
+    const cases: Array<[string, "sufficient" | "missing"]> = [
+      ["## Previous Unity validation\n- Screenshot attached.", "missing"],
+      ["## Unity validation\n- Screenshot attached.", "sufficient"]
+    ];
+
+    for (const [body, expected] of cases) {
+      const pullWithBody = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/WorldOS",
+        pull: pullWithBody,
+        files: [{ filename: "Assets/Scenes/Main.unity", additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithBody, validation }).status, body).toBe(expected);
+    }
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."
