@@ -287,6 +287,8 @@ export interface RunOnceResult {
   skippedStaleHead: number;
   baselinedExisting: number;
   policySkips: { repo: string; reason: string }[];
+  /** Daemon-wide discovery: repositories whose pull listing failed and were skipped this cycle. */
+  repositoryScanErrors?: Array<{ repo: string; error: string }>;
   scopedPull?: {
     repo: string;
     pullNumber: number;
@@ -487,7 +489,8 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     skippedProviderCooldown: 0,
     skippedStaleHead: 0,
     baselinedExisting: 0,
-    policySkips: []
+    policySkips: [],
+    repositoryScanErrors: []
   };
   const repos = options.repo ? [options.repo] : listReposToScan(config);
   const admittedRepos = repos.filter((repo) => {
@@ -508,9 +511,21 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const budget = new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   try {
     for (const repo of admittedRepos) {
-      const pulls = options.pullNumber
-        ? [await github.getPull(repo, options.pullNumber)]
-        : await github.listOpenPulls(repo);
+      let pulls: PullRequestSummary[];
+      try {
+        pulls = options.pullNumber
+          ? [await github.getPull(repo, options.pullNumber)]
+          : await github.listOpenPulls(repo);
+      } catch (error) {
+        // Same rule as the scheduler: one broken installation must not stop discovery for the
+        // repositories after it, while an explicit repo or pull scope still fails fast.
+        if (options.repo || options.pullNumber !== undefined) throw error;
+        (result.repositoryScanErrors ??= []).push({
+          repo,
+          error: redactSecrets(error instanceof Error ? error.message : String(error))
+        });
+        continue;
+      }
       if (options.pullNumber) {
         assertExpectedReviewPrHead({
           repo,

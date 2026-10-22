@@ -339,6 +339,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const heartbeatOk = input.heartbeat.status === "active" ||
     (input.heartbeat.status === "fresh" && input.heartbeat.event !== "daemon_cycle_failed");
   const reviewLane = input.heartbeat.reviewLane ?? "unknown";
+  const backgroundDryRun = input.heartbeat.dryRun === true || input.launchd.dryRun === true;
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
     "--expired-only true --dry-run false --zcode true";
@@ -433,8 +434,8 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     },
     {
       name: "background_pr_lane",
-      ok: reviewLane === "held",
-      detail: describeBackgroundPrLane(reviewLane)
+      ok: reviewLane === "active" && !backgroundDryRun,
+      detail: describeBackgroundPrLane(reviewLane, backgroundDryRun)
     }
   ];
   const publicReleaseGates = input.publicRelease
@@ -3531,12 +3532,15 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
   return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}${completedSuffix}${reviewLaneSuffix}${errorSuffix}`;
 }
 
-function describeBackgroundPrLane(reviewLane: DaemonReviewLane | "unknown"): string {
+function describeBackgroundPrLane(reviewLane: DaemonReviewLane | "unknown", dryRun: boolean): string {
   if (reviewLane === "held") {
-    return "held; live PR posts require separate exact scoped review-pr proof";
+    return "held; automatic background PR reviews are paused";
+  }
+  if (reviewLane === "active" && dryRun) {
+    return "active in dry run; reviews are written to local evidence and not posted; restart the worker with --dry-run false";
   }
   if (reviewLane === "active") {
-    return "active background PR lane is not permitted; use exact scoped review-pr";
+    return "active; reviews enrolled repositories and posts reviews";
   }
   return "unknown background PR lane; wait for a classified heartbeat";
 }

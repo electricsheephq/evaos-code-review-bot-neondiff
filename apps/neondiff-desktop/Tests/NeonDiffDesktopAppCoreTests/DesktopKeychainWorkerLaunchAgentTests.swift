@@ -237,9 +237,9 @@ import NeonDiffDesktopCore
             "RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua"
         ))
         #expect(preview.contains("stdout=/dev/null; stderr=/dev/null"))
-        #expect(preview.contains("Background PR review lane: held"))
+        #expect(preview.contains("The background worker reviews new pull requests on the repositories you enrolled and posts its reviews"))
         #expect(preview.contains(
-            "Live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only."
+            "One-off native live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only."
         ))
         #expect(preview.contains(
             "Repository allowlist: preserved unchanged (53 configured repositories)"
