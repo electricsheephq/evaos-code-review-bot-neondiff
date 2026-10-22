@@ -197,6 +197,23 @@ describe("checkout reads", () => {
     expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { ...env, CODEX_HOME: bin })).toThrow("CODEX_HOME");
     expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { PATH: join(top, "missing") })).toThrow("not found");
    }, 30_000);
+  it("skips unreadable PATH entries and, on macOS, mis-cased aliases of the work root", () => {
+    const top = realpathSync(root());
+    const bin = join(top, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "codex"), "#!/bin/sh\n");
+    chmodSync(join(bin, "codex"), 0o755);
+    const loop = join(top, "loop");
+    symlinkSync(loop, loop);
+    expect(resolveTrustedCodexPath("codex", join(top, "work"), { PATH: `${loop}:${bin}` })).toBe(join(bin, "codex"));
+    if (process.platform === "darwin") {
+      const planted = join(top, "work", "bin");
+      mkdirSync(planted, { recursive: true });
+      writeFileSync(join(planted, "codex"), "#!/bin/sh\n");
+      chmodSync(join(planted, "codex"), 0o755);
+      expect(resolveTrustedCodexPath("codex", join(top, "work"), { PATH: `${join(top, "WORK", "bin")}:${bin}` })).toBe(join(bin, "codex"));
+    }
+  });
   it.each([true, false])("passes read confinement to Codex only when checkoutReads=%s", async checkoutReads => {
     const cwd = root();
     let args: string[] = [];

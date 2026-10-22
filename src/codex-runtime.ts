@@ -233,15 +233,21 @@ function canonicalPath(path: string): string {
     return join(canonicalPath(dirname(absolute)), basename(absolute));
   }
 }
-function under(path: string, root: string): boolean { return path === root || path.startsWith(root.endsWith("/") ? root : root + "/"); }
+// macOS volumes are case-insensitive by default, so a mis-cased path must still match its root.
+function under(path: string, root: string): boolean {
+  const [left, right] = process.platform === "darwin" ? [path.toLowerCase(), root.toLowerCase()] : [path, root];
+  return left === right || left.startsWith(right.endsWith("/") ? right : right + "/");
+}
 
 /** Pin PATH resolution before checkout creation, excluding every work-root alias. */
 export function resolveTrustedCodexPath(cliPath: string, workRoot: string, env: NodeJS.ProcessEnv = process.env): string {
   if (isAbsolute(cliPath)) return cliPath;
   const work = canonicalPath(workRoot);
   for (const entry of (env.PATH ?? "").split(delimiter)) {
-    if (!entry || !isAbsolute(entry) || under(canonicalPath(entry), work)) continue;
+    if (!entry || !isAbsolute(entry)) continue;
     try {
+      // An unreadable or looping PATH entry is skipped like a missing one.
+      if (under(canonicalPath(entry), work)) continue;
       const candidate = realpathSync(join(entry, cliPath));
       if (under(candidate, work)) continue;
       accessSync(candidate, constants.X_OK);
