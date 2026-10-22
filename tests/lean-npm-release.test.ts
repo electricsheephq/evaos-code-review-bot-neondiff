@@ -80,7 +80,8 @@ describe("lean npm publication sequence", () => {
   });
   it("refuses a first publication outside the release tag ref", async () => {
     const calls: string[] = [];
-    await expect(publishLeanRelease(pack, "fixture.tgz", fixtureRun(calls, { latest: "1.0.6" }, false), async () => {}, () => 0, { allowFirstPublish: false }))
+    let clock = 0;
+    await expect(publishLeanRelease(pack, "fixture.tgz", fixtureRun(calls, { latest: "1.0.6" }, false), async (ms: number) => { clock += ms; }, () => clock, { allowFirstPublish: false }))
       .rejects.toThrow(/release tag ref/);
     expect(calls.some((call) => call.startsWith("publish "))).toBe(false);
   });
