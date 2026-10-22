@@ -123,6 +123,8 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples.join("\n")).not.toContain("--license-key-env");
     const licenseHelp = JSON.parse((await runCli(["license", "--help"])).stdout);
     expect(licenseHelp.licenseBoundary.activationRequired).toContain("public, private, internal, and unknown");
+    expect(licenseHelp.licenseBoundary.activationRequired).toContain("GitHub Action or `review-pr --ci`");
+    expect(licenseHelp.licenseBoundary.activationRequired).toContain("#1191");
     expect(licenseHelp.usage.flags).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--license-key-stdin" }),
       expect.objectContaining({ name: "--persist-local-state" })
@@ -739,8 +741,11 @@ exit 1
       command: "pricing",
       product: "NeonDiff",
       currency: "USD",
-      publicOpenSourceReposFree: false,
-      activationRequiredForSupportedReview: true,
+      publicOpenSourceReposFree: true,
+      activationRequiredForSupportedReview: false,
+      activationRequiredForVisibilities: ["private", "internal", "unknown"],
+      publicReposFreeVia: ["github-action", "review-pr --ci"],
+      publicReposFreeTracking: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191",
       providerCosts: {
         model: "BYOK or local provider",
         includedHostedModelCredits: false
@@ -765,7 +770,7 @@ exit 1
     expect(output.plans).toEqual([
       expect.objectContaining({
         id: "monthly_support",
-        displayPrice: "$1/mo",
+        displayPrice: "$9/mo",
         availableForNewPurchase: true,
         trialDays: 7,
         checkoutLookupKey: "neondiff_monthly",
@@ -776,7 +781,7 @@ exit 1
       }),
       expect.objectContaining({
         id: "yearly_support",
-        displayPrice: "$10/yr",
+        displayPrice: "$90/yr",
         availableForNewPurchase: true,
         trialDays: 7,
         checkoutLookupKey: "neondiff_yearly",
@@ -787,7 +792,7 @@ exit 1
       }),
       expect.objectContaining({
         id: "org_yearly_support",
-        displayPrice: "$100/yr",
+        displayPrice: "$290/yr",
         availableForNewPurchase: true,
         trialDays: 30,
         checkoutLookupKey: "neondiff_org_yearly",
@@ -809,6 +814,7 @@ exit 1
     ]);
     expect(stdout).toContain("does not include hosted model credits");
     expect(stdout).not.toMatch(/"includedHostedModelCredits":\s*true|bundled provider tokens included/i);
+    expect(output.paidTierIncludes).not.toContain("public repo review");
   });
 
   it("lists and doctors providers without hiding env-var names or printing keys", async () => {
