@@ -221,7 +221,7 @@ describe("worker context budget preflight", () => {
     });
     const github = githubForPull(pull, [file]);
     if (mode !== "missing") Object.assign(github, { listPullReviewComments,
-      isBotAuthoredComment: (comment: typeof comments[number]) => comment.user.type === "Bot" && comment.user.login === "evaos-code-review-bot[bot]" });
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
     try {
       expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
       expect(createdReviews).toHaveLength(1);
@@ -873,6 +873,49 @@ describe("worker context budget preflight", () => {
     });
     expect(JSON.stringify(selfConsistency)).not.toContain(blob);
     state.close();
+  });
+
+  it("suppresses a demoted P0 whose prior thread a human already answered", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-demoted-p0-answered-"));
+    roots.push(root);
+    const fixture = join(root, "worktree");
+    mkdirSync(join(fixture, "src"), { recursive: true });
+    const filename = "src/oversized.ts";
+    writeFileSync(join(fixture, filename), `${"x".repeat(65_536)}\n`);
+    execFileSync("git", ["init", "--quiet"], { cwd: fixture });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: fixture });
+    execFileSync("git", ["config", "user.name", "NeonDiff test"], { cwd: fixture });
+    execFileSync("git", ["add", "."], { cwd: fixture });
+    execFileSync("git", ["commit", "--quiet", "-m", "oversized"], { cwd: fixture });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
+    const file = { filename, patch: "@@ -1 +1 @@\n+x", status: "modified", additions: 1, deletions: 0, changes: 1 };
+    severeCurrentWorktree.enabled = true;
+    severeWorktreePath.value = fixture;
+    const config = minimalConfig(root);
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true, onUnsupported: "demote" } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1172, head);
+    const candidate = { ...p1Finding(filename, "Answered severe candidate"), severity: "P0" as const };
+    zcodeFindingsByPath.set(filename, [candidate]);
+    const comments = [
+      { id: 52, path: filename, line: 1, body: `**P2: ${candidate.title}**\n\n${candidate.body}`,
+        user: { login: "evaos-code-review-bot[bot]", type: "Bot" } },
+      { id: 53, in_reply_to_id: 52, user: { login: "human", type: "User" } }
+    ];
+    const github = Object.assign(githubForPull(pull, [file]), { listPullReviewComments: async () => comments,
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
+    try {
+      expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
+      expect(createdReviews).toHaveLength(1);
+      expect(createdReviews[0]?.comments).toHaveLength(0);
+      expect(createdReviews[0]?.event).toBe("COMMENT");
+      const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, head);
+      expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts[0]).toMatchObject({ action: "demoted", severity: "P0" });
+      expect(JSON.parse(readFileSync(join(evidenceDir, "prior-threads.json"), "utf8")))
+        .toMatchObject({ suppressedFindings: 1, matches: [{ findingTitle: candidate.title, threadId: 52 }] });
+      expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).dropped)
+        .toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
+    } finally { state.close(); }
   });
 
   it.each([undefined, 60_000])("passes the verifier timeout %s to Codex and ZCode without changing the main timeout", async (timeoutMs) => {
@@ -1773,6 +1816,7 @@ describe("worker context budget preflight", () => {
 
   it("merges evidence drops across Codex context chunks separately from schema drops", async () => {
     const codex = await import("../src/codex-runtime.js");
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
     const root = mkdtempSync(join(tmpdir(), "neondiff-checkout-chunks-")); roots.push(root);
     const config = minimalConfig(root);
     config.codexRuntime = { enabled: true, checkoutReads: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
@@ -1792,11 +1836,12 @@ describe("worker context budget preflight", () => {
       const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
       const plan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
       expect(plan.deterministicGate.dropReasonCounts.evidence_unverified).toBe(2);
-    } finally { spy.mockRestore(); state.close(); }
+    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
   it("includes citation drops in ensemble receipts without counting them as schema drops", async () => {
     const codex = await import("../src/codex-runtime.js");
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
     const runReview = codex.runCodexReview;
     const root = mkdtempSync(join(tmpdir(), "neondiff-checkout-ensemble-")); roots.push(root);
     const config = minimalConfig(root);
@@ -1808,7 +1853,8 @@ describe("worker context budget preflight", () => {
     const candidate = { ...finding("src/a.ts", "Unverified citation"),
       evidence: [{ path: "missing.ts", startLine: 1, endLine: 1, excerpt: "not there" }] };
     const spy = vi.spyOn(codex, "runCodexReview").mockImplementation(input => runReview(input, {
-      captureWorktreeState: () => "unchanged", runProcess: async invocation => {
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/unused/codex", readableRoots: [input.cwd] }),
+      runProcess: async invocation => {
         writeFileSync(invocation.outputPath, JSON.stringify({ findings: [candidate],
           summary: { changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture" } }));
         return { stdout: "", stderr: "", status: 0, signal: null };
@@ -1833,11 +1879,12 @@ describe("worker context budget preflight", () => {
         expect(call.droppedFromSchema).toEqual([]);
         expect(call.droppedFromEvidence).toHaveLength(1);
       }
-    } finally { spy.mockRestore(); state.close(); }
+    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
   it("saves checkout-read prompts and audits while evidence-only drops preserve the LCM assessment", async () => {
     const codex = await import("../src/codex-runtime.js");
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
     const runReview = codex.runCodexReview;
     const root = mkdtempSync(join(tmpdir(), "neondiff-checkout-lcm-")); roots.push(root);
     const config = minimalConfig(root);
@@ -1849,7 +1896,7 @@ describe("worker context budget preflight", () => {
     const candidate = { ...finding("src/a.ts", "Invalid checkout citation"),
       evidence: [{ path: "missing.ts", startLine: 1, endLine: 1, excerpt: "not there" }] };
     const spy = vi.spyOn(codex, "runCodexReview").mockImplementation(input => runReview(input, {
-      captureWorktreeState: () => "unchanged",
+      captureWorktreeState: () => "unchanged", resolveReadConfinement: () => ({ command: "/unused/codex", readableRoots: [input.cwd] }),
       runProcess: async invocation => {
         writeFileSync(invocation.outputPath, JSON.stringify({ findings: [candidate],
           summary: { changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture" },
@@ -1868,7 +1915,62 @@ describe("worker context budget preflight", () => {
       const plan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
       expect(plan.deterministicGate.dropReasonCounts.evidence_unverified).toBe(1);
       expect(createdReviews[0]?.body).toContain("<!-- lcm-x-ai-review:v2");
-    } finally { spy.mockRestore(); state.close(); }
+    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
+  });
+
+  it("falls back to the diff-only review once when checkout reads are unavailable", async () => {
+    const codex = await import("../src/codex-runtime.js");
+    const runReview = codex.runCodexReview;
+    const root = mkdtempSync(join(tmpdir(), "neondiff-checkout-fallback-")); roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.codexRuntime = { enabled: true, checkoutReads: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
+      reasoningEffort: "high", contextWindowTokens: 500_000, timeoutMs: 1000, maxOutputBytes: 100000 };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(437, "a".repeat(40)); pull.authorAssociation = "OWNER";
+    const candidate = { ...finding("src/a.ts", "Diff-only finding"),
+      evidence: [{ path: "missing.ts", startLine: 1, endLine: 1, excerpt: "not there" }] };
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus")
+      .mockReturnValue({ status: "unavailable:codex_version", detail: "Codex CLI 0.150.0 is older than 0.163.0" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const invocations: { args: string[]; schema: unknown }[] = [];
+    const spy = vi.spyOn(codex, "runCodexReview").mockImplementation(input => runReview(input, {
+      captureWorktreeState: () => "unchanged",
+      resolveReadConfinement: () => { throw new Error("confinement must not be resolved on the fallback path"); },
+      runProcess: async invocation => {
+        const schemaPath = invocation.args[invocation.args.indexOf("--output-schema") + 1]!;
+        invocations.push({ args: invocation.args, schema: JSON.parse(readFileSync(schemaPath, "utf8")) });
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [candidate],
+          summary: { changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture" } }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    }));
+    try {
+      expect(await reviewPull({ config, github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+        state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
+      expect(available).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledTimes(4);
+      for (const [input] of spy.mock.calls) {
+        expect(input.checkoutReads).toBe(false);
+        expect(input.prompt).not.toContain("The working directory is a read-only checkout");
+        expect(input.prompt).not.toContain("read-only checkout inspection is allowed");
+      }
+      expect(spy.mock.calls.filter(([input]) => input.prompt.includes("Do not use tools, agents, web, MCP, shell"))).toHaveLength(3);
+      for (const result of await Promise.all(spy.mock.results.map(entry => entry.value))) {
+        expect(result.droppedFromEvidence).toBeUndefined();
+        expect(result.findings).toHaveLength(1);
+      }
+      expect(invocations).toHaveLength(4);
+      for (const invocation of invocations) {
+        expect(invocation.args.slice(invocation.args.indexOf("--sandbox"), invocation.args.indexOf("--sandbox") + 2)).toEqual(["--sandbox", "read-only"]);
+        expect(invocation.args.some(arg => arg.includes("default_permissions"))).toBe(false);
+        expect(invocation.schema).toEqual(codex.CODEX_REVIEW_FINDINGS_JSON_SCHEMA);
+      }
+      const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
+      expect(JSON.parse(readFileSync(join(evidenceDir, "checkout-reads.json"), "utf8"))).toMatchObject({ status: "unavailable:codex_version" });
+      expect(readFileSync(join(evidenceDir, "review-prompt.txt"), "utf8")).not.toContain("The working directory is a read-only checkout");
+      expect(warn.mock.calls.filter(([message]) => String(message).startsWith("[checkout-reads]"))).toHaveLength(1);
+    } finally { spy.mockRestore(); available.mockRestore(); warn.mockRestore(); state.close(); }
   });
 
   it("keeps the ordinary LCM review when exact patch hydration fails", async () => {
