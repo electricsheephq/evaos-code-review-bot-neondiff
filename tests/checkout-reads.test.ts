@@ -260,6 +260,17 @@ describe("checkout reads", () => {
     expect(() => resolveRoots()).toThrow("holds credentials");
     config("--worktree", "--unset", "http.https://github.com/.extraheader");
     expect(() => resolveRoots()).not.toThrow();
+    // `url."<url>".insteadOf` stores the credential-bearing URL in the key, not the value.
+    config("url.https://x-access-token:fixture@github.com/.insteadOf", "https://github.com/");
+    expect(() => resolveRoots()).toThrow("holds credentials");
+    config("--remove-section", "url.https://x-access-token:fixture@github.com/");
+    config("url.https://github.com/.insteadOf", "git@github.com:");
+    expect(() => resolveRoots()).not.toThrow();
+    // An include outside the roots that links to a file inside one is judged by its target.
+    writeFileSync(join(top, "repo", ".git", "creds.inc"), "");
+    symlinkSync(join(top, "repo", ".git", "creds.inc"), join(top, "outside-link.inc"));
+    config("include.path", join(top, "outside-link.inc"));
+    expect(() => resolveRoots()).toThrow("holds credentials");
   }, 30_000);
   it.each([true, false])("passes read confinement to Codex only when checkoutReads=%s", async checkoutReads => {
     const cwd = root();

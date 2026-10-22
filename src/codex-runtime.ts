@@ -233,6 +233,9 @@ function canonicalPath(path: string): string {
     return join(canonicalPath(dirname(absolute)), basename(absolute));
   }
 }
+function safeCanonicalPath(path: string): string {
+  try { return canonicalPath(path); } catch { return resolve(path); }
+}
 // macOS volumes are case-insensitive by default, so a mis-cased path must still match its root.
 function under(path: string, root: string): boolean {
   const [left, right] = process.platform === "darwin" ? [path.toLowerCase(), root.toLowerCase()] : [path, root];
@@ -305,6 +308,8 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
  * credentials), so such a checkout gets no checkout reads at all (#1196).
  */
 export function assertGitConfigHasNoCredentials(commonDir: string, readableRoots: string[], env: NodeJS.ProcessEnv): void {
+  // Includes are compared after symlinks resolve, so a link outside the roots cannot hide a target inside them.
+  const roots = readableRoots.map(safeCanonicalPath);
   const worktreesDir = join(commonDir, "worktrees");
   // With extensions.worktreeConfig, the main worktree's settings live in <common>/config.worktree.
   const files = [join(commonDir, "config"), join(commonDir, "config.worktree"), ...(existsSync(worktreesDir)
@@ -318,12 +323,15 @@ export function assertGitConfigHasNoCredentials(commonDir: string, readableRoots
       const separator = entry.indexOf("\n");
       const key = (separator < 0 ? entry : entry.slice(0, separator)).toLowerCase();
       const value = separator < 0 ? "" : entry.slice(separator + 1);
-      const userinfo = /^([a-z][a-z0-9+.-]*):\/\/([^/@\s]*)@/i.exec(value);
-      const credentialUrl = userinfo !== null && (/^https?$/i.test(userinfo[1]!) || userinfo[2]!.includes(":"));
+      // A URL with userinfo can sit in the value or, for `url."<url>".insteadOf`, in the key's subsection.
+      const credentialUrl = [value, key.replace(/^[^.]+\./, "")].some((text) => {
+        const userinfo = /^([a-z][a-z0-9+.-]*):\/\/([^/@\s]*)@/i.exec(text);
+        return userinfo !== null && (/^https?$/i.test(userinfo[1]!) || userinfo[2]!.includes(":"));
+      });
       const include = /^include(if\..*)?\.path$/.test(key)
-        ? resolve(dirname(file), value.replace(/^~(?=\/)/, env.HOME ?? homedir())) : undefined;
+        ? safeCanonicalPath(resolve(dirname(file), value.replace(/^~(?=\/)/, env.HOME ?? homedir()))) : undefined;
       if (key.endsWith(".extraheader") || credentialUrl
-        || (include !== undefined && readableRoots.some((root) => include === root || include.startsWith(`${root}/`)))) {
+        || (include !== undefined && roots.some((root) => under(include, root)))) {
         throw new Error("codex_runtime_read_confinement_unavailable: the checkout's git config holds credentials");
       }
     }
