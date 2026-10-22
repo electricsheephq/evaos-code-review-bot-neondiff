@@ -20,12 +20,12 @@ export const LCM_REVIEW_ASSESSMENT_SCHEMA = {
 /** Publish an explicit provider assessment; never turn zero findings into PASS. */
 export function buildLcmReviewAssessmentBody(input: {
   repo: string; prNumber: number; baseSha: string; headSha: string;
-  rawResponse: string; complete: boolean; droppedFindingCount: number;
+  rawResponse: string; complete: boolean; droppedFindingCount: number; secretRedacted?: boolean;
 }): string | undefined {
   if (!isLcmReviewRepository(input.repo) || !input.complete || input.droppedFindingCount !== 0 ||
       !Number.isInteger(input.prNumber) || input.prNumber <= 0 ||
       !/^[a-f0-9]{40}$/.test(input.baseSha) || !/^[a-f0-9]{40}$/.test(input.headSha)) return;
-  if (containsSecretLikeText(input.rawResponse)) return;
+  if (input.secretRedacted || containsSecretLikeText(input.rawResponse)) return;
   let result: unknown;
   try { result = JSON.parse(extractJsonObject(input.rawResponse)); } catch { return; }
   if (!record(result) || !Array.isArray(result.findings) || "chunks" in result) return;

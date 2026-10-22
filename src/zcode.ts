@@ -28,6 +28,8 @@ export interface ZCodeReviewResult {
   droppedFromSchema: ReturnType<typeof parseFindings>["dropped"];
   droppedFromEvidence?: ReturnType<typeof parseFindings>["dropped"];
   rawResponse: string;
+  /** True when secret-like model text was redacted; rawResponse is then not the model's exact output. */
+  secretRedacted?: boolean;
   // Provenance (#304): how many parse attempts ran and whether the strict-JSON retry path produced
   // the accepted parse. degradedRecovery is true iff a non-first attempt supplied the findings.
   attempts: number;

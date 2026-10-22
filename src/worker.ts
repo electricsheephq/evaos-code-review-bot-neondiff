@@ -2374,6 +2374,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     let assessmentBody = buildLcmReviewAssessmentBody({
       repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
       rawResponse: zcodeResult.rawResponse,
+      secretRedacted: zcodeResult.secretRedacted === true,
       complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
         !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
         reviewFiles.length === files.length && lcmReviewFileInventoryIsComplete(files.length) &&

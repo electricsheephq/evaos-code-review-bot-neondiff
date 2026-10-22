@@ -138,6 +138,28 @@ describe("checkout reads", () => {
       expect(result.droppedFromEvidence).toBeUndefined();
     }
   });
+  it("drops a redacted citation as evidence_unverified while other findings survive", async () => {
+    const cwd = root();
+    const token = ["super", "secret", "token"].join("-");
+    writeFileSync(join(cwd, "context.ts"), `// ${token}\nconst guard = true;\n`);
+    const result = await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex",
+      model: "gpt-6.1-sol", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000, checkoutReads: true }, {
+      captureWorktreeState: () => "unchanged",
+      resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [cwd] }),
+      runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [
+          { ...finding, evidence: [{ ...ref, startLine: 1, endLine: 1, excerpt: `// ${token}` }] },
+          { ...finding, title: "Valid citation", evidence: [ref] },
+          { ...finding, title: "Diff only", evidence: [] }
+        ], summary }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+    expect(result.findings.map(f => f.title)).toEqual(["Valid citation", "Diff only"]);
+    expect(result.droppedFromEvidence).toMatchObject([{ reason: "evidence_unverified", evidenceFailure: "excerpt_mismatch",
+      evidence: [{ excerpt: "// [redacted-secret]" }] }]);
+    expect(result.rawResponse.includes(token)).toBe(false);
+  });
   it("confines checkout-read shell reads with a permission profile instead of the read-only sandbox", () => {
     const base = { cliPath: "codex", cwd: "/work/tree", model: "gpt-6.1-sol", reasoningEffort: "high" as const,
       schemaPath: "/evidence/schema.json", outputPath: "/evidence/result.json" };
