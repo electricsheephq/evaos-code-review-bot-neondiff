@@ -85,6 +85,7 @@ describe("trusted Codex path pinning", () => {
       await reviewPull({ config: f.config, github: f.github, state: f.state, repo: "org/repo", pull: f.pull,
         dryRun: true, useZCode: true, licenseAdmission: testLicenseAdmission }).catch(() => undefined);
       expect(mocks.reads).toHaveBeenCalledOnce();
+      expect(mocks.reads).toHaveBeenCalledWith(expect.objectContaining({ probeSandbox: true }));
       const sensitive = Object.values((mocks.reads.mock.calls[0]![0] as { sensitivePaths: Record<string, string | undefined> }).sensitivePaths);
       expect(sensitive).toEqual(expect.arrayContaining(["/fixture/inherited.key", "/etc/neondiff/license.key"]));
     } finally { f.state.close(); }

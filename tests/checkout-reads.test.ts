@@ -3,8 +3,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFil
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, codexCliVersionAtLeast, parseCodexCliVersion, parseCodexCommands, resolveCheckoutReadsStatus, resolveCodexReadConfinement, resolveTrustedCodexPath, runCodexReview } from "../src/codex-runtime.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, codexCliVersionAtLeast, parseCodexCliVersion, parseCodexCommands, probeLinuxSandbox, resetLinuxSandboxProbeCacheForTests, resolveCheckoutReadsStatus, resolveCodexReadConfinement, resolveTrustedCodexPath, runCodexReview } from "../src/codex-runtime.js";
 import { buildSkillPackContextPacket } from "../src/skill-packs.js";
 import { createSourceRefReadBudget, verifySourceRef } from "../src/issue-analysis.js";
 import { loadConfigFromObject } from "../src/config.js";
@@ -506,4 +506,56 @@ it("pins a trusted real Codex executable while rejecting absolute and symlinked 
   const path = ["", ".", work, join(dir, "alias"), trusted].join(":");
   expect(resolveTrustedCodexPath("codex", work, { PATH: path })).toBe(realpathSync(join(trusted, "codex")));
   expect(() => resolveTrustedCodexPath("codex", work, { PATH: [work, join(dir, "alias")].join(":") })).toThrow(/trusted/);
+});
+
+describe("Linux sandbox startup", () => {
+  afterEach(() => resetLinuxSandboxProbeCacheForTests?.());
+  const input = { checkoutReads: true, probeSandbox: true, cwd: "/checkout", cliPath: "/tool/codex" };
+  const confinement = { command: "/resolved/codex", readableRoots: ["/checkout", "/resolved"] };
+  const deps = { platform: "linux" as const, readVersion: () => "codex-cli 0.163.0", resolveReadConfinement: () => confinement };
+  it.each([false, true])("handles probe success=%s after resolving confinement", ok => {
+    const probeSandbox = vi.fn(() => ok ? { ok: true as const } : { ok: false as const, detail: "bwrap: loopback: Failed RTM_NEWADDR" });
+    const result = resolveCheckoutReadsStatus(input, { ...deps, probeSandbox });
+    expect(probeSandbox).toHaveBeenCalledWith(confinement.command, confinement.readableRoots, input.cwd, expect.any(Object));
+    expect(result.status).toBe(ok ? "enabled" : "unavailable:confinement");
+    if (!ok) {
+      expect(result.detail).toContain("bwrap: loopback: Failed RTM_NEWADDR");
+      expect(result.detail).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+    } else expect(result).toEqual({ status: "enabled" });
+  });
+  it.each(["not requested", "restricted", "macOS", "disabled", "old CLI", "unsafe roots"])("does not probe when %s", scenario => {
+    const probeSandbox = vi.fn(() => ({ ok: true as const }));
+    const result = resolveCheckoutReadsStatus({ ...input, probeSandbox: scenario === "not requested" ? undefined : true,
+      restrictTools: scenario === "restricted", checkoutReads: scenario !== "disabled",
+      sensitivePaths: scenario === "unsafe roots" ? { config: "/etc/neondiff/config.json" } : undefined }, {
+      ...deps, probeSandbox, platform: scenario === "macOS" ? "darwin" : "linux",
+      readVersion: () => scenario === "old CLI" ? "codex-cli 0.150.0" : "codex-cli 0.163.0"
+    });
+    expect(probeSandbox).not.toHaveBeenCalled();
+    expect(result.status).toBe(scenario === "disabled" ? "disabled" : scenario === "old CLI" ? "unavailable:codex_version"
+      : scenario === "unsafe roots" ? "unavailable:confinement" : "enabled");
+  });
+  it.each([0, 1])("caches sandbox probe exit %s per command until reset", status => {
+    resetLinuxSandboxProbeCacheForTests();
+    const dir = root(), cli = join(dir, "codex"), counter = join(dir, "calls");
+    writeFileSync(cli, `#!/bin/sh\necho x >> "${counter}"\nprintf '\\nfixture failure\\nignored\\n' >&2\nexit ${status}\n`);
+    chmodSync(cli, 0o755);
+    const first = probeLinuxSandbox(cli, [dir], dir, {});
+    expect(first.ok).toBe(status === 0);
+    if (!first.ok) expect(first.detail).toMatch(/^fixture failure; .*kernel\.apparmor_restrict_unprivileged_userns=0/);
+    expect(probeLinuxSandbox(cli, [], dir, {})).toEqual(first);
+    expect(readFileSync(counter, "utf8")).toBe("x\n");
+    resetLinuxSandboxProbeCacheForTests();
+    expect(probeLinuxSandbox(cli, [dir], dir, {})).toEqual(first);
+    expect(readFileSync(counter, "utf8")).toBe("x\nx\n");
+  });
+  it("does not cache a probe that could not run", () => {
+    const dir = root(), cli = join(dir, "codex");
+    const missing = probeLinuxSandbox(cli, [dir], dir, {});
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.detail).toMatch(/ENOENT.*kernel\.apparmor_restrict_unprivileged_userns=0/);
+    writeFileSync(cli, "#!/bin/sh\nexit 0\n");
+    chmodSync(cli, 0o755);
+    expect(probeLinuxSandbox(cli, [dir], dir, {})).toEqual({ ok: true });
+  });
 });

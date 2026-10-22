@@ -395,16 +395,34 @@ function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | 
   return result.stdout;
 }
 
+const LINUX_SANDBOX_HINT = "the Codex sandbox cannot start on this host; on Ubuntu 23.10 and later allow unprivileged user namespaces (sysctl kernel.apparmor_restrict_unprivileged_userns=0) or see docs/neondiff-config.md#codex-checkout-reads";
+const linuxSandboxProbeCache = new Map<string, { ok: true } | { ok: false; detail: string }>();
+export function resetLinuxSandboxProbeCacheForTests(): void { linuxSandboxProbeCache.clear(); }
+
+export function probeLinuxSandbox(command: string, readableRoots: string[], cwd: string, env: NodeJS.ProcessEnv): { ok: true } | { ok: false; detail: string } {
+  const cached = linuxSandboxProbeCache.get(command);
+  if (cached) return cached;
+  const result = spawnSync(command, ["sandbox", ...checkoutReadPermissionArgs(readableRoots), "--", "/bin/sh", "-c", "exit 0"],
+    { cwd, env, timeout: 15_000, encoding: "utf8" });
+  const line = (result.stderr ?? "").split(/\r?\n/).find(line => line.trim())?.trim() ?? result.error?.message ?? "";
+  const outcome = result.status === 0 ? { ok: true as const }
+    : { ok: false as const, detail: `${redactSecrets(line).slice(0, 200)}; ${LINUX_SANDBOX_HINT}` };
+  // A timeout or spawn error says nothing lasting about the host, so only an exit status is cached.
+  if (!result.error) linuxSandboxProbeCache.set(command, outcome);
+  return outcome;
+}
+
 /**
  * Decides once per review whether confined checkout reads can run. When they cannot (an older
  * Codex CLI without permission profiles, or no safe read roots), the review falls back to the
  * diff-only invocation instead of failing under `--strict-config`. Restricted reviews must skip
  * instead; they require confinement even with checkout reads disabled.
  */
-export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; restrictTools?: boolean; cwd: string; cliPath: string; sensitivePaths?: Record<string, string | undefined> }, dependencies: {
+export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; restrictTools?: boolean; probeSandbox?: boolean; cwd: string; cliPath: string; sensitivePaths?: Record<string, string | undefined> }, dependencies: {
   platform?: NodeJS.Platform;
   readVersion?: (cliPath: string, env: NodeJS.ProcessEnv) => string | undefined;
   resolveReadConfinement?: typeof resolveCodexReadConfinement;
+  probeSandbox?: typeof probeLinuxSandbox;
 } = {}): { status: CheckoutReadsStatus; detail?: string; confinement?: CodexReadConfinement } {
   if (input.checkoutReads !== true && !input.restrictTools) return { status: "disabled" };
   const env = buildCodexRuntimeEnv(process.env);
@@ -427,6 +445,10 @@ export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; res
       }
     }
     if (input.restrictTools) return { status: "enabled", confinement };
+    if (input.probeSandbox === true && platform === "linux") {
+      const probe = (dependencies.probeSandbox ?? probeLinuxSandbox)(confinement.command, confinement.readableRoots, input.cwd, env);
+      if (!probe.ok) return { status: "unavailable:confinement", detail: probe.detail.includes(LINUX_SANDBOX_HINT) ? probe.detail : `${probe.detail}; ${LINUX_SANDBOX_HINT}` };
+    }
   } catch (error) {
     return { status: "unavailable:confinement", detail: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }

@@ -728,7 +728,9 @@ passes.
 
 On Linux, `neondiff daemon start|stop|status` intentionally does not call
 `launchctl`. It returns JSON with `serviceManager: "systemd"` and points to the
-Linux service guide. Use [docs/systemd.md](systemd.md) for user/system services,
+Linux service guide. For Codex checkout reads, see the
+[Linux sandbox setup](neondiff-config.md#codex-checkout-reads).
+Use [docs/systemd.md](systemd.md) for user/system services,
 [docs/docker.md](docker.md) for the Compose recipe, and
 [docs/ci-runner.md](ci-runner.md) for one-shot Ubuntu runner checks.
 
