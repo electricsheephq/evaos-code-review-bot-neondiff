@@ -470,6 +470,15 @@ logged. Set `checkoutReads` to `false` to make diff-only reviews explicit. Citat
 most 200 citations and 16 MiB of files (1 MiB per file); a citation over that
 budget drops its finding. When any finding is dropped for evidence, the model
 summary from that response is withheld.
+
+On Linux, NeonDiff first checks that the Codex sandbox can start. Ubuntu 23.10
+and later, and most Docker containers, block the user namespaces it needs;
+allow them with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`
+(persist it in `/etc/sysctl.d/`), or the review runs diff-only with a
+`[checkout-reads]` warning. Restart the daemon after changing the host setting,
+because a completed check is cached for the process lifetime. See
+[SETUP: Codex sandbox on Linux](SETUP.md#codex-sandbox-on-linux).
+
 Every Codex call filters its shell environment to core variables and excludes
 secret-named variables. Every review writes a bounded, detect-only
 `codex-commands.json` audit; flagged commands do not fail the review.

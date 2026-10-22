@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { buildCodexExecInvocation, resolveCodexReadConfinement } from "../src/codex-runtime.js";
+import { buildCodexExecInvocation, probeLinuxSandbox, resetLinuxSandboxProbeCacheForTests, resolveCodexReadConfinement } from "../src/codex-runtime.js";
 const roots: string[] = [];
 const enabled = process.env.NEONDIFF_REAL_CODEX === "1";
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -115,4 +115,11 @@ it.skipIf(!enabled || process.platform !== "linux" || !process.env.CI)("Linux pe
   const sandboxPidNamespace = /PIDNS:(pid:\[\d+\])\n/.exec(result.output)?.[1];
   expect(sandboxPidNamespace, result.output).toBeDefined();
   expect(sandboxPidNamespace, "the sandbox must not share the host PID namespace").not.toBe(readlinkSync("/proc/self/ns/pid"));
+});
+it.skipIf(!enabled)("the sandbox startup probe starts the real Codex sandbox and ignores a malformed user config", () => {
+  const { cwd, env, cli } = fixture();
+  writeFileSync(join(env.CODEX_HOME, "config.toml"), "model = [\n");
+  const { command, readableRoots } = resolveCodexReadConfinement(cwd, cli, env);
+  resetLinuxSandboxProbeCacheForTests();
+  expect(probeLinuxSandbox(command, readableRoots, env)).toEqual({ ok: true });
 });

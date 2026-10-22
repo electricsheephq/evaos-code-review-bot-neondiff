@@ -741,6 +741,17 @@ Platform support at this beta stage:
 | CI runners | One-shot dry-run/review commands | Documented for Ubuntu-style runners |
 | Windows | CLI-only | Untested; no supervised daemon claim |
 
+### Codex sandbox on Linux
+
+Codex confines checkout reads with a sandbox that needs unprivileged user
+namespaces. Ubuntu 23.10 and later, and most Docker containers, block them. On
+Linux, NeonDiff checks once per Codex binary that the sandbox can start; if it
+cannot, reviews run diff-only with a `[checkout-reads]` warning. Allow the
+namespaces with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`,
+persist the setting in a file under `/etc/sysctl.d/`, then restart the daemon so
+it checks again. The documented Actions workflow in
+[docs/ci-runner.md](ci-runner.md) includes this step.
+
 Public source-beta promotion additionally uses
 [docs/public-release-manifest.json](public-release-manifest.json). The manifest
 declares the current public beta version, setup/release-notes alignment, license
