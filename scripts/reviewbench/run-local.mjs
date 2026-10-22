@@ -77,6 +77,8 @@ async function main(argv) {
       if (!hasCommits()) fetch(`${task.repo}.git`, [task.base, `pull/${task.pr_number}/head`]);
       if (!hasCommits()) fetch(`${task.repo}.git`, [task.base, task.head]);
       if (!hasCommits()) throw Error("Could not fetch base and head from mirror or upstream");
+      // A worktree from an interrupted run stays registered after its directory is gone; clear it first.
+      git(mirror, "worktree", "prune");
       git(mirror, "worktree", "add", "--detach", checkout, task.head);
       const diff = git(checkout, "diff", "--no-ext-diff", "--no-textconv", "--no-color", `${task.base}...${task.head}`);
       const diffPath = join(dir, "diff.patch"), prPath = join(dir, "pr.json");
