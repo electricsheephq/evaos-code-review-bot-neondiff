@@ -146,6 +146,8 @@ export type GitHubRelatedContextBuildResult =
       omittedReferences: GitHubRelatedOmittedReference[];
     };
 
+const MAX_COVERAGE_CHECKED_REPOSITORIES = 10;
+
 export async function buildGitHubRelatedContextPacket(input: {
   repo: string;
   pull: PullRequestSummary;
@@ -171,7 +173,8 @@ export async function buildGitHubRelatedContextPacket(input: {
   const scopedRefs = refs.filter((ref) => {
     const sameRepo = ref.repo.toLowerCase() === input.repo.toLowerCase();
     if (sameRepo || input.config.includeCrossRepoRefs) return true;
-    omittedReferences.push({
+    // With a coverage check, a disabled cross-repository reference is dropped unlisted: its repository was never checked.
+    if (!input.repositoryCovered) omittedReferences.push({
       id: `${ref.repo}#${ref.number}`,
       reason: "cross_repo_disabled",
       detail: "Cross-repo GitHub related context is disabled for this packet."
@@ -180,12 +183,19 @@ export async function buildGitHubRelatedContextPacket(input: {
   });
   // A repository the caller does not cover is dropped before the item limit, so it takes no slot and
   // is never listed, not even as an omitted reference. A failed coverage check counts as not covered.
+  // Checks of other repositories stop once the limit is filled or MAX_COVERAGE_CHECKED_REPOSITORIES are
+  // checked, so a body naming many repositories cannot fan out lookups; an unchecked one is dropped unlisted.
   const coveredRefs: typeof scopedRefs = [];
+  const checkedRepos = new Set<string>();
   for (const ref of scopedRefs) {
-    let covered = !input.repositoryCovered;
-    if (input.repositoryCovered) {
-      try { covered = await input.repositoryCovered(ref.repo); } catch { covered = false; }
+    if (!input.repositoryCovered) { coveredRefs.push(ref); continue; }
+    const repoKey = ref.repo.toLowerCase();
+    if (repoKey !== input.repo.toLowerCase() && !checkedRepos.has(repoKey)) {
+      if (coveredRefs.length >= input.config.maxRelatedItems || checkedRepos.size >= MAX_COVERAGE_CHECKED_REPOSITORIES) continue;
+      checkedRepos.add(repoKey);
     }
+    let covered = false;
+    try { covered = await input.repositoryCovered(ref.repo); } catch { covered = false; }
     if (covered) coveredRefs.push(ref);
   }
   const boundedRefs = coveredRefs.slice(0, input.config.maxRelatedItems);

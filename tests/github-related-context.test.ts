@@ -56,6 +56,32 @@ describe("GitHub related context packets", () => {
     expect(rateLimited.packet.markdown).not.toMatch(/owner\/(?:private|hidden)/);
   });
 
+  it("bounds coverage checks and lists no unchecked or disabled cross-repository reference", async () => {
+    const checks: string[] = [];
+    const reader = { getIssueOrPull: async (_repo: string, number: number) => ({ number, title: "Fixture" }) };
+    const repositoryCovered = async (repo: string) => { checks.push(repo); return repo === "owner/repo" || repo.startsWith("owner/pub"); };
+    const many = Array.from({ length: 15 }, (_, index) => `owner/r${String(index).padStart(2, "0")}#1`).join(" ");
+    const flooded = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: `${many} owner/zpub#1 #2 #3` }),
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, reader });
+    if (!flooded.ok) throw new Error("expected packet");
+    expect(checks.filter((repo) => repo !== "owner/repo")).toHaveLength(10);
+    expect(flooded.packet.references.map((ref) => `${ref.repo}#${ref.number}`)).toEqual(["owner/repo#2"]);
+    expect(flooded.packet.omittedReferences.map((omitted) => omitted.id)).toEqual(["owner/repo#3"]);
+    checks.length = 0;
+    const filled = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "owner/puba#1 owner/pubb#1 owner/pubc#1" }),
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, reader });
+    if (!filled.ok) throw new Error("expected packet");
+    expect(checks).toEqual(["owner/puba"]);
+    expect(filled.packet.omittedReferences).toEqual([]);
+    checks.length = 0;
+    const disabled = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "owner/private#1 and #2" }),
+      config: config({ includeCrossRepoRefs: false }), repositoryCovered, reader });
+    if (!disabled.ok) throw new Error("expected packet");
+    expect(checks).toEqual(["owner/repo"]);
+    expect(disabled.packet.omittedReferences).toEqual([]);
+    expect(disabled.packet.markdown).not.toContain("owner/private");
+  });
+
   it("extracts explicit issue and PR references from title/body deterministically", () => {
     const refs = extractGitHubReferences({
       repo: "owner/repo",
