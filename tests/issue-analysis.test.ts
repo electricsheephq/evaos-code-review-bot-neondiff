@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -16,6 +16,7 @@ import {
   ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import type { CodexExecInvocation } from "../src/codex-runtime.js";
 
 const issue: GitHubRelatedIssueOrPull = {
   number: 7,
@@ -352,14 +353,14 @@ describe("model-backed issue analysis", () => {
     expect(changedPrivateComment.body).toBe(comment.body);
   });
 
-  it("runs strict model analysis, writes a quality scorecard, and returns only an accepted result", async () => {
+  it("runs strict model analysis with snapshot-confined reads for both invocations", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-issue-analysis-"));
     try {
       const evidenceDir = join(root, "evidence");
       const workspacePath = join(root, "workspace");
       mkdirSync(join(workspacePath, "src"), { recursive: true });
       writeFileSync(join(workspacePath, "src/importer.py"), "def replay(message):\n    insert_replay_row(message)\n");
-      const invocations: string[] = [];
+      const invocations: CodexExecInvocation[] = [];
       const result = await runIssueAnalysis({
         repo: "electricsheephq/lcm-x",
         issue,
@@ -376,8 +377,9 @@ describe("model-backed issue analysis", () => {
         maxOutputBytes: 1024 * 1024
       }, {
         captureWorktreeState: () => "clean",
+        resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [workspacePath] }),
         runProcess: async (invocation) => {
-          invocations.push(invocation.outputPath);
+          invocations.push(invocation);
           writeFileSync(invocation.outputPath, JSON.stringify(
             invocation.outputPath.includes("fact-adjudication")
               ? { facts: [{ index: 0, entailed: true, rationale: "The cited call directly supports the claim." }] }
@@ -390,6 +392,14 @@ describe("model-backed issue analysis", () => {
       expect(result.analysis).toEqual(analysis);
       expect(result.scorecard.ok).toBe(true);
       expect(invocations).toHaveLength(2);
+      for (const invocation of invocations) {
+        expect(invocation.args).toContain('default_permissions="neondiff_checkout_read"');
+        expect(invocation.args).not.toContain("--sandbox");
+        const permissions = invocation.args.find((arg) => arg.startsWith("permissions."));
+        expect(permissions).toContain(`${JSON.stringify(workspacePath)}="read"`);
+        expect(permissions).not.toContain(`${JSON.stringify(homedir())}="read"`);
+        expect(permissions).not.toContain(`${JSON.stringify(join(homedir(), ".codex"))}="read"`);
+      }
       expect(JSON.parse(readFileSync(join(evidenceDir, "issue-analysis-quality.json"), "utf8")))
         .toMatchObject({ ok: true });
       expect(JSON.parse(readFileSync(join(evidenceDir, "issue-analysis-fact-entailment.json"), "utf8")))
@@ -424,6 +434,7 @@ describe("model-backed issue analysis", () => {
         maxOutputBytes: 1024 * 1024
       }, {
         captureWorktreeState: () => "clean",
+        resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [workspacePath] }),
         runProcess: async (invocation) => {
           invocations.push(invocation.outputPath);
           writeFileSync(invocation.outputPath, JSON.stringify({ ...analysis, nextGate: `${analysis.nextGate} ${token}` }));
@@ -468,6 +479,7 @@ describe("model-backed issue analysis", () => {
         maxOutputBytes: 1024 * 1024
       }, {
         captureWorktreeState: () => "clean",
+        resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [workspacePath] }),
         runProcess: async (invocation) => {
           writeFileSync(invocation.outputPath, JSON.stringify(
             invocation.outputPath.includes("fact-adjudication")
@@ -516,6 +528,7 @@ describe("model-backed issue analysis", () => {
         maxOutputBytes: 1024 * 1024
       }, {
         captureWorktreeState: () => "clean",
+        resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [workspacePath] }),
         runProcess: async (invocation) => {
           writeFileSync(invocation.outputPath, JSON.stringify(
             invocation.outputPath.includes("fact-adjudication")
