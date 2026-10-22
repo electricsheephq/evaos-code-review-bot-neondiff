@@ -1013,6 +1013,7 @@ async function main(): Promise<void> {
   if (command === "build-memory-packet") {
     if (!args.repo) throw new Error("--repo is required for build-memory-packet");
     const config = loadConfig(args.config);
+    await requireRepositoryContentCovered(config, parseSingleArg(args.repo, "--repo"), commandAdmission);
     const generatedAt = args["generated-at"] ?? new Date().toISOString();
     const generatedAtDate = parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
     const memoryConfig = config.repoMemory!;
@@ -1615,7 +1616,8 @@ async function main(): Promise<void> {
     });
     const pullNumber = parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr");
     const commentId = parsePositiveInteger(parseSingleArg(args["comment-id"], "--comment-id"), "--comment-id");
-    await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+    const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+    await requireRepositoryContentCovered(loadConfig(args.config), repo, admission);
     const trustedAuthors = parseCsv(args["trusted-authors"]);
     const worktreeCleanArg = args["worktree-clean"];
     const worktreeCleanExplicit = worktreeCleanArg !== undefined;
@@ -4109,6 +4111,18 @@ async function repositoryContentCovered(github: GitHubApi, repo: string, admissi
   const visibility = metadata.private || metadata.visibility === "private" || metadata.visibility === "internal"
     ? "private" : metadata.visibility === "public" || metadata.private === false ? "public" : "unknown";
   return authorizeAdmissionForVisibility(admission, visibility).ok;
+}
+
+// Repository-scoped utilities read or record that repository's local data without a GitHub
+// content read of their own. A Solo or Team admission covers every repository; a public-only
+// admission needs GitHub's authoritative visibility first.
+async function requireRepositoryContentCovered(config: BotConfig, repo: string, admission?: ProductionLicenseAdmission): Promise<void> {
+  if (admission
+    && authorizeAdmissionForVisibility(admission, "private").ok
+    && authorizeAdmissionForVisibility(admission, "public").ok) return;
+  if (!await repositoryContentCovered(new GitHubApi(config.github), repo, admission)) {
+    throw new Error("A Solo or Team license is required for this repository.");
+  }
 }
 
 async function requireClassifiedCommandAdmission(

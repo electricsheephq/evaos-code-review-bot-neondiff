@@ -257,6 +257,23 @@ describe("runScheduledObservePass gating + selection (#357)", () => {
     store.close();
   });
 
+  it("cools down uncovered repositories so they cannot starve covered ones", async () => {
+    const { store, root } = newStore();
+    store.recordReviewFindings([{ ...FINDING, repo: "org/private" }, { ...FINDING, repo: "org/public", pullNumber: 2, headSha: "sha2" }]);
+    const config = { ...OBSERVE_SCHEDULE, maxPullsPerCycle: 1 };
+    const seen: string[] = [];
+    const fetchOutcome = (target: ScheduledObserveTarget) => {
+      seen.push(target.repo);
+      return target.repo === "org/private" ? undefined : fullObserved({ merged: true, revertedFlaggedChange: true });
+    };
+    await runScheduledObservePass({ state: store, config, evidenceDir: join(root, "evidence"), fetchOutcome, now: new Date("2026-07-06T10:00:00.000Z") });
+    await runScheduledObservePass({ state: store, config, evidenceDir: join(root, "evidence"), fetchOutcome, now: new Date("2026-07-06T11:01:00.000Z") });
+
+    expect(seen).toEqual(["org/private", "org/public"]);
+    expect(store.listFindingOutcomeLabels().map((label) => label.repo)).toEqual(["org/public"]);
+    store.close();
+  });
+
   it("caps at maxPullsPerCycle heads", async () => {
     const { store, root } = newStore();
     store.recordReviewFindings([

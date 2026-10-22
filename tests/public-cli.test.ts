@@ -64,6 +64,36 @@ describe("public NeonDiff CLI surface", () => {
     } finally { await closeServer(server); }
   });
 
+  it.each([
+    ["build-memory-packet", []],
+    ["finishing-touch-dry-run", ["--pr", "1", "--head-sha", "a".repeat(40), "--current-head", "a".repeat(40), "--author", "fixture-owner", "--comment-id", "7", "--body", "@neondiff changelog draft", "--trusted-authors", "fixture-owner", "--dry-run", "false", "--record", "true"]]
+  ])("checks repository visibility before keyless %s", async (command, extra) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-utility-gate-"));
+    roots.push(root);
+    let visibility = "private";
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url!);
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ private: visibility === "private", visibility }));
+    });
+    await listen(server);
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, JSON.stringify({ pilotRepos: ["fixture/repo"], statePath: join(root, "state.sqlite"), workRoot: join(root, "runtime"), evidenceDir: join(root, "evidence"), github: { token: "fixture-token", apiBaseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` } }));
+      const args = [command, "--config", configPath, "--repo", "fixture/repo", ...extra];
+      const blocked = await runCli(args).catch((error) => error);
+      expect(blocked.code).toBe(1);
+      expect(blocked.stderr).toMatch(/Solo or Team license/);
+      expect(blocked.stdout).toBe("");
+      expect(requests).toEqual(["/repos/fixture/repo"]);
+      expect(existsSync(join(root, "state.sqlite"))).toBe(false);
+      visibility = "public";
+      const allowed = await runCli(args).catch((error) => error);
+      expect(allowed.stderr ?? "").not.toMatch(/Solo or Team license/);
+    } finally { await closeServer(server); }
+  });
+
   it("declares the neondiff package binary", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
