@@ -154,46 +154,210 @@ function detectEvidenceMentions(text: string): string[] {
 }
 
 function hasBuildEvidence(text: string): boolean {
-  if (hasNegatedOrHistoricalProof(text, ["build", "validation", "typecheck", "tsc"])) return false;
-  return (
-    /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/.test(text) ||
-    /\b(build|tsc)\b.{0,48}\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/.test(text) ||
-    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}\b(build|tsc)\b/.test(text)
-  );
+  return hasUnnegatedProof(text, ["build", "validation", "typecheck", "tsc"], [
+    /\b(npm run build|pnpm build|yarn build|bun run build|typecheck|tsc --noemit|tsc -p)\b/,
+    /\b(build|tsc)\b.{0,48}?\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b/,
+    /\b(pass(?:ed|es)?|green|ok|succeed(?:ed|s)?)\b.{0,48}?\b(build|tsc)\b/
+  ]);
 }
 
 function hasTestEvidence(text: string): boolean {
-  if (hasNegatedOrHistoricalProof(text, ["validation", "test", "tests", "vitest", "jest", "npm test"])) return false;
-  return (
-    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b/.test(text) ||
-    /\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b.{0,48}\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/.test(text)
-  );
+  return hasUnnegatedProof(text, ["validation", "test", "tests", "vitest", "jest", "npm test"], [
+    /\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b.{0,48}?\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b/,
+    /\b(pass(?:ed|es)?|green|succeed(?:ed|s)?)\b.{0,48}?\b(focused\s+)?(vitest|jest|unit tests?|tests?|npm test)\b/
+  ]);
 }
 
 function hasCiEvidence(text: string): boolean {
-  if (hasNegatedOrHistoricalProof(text, ["validation", "ci", "check", "checks"])) return false;
-  return /\b(all checks? (?:are |is )?green|ci (?:run|pipeline) passed|github actions (?:run )?green|github checks passed)\b/.test(text);
+  return hasUnnegatedProof(text, ["validation", "ci", "check", "checks"], [
+    /\b(all checks? (?:are |is )?green|ci (?:run|pipeline) passed|github actions (?:run )?green|github checks passed)\b/
+  ]);
 }
 
 function hasReleaseEvidence(text: string): boolean {
-  if (hasNegatedOrHistoricalProof(text, ["validation", "release:status", "coverage-audit", "provider-cooldown", "rollback"])) return false;
-  return /\b(release:status|coverage-audit|provider-cooldowns?|rollback note)\b/.test(text);
+  return hasUnnegatedProof(text, ["validation", "release:status", "coverage-audit", "provider-cooldown", "rollback"], [
+    /\b(release:status|coverage-audit|provider-cooldowns?|rollback note)\b/
+  ]);
 }
+
+const UNITY_PROOF_WORDS = ["validation", "play mode", "playmode", "unity", "scene smoke", "prefab smoke"];
 
 function hasUnityEvidence(text: string): boolean {
-  if (hasNegatedOrHistoricalProof(text, ["validation", "play mode", "playmode", "unity", "scene smoke", "prefab smoke"])) return false;
-  return (
-    /\b(play\s*mode|playmode|unity editor|scene smoke|prefab smoke)\b.{0,48}\b(pass(?:ed|es)?|green|ok|smoke(?:d)?|verified)\b/.test(text) ||
-    hasVisualEvidence(text)
-  );
+  return hasUnnegatedProof(text, UNITY_PROOF_WORDS, [
+    /\b(play\s*mode|playmode|unity editor|scene smoke|prefab smoke)\b.{0,48}?\b(pass(?:ed|es)?|green|ok|smoke(?:d)?|verified)\b/
+  ]) || hasVisualEvidence(text, UNITY_PROOF_WORDS);
 }
 
-function hasVisualEvidence(text: string): boolean {
-  if (hasNegatedOrHistoricalProof(text, ["screenshot", "recording", "video", "visual proof"])) return false;
-  return (
-    /\b(screenshot|recording|video)\b.{0,48}\b(attached|captured|included|provided|uploaded)\b/.test(text) ||
-    /\b(attached|captured|included|provided|uploaded)\b.{0,48}\b(screenshot|recording|video)\b/.test(text)
-  );
+// Unity proof passes its own words, so "## Previous Unity validation" also vetoes a screenshot under it.
+function hasVisualEvidence(text: string, contextWords: string[] = []): boolean {
+  return hasUnnegatedProof(text, [...contextWords, "screenshot", "recording", "video", "visual proof"], [
+    /\b(screenshot|recording|video)\b.{0,48}?\b(attached|captured|included|provided|uploaded)\b/,
+    /\b(attached|captured|included|provided|uploaded)\b.{0,48}?\b(screenshot|recording|video)\b/
+  ]);
+}
+
+// A proof mention counts unless a negation sits in its own sentence or in a line that governs it:
+// its markdown section headings, an enclosing parent bullet, or a "Previous validation:" lead-in
+// above it. An unrelated "no ..." in another bullet or sentence does not erase it.
+function hasUnnegatedProof(text: string, negationWords: string[], positives: RegExp[]): boolean {
+  const lines = proofLines(text);
+  const negatedLine: Array<boolean | undefined> = [];
+  const isNegatedLine = (index: number) =>
+    (negatedLine[index] ??= hasNegatedOrHistoricalProof(lines[index]!.text, negationWords));
+  return positives.some((positive) => {
+    const pattern = new RegExp(positive.source, "g");
+    for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+      // Minimal matches only; one that crosses a sentence end borrows its outcome from the next sentence.
+      if (!CROSSES_SENTENCE_END.test(match[0])) {
+        const lineIndex = lineIndexAt(lines, match.index);
+        if (!hasNegatedOrHistoricalProof(proofSentence(text, lines, lineIndex, match), negationWords) &&
+          !lines[lineIndex]!.governing.some(isNegatedLine)) return true;
+      }
+      // Retry from the next character so a rejected match cannot hide later proof it overlaps.
+      pattern.lastIndex = match.index + 1;
+    }
+    return false;
+  });
+}
+
+const PROOF_SENTENCE_REACH = 400;
+// "worker.ts", "1.0.6", "e.g. npm run build" and "(incl. assets)" do not end a sentence; ";" does not
+// either, so "previous validation: build passed; tests passed" stays one sentence.
+const SENTENCE_END = /(?<!\b(?:e\.g|i\.e|eg|ie|etc|vs|cf|incl|approx|esp|al|fig))[.!?]\s/g;
+const CROSSES_SENTENCE_END = new RegExp(SENTENCE_END.source);
+
+// The whole sentence counts, so a trailing qualifier ("tests passed (previous validation only)") still vetoes.
+function proofSentence(text: string, lines: ProofLine[], lineIndex: number, match: RegExpExecArray): string {
+  const line = lines[lineIndex]!;
+  const matchEnd = match.index + match[0].length;
+  const lineEnd = line.start + line.text.length;
+  const windowStart = Math.max(line.start, match.index - PROOF_SENTENCE_REACH);
+  let sentenceStart = windowStart;
+  for (const boundary of text.slice(windowStart, match.index).matchAll(SENTENCE_END)) {
+    sentenceStart = windowStart + boundary.index + boundary[0].length;
+  }
+  const after = text.slice(matchEnd, Math.max(matchEnd, Math.min(lineEnd, matchEnd + PROOF_SENTENCE_REACH)));
+  const end = new RegExp(SENTENCE_END.source).exec(after);
+  return text.slice(sentenceStart, end === null ? matchEnd + after.length : matchEnd + end.index + 1);
+}
+
+interface ProofLine {
+  start: number;
+  text: string;
+  // Indices of earlier lines that qualify this one.
+  governing: number[];
+}
+
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s/;
+// "Previous validation\n===" is a heading too; a "---" that does not follow a paragraph line is a rule.
+const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/;
+const CODE_FENCE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
+// "> ## Previous validation" keeps its structure inside a blockquote.
+const BLOCKQUOTE = /^(?:\s{0,3}>\s?)+/;
+// A prose line that does not end a sentence labels the rest of its paragraph.
+const SENTENCE_LINE_END = /[.!?][*_`)"']*$/;
+
+function proofLines(text: string): ProofLine[] {
+  let offset = 0;
+  const headings: Array<{ level: number; index: number }> = [];
+  const parents: Array<{ indent: number; index: number }> = [];
+  // Labels of the current paragraph: "Previous validation:", "**Previous validation**".
+  let leadIns: number[] = [];
+  let listLeadIn: number | undefined;
+  let afterBlank = false;
+  let previousProse: number | undefined;
+  let fence: { marker: string; length: number } | undefined;
+  const listScope = () => [
+    ...(listLeadIn === undefined ? [] : [listLeadIn]),
+    ...leadIns.filter((leadIn) => leadIn !== listLeadIn),
+    ...parents.map((parent) => parent.index)
+  ];
+  const resetBlock = () => {
+    parents.length = 0;
+    leadIns = [];
+    listLeadIn = undefined;
+    afterBlank = false;
+    previousProse = undefined;
+  };
+  const openHeading = (level: number, index: number) => {
+    // A subsection stays under its parent heading until a heading of the same or a higher level.
+    while (headings.length > 0 && headings[headings.length - 1]!.level >= level) headings.pop();
+    const ancestors = headings.map((ancestor) => ancestor.index);
+    headings.push({ level, index });
+    resetBlock();
+    return ancestors;
+  };
+  return text.split("\n").map((rawLine, index) => {
+    const start = offset;
+    offset += rawLine.length + 1;
+    const line = rawLine.replace(BLOCKQUOTE, "");
+    const governing = headings.map((heading) => heading.index);
+    // Fenced code is content of the section it sits in; its "## Example" or "- item" lines are not structure.
+    // Only a run of the opening character at least as long as the opener closes it.
+    const fenceLine = CODE_FENCE.exec(line);
+    if (fence) {
+      if (fenceLine && fenceLine[1]![0] === fence.marker && fenceLine[1]!.length >= fence.length && fenceLine[2]!.trim() === "") {
+        fence = undefined;
+      }
+      return { start, text: rawLine, governing: [...governing, ...listScope()] };
+    }
+    if (fenceLine) {
+      fence = { marker: fenceLine[1]![0]!, length: fenceLine[1]!.length };
+      previousProse = undefined;
+      return { start, text: rawLine, governing: [...governing, ...listScope()] };
+    }
+    const heading = MARKDOWN_HEADING.exec(line);
+    if (heading) return { start, text: rawLine, governing: openHeading(heading[1]!.length, index) };
+    const underline = SETEXT_UNDERLINE.exec(line);
+    if (underline) {
+      if (previousProse === undefined) {
+        resetBlock();
+        return { start, text: rawLine, governing };
+      }
+      // The paragraph line above becomes the heading; the underline belongs to it.
+      openHeading(underline[1]![0] === "=" ? 1 : 2, previousProse);
+      return { start, text: rawLine, governing: headings.map((heading) => heading.index) };
+    }
+    if (line.trim() === "") {
+      afterBlank = true;
+      previousProse = undefined;
+      return { start, text: rawLine, governing };
+    }
+    const indent = line.search(/\S/);
+    if (LIST_ITEM.test(line)) {
+      while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
+      governing.push(...listScope());
+      parents.push({ indent, index });
+      previousProse = undefined;
+    } else if (indent > 0 && parents.length > 0) {
+      // An indented line under a bullet continues that bullet ("- Previous validation:\n  Build passed.").
+      while (parents.length > 0 && parents[parents.length - 1]!.indent >= indent) parents.pop();
+      governing.push(...listScope());
+      previousProse = undefined;
+    } else {
+      // Prose under a label stays in its scope; prose after a blank line starts a new block.
+      if (afterBlank) leadIns = [];
+      parents.length = 0;
+      governing.push(...leadIns);
+      // Any prose line introduces the list that follows it, colon or not ("Previous validation").
+      listLeadIn = index;
+      if (!SENTENCE_LINE_END.test(line.trimEnd())) leadIns.push(index);
+      previousProse = index;
+    }
+    afterBlank = false;
+    return { start, text: rawLine, governing };
+  });
+}
+
+function lineIndexAt(lines: ProofLine[], index: number): number {
+  let low = 0;
+  let high = lines.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (lines[middle]!.start <= index) low = middle; else high = middle - 1;
+  }
+  return low;
 }
 
 function hasNegatedOrHistoricalProof(text: string, evidenceWords: string[]): boolean {
