@@ -63,10 +63,10 @@ describe("mandatory activation proof assembler", () => {
     const boundaryTestPath = join(root, "boundary-tests.json");
     const requiredBoundaryTests = [
       "providers verify license admission denies before provider-key stdin or provider network",
-      "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
-      "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
-      "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
-      "local HTML dashboard serves HTML status but blocks provider verification before activation"
+      "public NeonDiff CLI surface allows provider-key stdin and provider network for public-only admission",
+      "public NeonDiff CLI surface runs public run-once dry-run without activation",
+      "public NeonDiff CLI surface allows status and coverage commands with public-only admission",
+      "local HTML dashboard serves HTML status and allows provider verification without a license key"
     ];
     writeFileSync(boundaryTestPath, JSON.stringify({
       success: true,
@@ -112,6 +112,8 @@ describe("mandatory activation proof assembler", () => {
     const aggregate = JSON.parse(readFileSync(output.aggregatePath, "utf8"));
     expect(aggregate.matrix.scenarios.find((row: { id: string }) => row.id === "public_free_allowed")).toMatchObject({ visibility: "public", expected: "allowed", actual: "allowed", licenseApiCalls: 0 });
     expect(aggregate.matrix.scenarios.find((row: { id: string }) => row.id === "disabled_policy_attempt")).toMatchObject({ visibility: "private", expected: "denied", actual: "denied", licenseApiCalls: 0 });
+    expect(aggregate.matrix.scenarios.find((row: { id: string }) => row.id === "missing_key")).toMatchObject({ actual: "allowed", licenseApiCalls: 0 });
+    expect(aggregate.matrix.scenarios.find((row: { id: string }) => row.id === "forged_cache")).toMatchObject({ actual: "denied", licenseApiCalls: 0 });
     expect(aggregate.evidenceKind).toBe("mandatory_activation_no_bypass");
     expect(aggregate.installedCandidate).toMatchObject({
       packageVersion: "1.0.4",

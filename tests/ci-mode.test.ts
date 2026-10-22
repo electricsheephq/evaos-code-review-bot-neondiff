@@ -103,7 +103,7 @@ describe("CI review", () => {
       expect(review.match(/Reviewed by \[NeonDiff\]/g)).toHaveLength(1);
     }
   });
-  it("admits public without reading keys or calling the license API, while other scopes and daemon stay denied", async () => {
+  it("admits public without reading keys or calling the license API, while keyless daemon stays public-only", async () => {
     const config = loadConfig().license!;
     const read = vi.fn(() => undefined), fetchImpl = vi.fn();
     const common = { config, secretReader: { read }, fetchImpl };
@@ -115,7 +115,16 @@ describe("CI review", () => {
       expect(authorizeAdmissionForVisibility(result.admission, "unknown").ok).toBe(false);
     }
     for (const visibility of ["private", "unknown"] as const) expect((await requireActiveProductionLicense({ ...common, operation: "review_cycle", visibility })).ok).toBe(false);
-    expect((await requireActiveDaemonCycleAdmissions(common)).ok).toBe(false);
+    const daemon = await requireActiveDaemonCycleAdmissions(common);
+    expect(daemon.ok).toBe(true);
+    if (daemon.ok) {
+      expect(daemon.admissions.issueEnrichment).toBeUndefined();
+      for (const admission of [daemon.admissions.daemonCycle, daemon.admissions.reviewDiscovery]) {
+        expect(admission).toMatchObject({ repoVisibilityScope: "public", privateRepoAllowed: false, updateEntitlement: false });
+        expect(authorizeAdmissionForVisibility(admission, "public").ok).toBe(true);
+        for (const visibility of ["private", "unknown"] as const) expect(authorizeAdmissionForVisibility(admission, visibility).ok).toBe(false);
+      }
+    }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("runs scoped admission against GitHub metadata and preserves the stale-head check", async () => {

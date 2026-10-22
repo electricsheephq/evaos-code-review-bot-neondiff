@@ -837,7 +837,7 @@ async function buildLicenseStatusItem(config: BotConfig, checkedAt: string): Pro
       label: "License",
       state: config.license?.publicReposFree ? "degraded" : "not_configured",
       detail: config.license?.publicReposFree
-        ? "License enforcement is not enabled; public repository mode may work, private activation is still pending."
+        ? "From 1.1.0, public repositories need no key through the GitHub Action, review-pr --ci, and the self-hosted worker (daemon, run-once, review-pr, providers verify). Private work needs activation; the Mac app still needs a key (#1203)."
         : "License configuration is missing.",
       checkedAt,
       redacted: true,

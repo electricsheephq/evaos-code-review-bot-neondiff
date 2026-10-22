@@ -2,11 +2,9 @@
 
 NeonDiff is a local-first, source-available beta. From NeonDiff 1.1.0, review of
 repositories that GitHub reports as public is free, with no license key, through
-the GitHub Action and `neondiff review-pr --ci`, including company-owned public
-repositories. The Mac app and the self-hosted worker (`daemon`, `run-once`, and
-local `review-pr`) still ask for a license key for every repository for now;
-extending free public review to them is tracked in
-[#1191](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191).
+the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker
+(`daemon`, `run-once`, `review-pr`, `providers verify`), including company-owned
+public repositories. The Mac app still requires a license key ([#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203)).
 Private, internal, and
 unknown-visibility repositories require an active license, and unknown
 visibility fails closed. The npm CLI 1.0.x requires API-backed activation for
@@ -26,7 +24,7 @@ its repositories.
 
 | Plan | Price | Best For | Private Repos | Commercial Use | Auto-Updates | Provider Credits |
 | --- | ---: | --- | --- | --- | --- | --- |
-| Public repositories | Free | Any repository that GitHub reports as public, through the GitHub Action or `neondiff review-pr --ci` (1.1.0+; Mac app and self-hosted worker: #1191) | — | Yes | — | Not included |
+| Public repositories | Free | Any repository that GitHub reports as public, through the GitHub Action, `neondiff review-pr --ci`, or the self-hosted worker (1.1.0+; Mac app: #1203) | — | Yes | — | Not included |
 | Solo Monthly | $9/mo | One developer; 7-day trial | Yes | Yes | Yes | Not included |
 | Solo Yearly | $90/yr | One developer, yearly; 7-day trial | Yes | Yes | Yes | Not included |
 | Team Yearly | $290/yr | One GitHub organization, any number of developers; 30-day trial | Yes | Yes | Yes | Not included |
@@ -48,8 +46,8 @@ neondiff pricing
 The pricing command emits JSON by default and does not call the network. It reports:
 
 - review of repositories that GitHub reports as public is free through the
-  GitHub Action and `neondiff review-pr --ci` (1.1.0+); the Mac app and the
-  self-hosted worker still ask for a license key (#1191)
+  GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker (1.1.0+);
+  the Mac app still requires a license key (#1203)
 - private, internal, and unknown-visibility review requires API-backed activation
 - active paid plans are `$9/mo`, `$90/yr` (Solo) and `$290/yr` (Team)
 - Solo plans include a 7-day trial; Team plans include a 30-day trial

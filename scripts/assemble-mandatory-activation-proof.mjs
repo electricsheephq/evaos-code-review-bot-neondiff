@@ -5,17 +5,17 @@ import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 const DENIED_SCENARIOS = [
-  "unknown_repo", "private_denied", "missing_key", "missing_api_url",
+  "unknown_repo", "private_denied", "missing_api_url",
   "offline", "timeout", "forged_cache", "mismatched_cache", "disabled_policy_attempt",
-  "fake_api", "rate_limited", "server_error", "malformed_response", "revoked", "expired",
-  "dashboard_provider_pre_activation"
+  "fake_api", "rate_limited", "server_error", "malformed_response", "revoked", "expired"
 ];
+const ALLOWED_SCENARIOS = ["public_active", "public_free_allowed", "private_active", "missing_key", "dashboard_provider_pre_activation", "daemon_cycle_missing_key", "review_discovery_missing_key"];
 const REQUIRED_BOUNDARY_TESTS = [
   "providers verify license admission denies before provider-key stdin or provider network",
-  "public NeonDiff CLI surface blocks provider-key stdin and provider network before activation",
-  "public NeonDiff CLI surface blocks run-once before the first GitHub request without activation",
-  "public NeonDiff CLI surface applies default-deny admission to useful commands without scoped help metadata",
-  "local HTML dashboard serves HTML status but blocks provider verification before activation"
+  "public NeonDiff CLI surface allows provider-key stdin and provider network for public-only admission",
+  "public NeonDiff CLI surface runs public run-once dry-run without activation",
+  "public NeonDiff CLI surface allows status and coverage commands with public-only admission",
+  "local HTML dashboard serves HTML status and allows provider verification without a license key"
 ];
 
 function fail(message) {
@@ -128,7 +128,7 @@ if (matrixReport.ok !== true || matrixReport.bypassAllowedCases !== 0 || !Array.
   fail("activation matrix report is not passing");
 }
 const scenarioRecords = matrixReport.records;
-const requiredScenarioIds = new Set(["public_active", "public_free_allowed", "private_active", ...DENIED_SCENARIOS]);
+const requiredScenarioIds = new Set([...ALLOWED_SCENARIOS, ...DENIED_SCENARIOS]);
 const observedScenarioIds = new Set();
 for (const record of scenarioRecords) {
   if (!record || typeof record !== "object" || typeof record.id !== "string" || observedScenarioIds.has(record.id)) {
@@ -143,7 +143,7 @@ for (const record of scenarioRecords) {
   if (record.id === "disabled_policy_attempt" && record.visibility !== "private" && record.visibility !== "unknown") {
     fail("disabled policy attempt must deny non-public work");
   }
-  const expected = record.id === "public_active" || record.id === "public_free_allowed" || record.id === "private_active" ? "allowed" : "denied";
+  const expected = ALLOWED_SCENARIOS.includes(record.id) ? "allowed" : "denied";
   if (record.expected !== expected || record.actual !== expected) fail(`activation matrix scenario did not match: ${record.id}`);
   if (!Number.isInteger(record.expectedLicenseApiCalls) || record.expectedLicenseApiCalls < 0) fail(`activation matrix scenario has invalid expected API-call count: ${record.id}`);
   if (!Number.isInteger(record.licenseApiCalls) || record.licenseApiCalls !== record.expectedLicenseApiCalls) {

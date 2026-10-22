@@ -529,7 +529,7 @@ export async function runScheduledObservePass(input: {
   state: ReviewStateStore;
   config: ObserveScheduleConfig | undefined;
   evidenceDir: string;
-  fetchOutcome: (target: ScheduledObserveTarget) => ObservedPullOutcome | Promise<ObservedPullOutcome>;
+  fetchOutcome: (target: ScheduledObserveTarget) => ObservedPullOutcome | undefined | Promise<ObservedPullOutcome | undefined>;
   now?: Date;
 }): Promise<ScheduledObservePassResult> {
   const schedule = input.config;
@@ -549,6 +549,12 @@ export async function runScheduledObservePass(input: {
   const observedRepos = new Set<string>();
   for (const target of targets) {
     const outcome = await input.fetchOutcome(target);
+    if (!outcome) {
+      // The license admission does not cover this repository. Cool it down like an observed repo so
+      // its targets cannot hold every maxPullsPerCycle slot and starve covered repositories.
+      observedRepos.add(target.repo);
+      continue;
+    }
     let labeled = 0;
     let postMergeStatus: OutcomeLedgerPostMergeStatus = outcome.merged ? "no_incident_seen" : "not_merged";
     if (outcome.merged) {

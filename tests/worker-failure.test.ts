@@ -2,13 +2,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BotConfig } from "../src/config.js";
+import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import type { GitNexusCommandRunner } from "../src/gitnexus-context.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { testLicenseAdmission } from "./helpers/license-admission.js";
+import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
 import {
   buildRepoMemoryContext,
   buildReviewApprovalRevision,
@@ -52,6 +52,31 @@ describe("worker review failures", () => {
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("denies private failed-head retries before review or status posts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retry-gate-")); roots.push(root);
+    const config = minimalConfig(root); config.reviewStatusComment = { ...loadConfigFromObject({}).reviewStatusComment!, enabled: true };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1, "head", "base", { state: "closed" });
+    pull.base.repo = { full_name: "electricsheephq/WorldOS", private: true, visibility: "private" };
+    const post = vi.fn(); const review = vi.fn(async () => "reviewed" as const);
+    try {
+      const result = await retryFailedHeadWithDeps({ config, state, github: { getPull: async () => pull, upsertIssueComment: post } as unknown as GitHubApi, budget: new ReviewRunBudget(1), options: { repo: "electricsheephq/WorldOS", pullNumber: 1, headSha: "head", dryRun: false }, reviewPullImpl: review,
+        licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: "public", privateRepoAllowed: false }) });
+      expect(result.status).toBe("skipped_license_gate"); expect(post).not.toHaveBeenCalled(); expect(review).not.toHaveBeenCalled();
+    } finally { state.close(); }
+  });
+
+  it("drops cross-repo review context for public-only admissions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cross-repo-gate-")); roots.push(root);
+    mkdirSync(join(root, "evidence"));
+    const config = minimalConfig(root);
+    config.githubRelatedContext = { enabled: true, packetVersion: "github-related-context-packet-v0.1", maxRelatedItems: 4, maxTitleChars: 120, maxBodyBytes: 200, maxPacketBytes: 12000, requestTimeoutMs: 1000, includeCrossRepoRefs: true };
+    const getIssueOrPull = vi.fn(async () => ({ number: 1, title: "Fixture" }));
+    await buildGitHubRelatedContext({ config, github: { getIssueOrPull }, repo: "owner/public", pull: pullSummary(1, "head", "base", { body: "Refs owner/private#1" }), evidenceDir: join(root, "evidence"),
+      licenseAdmission: await createTestLicenseAdmission({ scope: "public", privateRepoAllowed: false }) });
+    expect(getIssueOrPull).not.toHaveBeenCalled();
   });
 
   it("records a failed head with redacted evidence so duplicate suppression can hold", () => {
@@ -3578,7 +3603,7 @@ function pullSummary(
     base: {
       sha: baseSha,
       ref: "main",
-      repo: { full_name: "electricsheephq/WorldOS" }
+      repo: { full_name: "electricsheephq/WorldOS", private: false, visibility: "public" }
     },
     html_url: `https://github.com/electricsheephq/WorldOS/pull/${number}`
   };

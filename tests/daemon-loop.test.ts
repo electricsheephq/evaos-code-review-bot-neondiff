@@ -10,7 +10,7 @@ import {
 } from "../src/daemon.js";
 import type { BotConfig } from "../src/config.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
-import type { ProductionLicenseAdmission } from "../src/license-admission.js";
+import { requireActiveDaemonCycleAdmissions, type ProductionLicenseAdmission } from "../src/license-admission.js";
 import { ReviewStateStore } from "../src/state.js";
 
 const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
@@ -19,6 +19,25 @@ const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
 });
 
 describe("daemon cycle resilience", () => {
+  it("skips unlicensed enrichment once per process and warns once per public-only cycle", async () => {
+    const admitted = await requireActiveDaemonCycleAdmissions({ config: {} as NonNullable<BotConfig["license"]>, secretReader: { read: () => undefined } });
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) throw new Error("expected keyless daemon admission");
+    const stdout: string[] = [], stderr: string[] = [];
+    const enrichment = vi.fn();
+    for (const cycle of [1, 2]) {
+      const result = await runDaemonCycle({ cycle, dryRun: true, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+        reviewSchedulerEnabled: true, issueEnrichmentEnabled: true, admitDaemonCycleImpl: async () => admitted.admissions,
+        runOnceImpl: async () => ({ ...successfulRunOnceResult(), reviewed: 1, skippedLicenseGate: 2 }),
+        issueEnrichmentCycleImpl: enrichment, recordHeartbeatImpl: () => undefined,
+        stdout: (line) => stdout.push(line), stderr: (line) => stderr.push(line) });
+      expect(result.ok).toBe(true);
+    }
+    expect(enrichment).not.toHaveBeenCalled();
+    expect(stdout.filter((line) => line.includes("issue enrichment requires a Solo or Team license"))).toHaveLength(1);
+    expect(stderr.filter((line) => line.includes("2 pull requests on private, internal or unknown-visibility repositories were skipped: a Solo or Team license is required"))).toHaveLength(2);
+  });
+
   it("fails closed and closes state when the production open-handle probe fails", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-cleanup-probe-"));
     const close = vi.spyOn(ReviewStateStore.prototype, "close");
