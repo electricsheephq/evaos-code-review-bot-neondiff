@@ -26,9 +26,9 @@ for the semver/GA-line and npm dist-tag policy.
   repositories need a Solo or Team license (or an existing legacy license); a repository of unknown visibility
   is skipped. A worker with no key reviews the public repositories and skips
   the rest. The Mac app follows in the Desktop beta.
-- Restricted review for outside contributors on public repositories: a
-  diff-only review with no shell, skills, hooks, web search or image tools and
-  no project docs. If confinement cannot be guaranteed, the review is skipped
+- Restricted review for outside contributors on public repositories: no
+  checkout reads, shell, skills, hooks, web search or image tools, and no
+  project docs or repository wiki. If confinement cannot be guaranteed, the review is skipped
   and the reason is recorded.
 - Private repositories in CI, with the license key read from a runner-owned
   file.
