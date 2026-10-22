@@ -125,7 +125,7 @@ describe("issue enrichment rollout policy", () => {
 
     const status = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
@@ -149,7 +149,7 @@ describe("issue enrichment rollout policy", () => {
 
     const status = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: false,
+      canPost: false,
       modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
@@ -185,7 +185,7 @@ describe("issue enrichment rollout policy", () => {
 
     const status = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
@@ -221,7 +221,7 @@ describe("issue enrichment rollout policy", () => {
 
     const status = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
@@ -257,7 +257,7 @@ describe("issue enrichment rollout policy", () => {
 
     const status = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: true,
+      canPost: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -291,7 +291,7 @@ describe("issue enrichment rollout policy", () => {
 
     const status = buildIssueEnrichmentStatus({
       config,
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z",
       issueReadChecks: [

@@ -1986,7 +1986,7 @@ describe("license activation and entitlement cache", () => {
     const github = new GitHubApi({});
     github.getRepo = async () => {
       getRepoCalls += 1;
-      return { full_name: "owner/cache-unknown-visibility", private: false };
+      return { full_name: "owner/cache-unknown-visibility" };
     };
 
     for (const head of ["unknown-head-a", "unknown-head-b"]) {

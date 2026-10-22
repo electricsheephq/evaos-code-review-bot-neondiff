@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SEVERITY_DEMOTION_NOTE } from "../src/findings.js";
 import { canonicalizeSevereVerificationReceipt } from "../src/severe-verification-receipt-canonical.js";
 import { runSelfConsistencyRecheck, type SelfConsistencyReviewContext } from "../src/self-consistency.js";
 import type { SevereVerificationReceipt, SevereVerificationState } from "../src/severe-verification-receipt-schema.js";
@@ -37,6 +38,57 @@ function receipt(state: SevereVerificationState, confidence = 0.8) {
 }
 
 describe("self-consistency re-check (#303)", () => {
+  it.each(["refuted", "failed", "malformed", "timeout", "unavailable", "stale_head", "incomplete", "capped", "thrown", "invalid", "fingerprint mismatch", "head mismatch", "incomplete confirmed"])("demotes %s without changing identity, confidence or ranked position", async (scenario) => {
+    const severe = comment({ severity: "P1", line: 2, title: "Concern", confidence: 0.9, body: "**P1: Concern**\n\nOriginal text." });
+    const advisory = comment({ severity: "P3", line: 3, title: "Advice", confidence: 0.8 });
+    const secondDraw = vi.fn(() => {
+      if (scenario === "thrown") throw new Error("unavailable");
+      if (scenario === "invalid") return { verified: true };
+      const draw = receipt("confirmed");
+      if (scenario === "fingerprint mismatch") return canonicalizeSevereVerificationReceipt(JSON.stringify({ ...draw.receipt, findingFingerprint: `finding:${"1".repeat(64)}` }));
+      if (scenario === "head mismatch") return canonicalizeSevereVerificationReceipt(JSON.stringify({ ...draw.receipt, headSha: "c".repeat(40) }));
+      if (scenario === "incomplete confirmed") return canonicalizeSevereVerificationReceipt(JSON.stringify({ ...draw.receipt, evidence: { ...draw.receipt.evidence, changedHunk: undefined } }));
+      return receipt(scenario === "capped" ? "confirmed" : scenario as SevereVerificationState);
+    });
+    const result = await runSelfConsistencyRecheck({ comments: [advisory, severe], files, reviewContext,
+      config: { enabled: true, onUnsupported: "demote", maxFindingsPerReview: scenario === "capped" ? 0 : 5 }, secondDraw });
+    expect(result.comments).toEqual([advisory, { ...severe, severity: "P2", severityDemotedFrom: "P1",
+      severityDemotionReason: SEVERITY_DEMOTION_NOTE,
+      body: `${severe.body.replace(/^\*\*P1: /, "**P2: ")}\n\n_Severity lowered from P1: ${SEVERITY_DEMOTION_NOTE}_` }]);
+    expect(result.event).toBe("COMMENT");
+    expect(result.verdicts).toEqual([expect.objectContaining({ action: "demoted", refuted: true })]);
+    expect(secondDraw).toHaveBeenCalledTimes(scenario === "capped" ? 0 : 1);
+  });
+
+  it("retains confirmed P1s in demote mode and never verifies P2/P3", async () => {
+    const severe = comment({ severity: "P1", line: 2, title: "Concern", confidence: 0.9, body: "**P1: Concern**" });
+    const comments = [severe, ...(["P2", "P3"] as const).map((severity) => comment({ severity, line: 3, title: severity, confidence: 0.8 }))];
+    const secondDraw = vi.fn(() => receipt("confirmed"));
+    const result = await runSelfConsistencyRecheck({ comments, files, reviewContext, config: { enabled: true, onUnsupported: "demote" }, secondDraw });
+    expect(result.comments).toEqual(comments);
+    expect(result.event).toBe("REQUEST_CHANGES");
+    expect(secondDraw).toHaveBeenCalledTimes(1);
+    expect(result.verdicts).toEqual([expect.objectContaining({ action: "retained", agreed: true })]);
+  });
+
+  it("suppresses malformed comment prefixes when demotion cannot be applied", async () => {
+    const result = await runSelfConsistencyRecheck({ comments: [comment({ severity: "P1", line: 2, title: "Concern", confidence: 0.9 })],
+      files, reviewContext, config: { enabled: true, onUnsupported: "demote" }, secondDraw: () => receipt("refuted") });
+    expect(result.comments).toEqual([]);
+    expect(result.event).toBe("COMMENT");
+    expect(result.verdicts).toEqual([expect.objectContaining({ action: "suppressed", demotionSkipped: true, refuted: true })]);
+  });
+
+  it("records an action on every suppress-mode verdict", async () => {
+    const comments = Array.from({ length: 5 }, (_, i) => comment({ severity: "P1", line: 2 + i, title: String(i), confidence: 0.9 }));
+    const result = await runSelfConsistencyRecheck({ comments, files, reviewContext, config: { enabled: true, maxFindingsPerReview: 4 },
+      secondDraw: ({ comment: finding }) => {
+        if (finding.title === "2") throw new Error("unavailable");
+        return finding.title === "3" ? {} : receipt(finding.title === "0" ? "confirmed" : "refuted");
+      } });
+    expect(result.verdicts.map((verdict) => verdict.action)).toEqual(["retained", "suppressed", "suppressed", "suppressed", "suppressed"]);
+  });
+
   it("is a no-op with zero second-draw calls when disabled (byte-identical)", async () => {
     const secondDraw = vi.fn();
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];

@@ -7,9 +7,12 @@ listing strategy is retired: the current NeonDiff CLI (v1.0.x) requires
 API-backed activation for public, private, internal, and unknown repository
 work. No Marketplace billing or listing is shipped by this packet.
 
-Coming with the native app: public open-source repository review will be free
-with no NeonDiff Activation Key via the managed GitHub App broker (#614); the
-current CLI still requires activation for every repository.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
+free with no license key through the GitHub Action and `neondiff review-pr --ci`
+(the Mac app and the self-hosted worker still ask for a license key for now,
+#1191); private, internal, and unknown-visibility repositories
+require an active NeonDiff license. A Marketplace listing is a separate decision
+and is not part of that change.
 
 Do not publish the former free-listing copy or imply that installing the GitHub
 App grants review entitlement. A future Marketplace listing must represent the

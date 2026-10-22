@@ -56,7 +56,7 @@ describe("worker review settings preview evidence", () => {
           changes: 5
         }
       ],
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     const result = await reviewPull({
@@ -147,7 +147,7 @@ describe("worker review settings preview evidence", () => {
           changes: 2
         }
       ],
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     const result = await reviewPull({

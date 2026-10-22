@@ -518,7 +518,7 @@ export function buildIssueEnrichmentStatus(input: {
     issueEnrichment?: IssueEnrichmentConfig;
     codexRuntime?: { enabled: boolean };
   };
-  canPostAsApp: boolean;
+  canPost: boolean;
   modelAnalysisAvailable?: boolean;
   checkedAt?: string;
   issueReadChecks?: IssueEnrichmentRepoReadCheck[];
@@ -544,7 +544,7 @@ export function buildIssueEnrichmentStatus(input: {
   ) {
     blockers.push("issue_enrichment_model_runtime_required");
   }
-  if (config.enabled && config.postIssueComment && !input.canPostAsApp) {
+  if (config.enabled && config.postIssueComment && !input.canPost) {
     blockers.push("github_app_credentials_required_for_live_issue_comments");
   }
   if (config.enabled && issueReadFailures.length > 0) {
@@ -625,7 +625,7 @@ export async function collectIssueEnrichmentScan(input: {
   includeExisting?: boolean;
   since?: string;
   sinceByRepo?: Record<string, string>;
-  canPostAsApp?: boolean;
+  canPost?: boolean;
   checkedAt?: string;
   applyGlobalCaps?: boolean;
   shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
@@ -635,7 +635,7 @@ export async function collectIssueEnrichmentScan(input: {
   const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const status = buildIssueEnrichmentStatus({
     config: input.config,
-    canPostAsApp: input.canPostAsApp ?? false,
+    canPost: input.canPost ?? false,
     checkedAt
   });
   const repos = canonicalIssueEnrichmentRepositories(config, input.repo ? [input.repo] : input.repos ?? config.allowlist).map(({ repo }) => repo);
@@ -818,7 +818,7 @@ export async function runIssueEnrichmentCycle(input: {
   };
   const status = buildIssueEnrichmentStatus({
     config: input.config,
-    canPostAsApp: input.github.canPostAsApp(),
+    canPost: input.github.canPost(),
     modelAnalysisAvailable: input.analyzeIssue !== undefined || input.config.codexRuntime?.enabled === true,
     checkedAt
   });
@@ -1033,7 +1033,7 @@ export async function runIssueEnrichmentCycle(input: {
           includeExisting: input.includeExisting,
           since: input.since,
           sinceByRepo,
-          canPostAsApp: input.github.canPostAsApp(),
+          canPost: input.github.canPost(),
           checkedAt,
           applyGlobalCaps: false,
           shouldCountItem: () => false

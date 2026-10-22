@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch } from "./types.js";
@@ -54,6 +54,66 @@ export interface BranchWorktreeInput {
   protectedCheckoutRoot?: string;
   protectedCheckoutRoots?: string[];
   gitCommandTimeoutMs?: number;
+}
+
+/** Fail open to an ordinary review on any unavailable or ambiguous git evidence. */
+export async function computeOwnDiffFingerprint(path: string, baseSha: string, headSha: string): Promise<
+  { fingerprint: string; mergeBase: string } | { error: string }
+> {
+  try {
+    const startedAt = Date.now();
+    const bases = (await run(["-C", path, "merge-base", "--all", baseSha, headSha], 60_000)).stdout.trim().split(/\s+/);
+    if (bases.length !== 1 || !/^[a-f0-9]{40}$/i.test(bases[0]!)) return { error: "ambiguous_merge_base" };
+    const mergeBase = bases[0]!;
+    const diffEnv = { ...process.env };
+    delete diffEnv.GIT_DIFF_OPTS;
+    delete diffEnv.GIT_EXTERNAL_DIFF;
+    const fingerprint = await new Promise<string>((resolve, reject) => {
+      const diff = spawn("git", ["-C", path, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
+        "-c", "diff.ignoreSubmodules=none", "-c", "diff.suppressBlankEmpty=false",
+        "-c", "diff.submodule=short", "-c", "diff.context=3",
+        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--full-index",
+        "--diff-algorithm=myers", "--ignore-submodules=none", "--submodule=short", "-U3", mergeBase, headSha],
+        { env: diffEnv, stdio: ["ignore", "pipe", "ignore"] });
+      const patch = spawn("git", ["-C", path, "patch-id", "--verbatim"], { stdio: ["pipe", "pipe", "ignore"] });
+      let output = "", closed = 0, failed = false;
+      const fail = () => { failed = true; clearTimeout(timer); diff.kill(); patch.kill(); reject(new Error("patch_id_failed")); };
+      const timer = setTimeout(fail, Math.max(1, 60_000 - (Date.now() - startedAt)));
+      const finish = (code: number | null) => {
+        if (code !== 0) fail();
+        if (failed) return;
+        if (++closed === 2) {
+          clearTimeout(timer);
+          const match = /^([a-f0-9]{40}) [a-f0-9]{40}\n?$/i.exec(output);
+          if (match) resolve(`git-patch-id-verbatim-v1:${match[1]}`);
+          else reject(new Error("empty_or_invalid_patch_id"));
+        }
+      };
+      diff.on("error", fail); patch.on("error", fail); patch.stdin.on("error", fail);
+      diff.on("close", finish); patch.on("close", finish);
+      patch.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); if (output.length > 256) fail(); });
+      diff.stdout.pipe(patch.stdin);
+    });
+    return { fingerprint, mergeBase };
+  } catch { return { error: "own_diff_fingerprint_failed" }; }
+}
+
+/**
+ * True only when re-merging the merged base into the anchor head reproduces the new head's tree exactly.
+ * The patch-id fingerprint ignores hunk coordinates; this rejects edits moved between identical blocks.
+ * Conflicts, unsupported git, or any other failure return false so the head is reviewed normally.
+ */
+export async function isBaseMergeOnlyTree(path: string, anchorHead: string, mergedBase: string, head: string): Promise<boolean> {
+  try {
+    const merged = (await run(["-C", path, "merge-tree", "--write-tree", "--no-messages", anchorHead, mergedBase], 60_000)).stdout.trim();
+    const headTree = (await run(["-C", path, "rev-parse", "--verify", `${head}^{tree}`], 60_000)).stdout.trim();
+    return /^[a-f0-9]{40}$/i.test(merged) && merged === headTree;
+  } catch { return false; }
+}
+
+export async function isGitAncestor(path: string, ancestor: string, head: string): Promise<boolean> {
+  try { await run(["-C", path, "merge-base", "--is-ancestor", ancestor, head], 60_000); return true; }
+  catch { return false; }
 }
 
 export async function prepareBranchWorktree(input: BranchWorktreeInput): Promise<PreparedWorktree> {

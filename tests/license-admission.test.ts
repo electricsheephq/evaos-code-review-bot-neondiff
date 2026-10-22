@@ -42,6 +42,23 @@ function fixtureConfig(): LicenseConfig {
 }
 
 describe("production useful-work admission", () => {
+  it("uses an explicit CI machine identity instead of an ambient native identity", async () => {
+    let machineId: unknown;
+    const result = await withRuntimeGitHubCredentials({
+      appId: "4184532", privateKey: "runtime-private-key-fixture", licenseMachineId: brokerDeviceId
+    }, () => requireActiveProductionLicense({
+      config: fixtureConfig(), operation: "review_cycle", repo: "owner/repo", visibility: "private",
+      machineId: "c".repeat(43), now: new Date("2026-07-11T00:00:00.000Z"),
+      fetchImpl: (async (_url, init) => {
+        machineId = JSON.parse(String(init?.body)).machineId;
+        return new Response(JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true }));
+      }) as typeof fetch
+    }));
+    expect(result.ok).toBe(true);
+    expect(machineId).toBe("c".repeat(43));
+    expect(JSON.stringify(result)).not.toContain(key());
+  });
+
   it("uses the native broker device identity for runtime daemon admission", async () => {
     let requestBody: Record<string, unknown> | undefined;
     const result = await withRuntimeGitHubCredentials({

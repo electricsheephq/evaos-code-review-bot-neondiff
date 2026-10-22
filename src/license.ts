@@ -554,7 +554,8 @@ function entitlementUsableDuringOutage(entitlement: LicenseEntitlement, now: Dat
   return checkedAtMs + offlineGraceMs >= now.getTime();
 }
 
-async function callLicenseApi(input: {
+/** Internal no-local-state API core, also used by CI file-backed activation. */
+export async function callLicenseApi(input: {
   config: LicenseConfig;
   path: string;
   licenseKey: string;

@@ -231,7 +231,7 @@ describe("sticky enrichment comments", () => {
   it("reports issue enrichment blockers without failing when the lane is disabled", () => {
     const disabled = buildIssueEnrichmentStatus({
       config: loadConfig(),
-      canPostAsApp: false
+      canPost: false
     });
 
     expect(disabled).toMatchObject({
@@ -255,7 +255,7 @@ describe("sticky enrichment comments", () => {
 
       const enabled = buildIssueEnrichmentStatus({
         config: loadConfig(configPath),
-        canPostAsApp: false
+        canPost: false
       });
 
       expect(enabled.ok).toBe(false);
@@ -366,7 +366,7 @@ describe("sticky enrichment comments", () => {
       enabled: true,
       dryRun: true,
       github: {
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async (input) => {
           calls.push(input);
           return { action: "created", id: 1 };
@@ -382,7 +382,7 @@ describe("sticky enrichment comments", () => {
       enabled: true,
       dryRun: false,
       github: {
-        canPostAsApp: () => false,
+        canPost: () => false,
         upsertIssueComment: async () => {
           throw new Error("should not be called");
         }
@@ -397,7 +397,7 @@ describe("sticky enrichment comments", () => {
       enabled: true,
       dryRun: false,
       github: {
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async (input) => {
           calls.push(input);
           return { action: "updated", id: 7, html_url: "https://github.test/comment/7" };
@@ -418,7 +418,7 @@ describe("sticky enrichment comments", () => {
         enabled: true,
         dryRun: false,
         github: {
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async () => {
             throw new Error("GitHub API 502 ghp_fake_token");
           }
@@ -895,7 +895,7 @@ describe("sticky enrichment comments", () => {
               labels: [{ name: "upstream-intake" }, { name: "upstream-pr" }],
               body: "Attributed preservation record only."
             }],
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
               throw new Error("preservation records must not post");
@@ -987,7 +987,7 @@ describe("sticky enrichment comments", () => {
             }],
             getCollaboratorPermission: async () => "maintain",
             getIssueOrPull: async () => promotedIssue,
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
               return { action: "created" as const, comment: { html_url: "https://github.test/comment/127" } };
@@ -1053,7 +1053,7 @@ describe("sticky enrichment comments", () => {
               updated_at: "2026-08-13T12:58:25Z",
               body: "Current-main reproduction and owner are present."
             }],
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
               throw new Error("must not post after model failure");
@@ -1937,7 +1937,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             ...reader,
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -1950,7 +1950,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             ...reader,
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -2020,7 +2020,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             ...reader,
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post while issue comments are disabled");
             }
@@ -2035,7 +2035,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             ...reader,
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
               posted.push(input);
               return {
@@ -2055,7 +2055,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             ...reader,
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
               posted.push(input);
               return {
@@ -2075,7 +2075,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             ...reader,
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
               posted.push(input);
               return {
@@ -2188,7 +2188,7 @@ describe("sticky enrichment comments", () => {
         let postCalls = 0;
         const github = {
           listIssuesForEnrichment: async () => [issue],
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
             postCalls += 1;
             postedBody = input.body;
@@ -2283,7 +2283,7 @@ describe("sticky enrichment comments", () => {
         }));
         const github = {
           listIssuesForEnrichment: async () => issues,
-          canPostAsApp: () => false,
+          canPost: () => false,
           upsertIssueComment: async () => {
             throw new Error("should not post in dry-run-only mode");
           }
@@ -2360,7 +2360,7 @@ describe("sticky enrichment comments", () => {
         const posted: number[] = [];
         const github = {
           listIssuesForEnrichment: async () => issues,
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async (input: { issueNumber: number }) => {
             const issueNumber = input.issueNumber;
             posted.push(issueNumber);
@@ -2428,7 +2428,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => {
               throw new Error("newly allowlisted repo should baseline before scanning old issues");
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -2453,7 +2453,7 @@ describe("sticky enrichment comments", () => {
                 }
               ];
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -2524,7 +2524,7 @@ describe("sticky enrichment comments", () => {
                 }
               ];
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -2540,7 +2540,7 @@ describe("sticky enrichment comments", () => {
               calls.push({ since: options?.since });
               return [];
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -2625,7 +2625,7 @@ describe("sticky enrichment comments", () => {
                 body: "Acceptance criteria and owner present."
               }
             ],
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               throw new Error("GitHub post failed");
             }
@@ -2687,7 +2687,7 @@ describe("sticky enrichment comments", () => {
                 updated_at: "2026-07-03T04:01:00.000Z",
                 body: "Closed."
               })),
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post in dry-run-only mode");
             }
@@ -2771,7 +2771,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             listIssuesForEnrichment: async () => Object.assign([...issues], { scanCompletion: "complete" as const }),
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               throw new Error("already processed issues should not post again");
             }
@@ -2823,7 +2823,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => {
               throw new Error("dry-run baseline should not scan old issues");
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("dry-run baseline should not post");
             }
@@ -2878,7 +2878,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => {
               throw new Error("manual selected baseline should not scan old issues");
             },
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               throw new Error("manual selected baseline should not post");
             }
@@ -2939,7 +2939,7 @@ describe("sticky enrichment comments", () => {
         };
         const github = {
           listIssuesForEnrichment: async () => [issue],
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async (input: { issueNumber: number; marker: string; body: string }) => {
             posts.push(input);
             return { action: "created" as const, id: 4100, html_url: `https://github.test/comment/${posts.length}` };
@@ -3102,7 +3102,7 @@ describe("sticky enrichment comments", () => {
         };
         const github = {
           listIssuesForEnrichment: async () => [issue],
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async (input: { issueNumber: number; marker: string; body: string }) => {
             posts.push(input);
             return { action: "created" as const, id: 4200, html_url: `https://github.test/comment/${posts.length}` };
@@ -3177,7 +3177,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => {
               throw new Error("should not scan when live issue comments are blocked");
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("should not post without App credentials");
             }
@@ -3245,7 +3245,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             listIssuesForEnrichment: async () => [issue],
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               throw new Error("GitHub rejected comment with ghp_fake_token");
             }
@@ -3285,7 +3285,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => {
               throw new Error("disabled issue enrichment should not scan");
             },
-            canPostAsApp: () => false,
+            canPost: () => false,
             upsertIssueComment: async () => {
               throw new Error("disabled issue enrichment should not post");
             }
@@ -3349,7 +3349,7 @@ describe("sticky enrichment comments", () => {
             listIssuesForEnrichment: async () => {
               throw new Error("GitHub read failed");
             },
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               throw new Error("reader failure test must not post");
             }
@@ -3420,7 +3420,7 @@ describe("sticky enrichment comments", () => {
               readerCalls += 1;
               return [{ number: 71, title: "New issue", state: "open", body: "Acceptance criteria and owner present." }];
             },
-            canPostAsApp: () => true,
+            canPost: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
               return {

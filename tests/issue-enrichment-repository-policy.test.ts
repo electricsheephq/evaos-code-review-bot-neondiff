@@ -66,13 +66,13 @@ describe("issue-enrichment canonical repository policy", () => {
     const disabled = config(["Owner/Repo", "owner/repo"], { "owner/repo": { enabled: false } });
     expect(buildIssueEnrichmentStatus({
       config: { issueEnrichment: disabled, codexRuntime: { enabled: true } },
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true
     })).toMatchObject({ ok: true, state: "ready", liveThresholdsMissingRepos: [] });
     const missing = config(["Owner/Repo", "owner/repo"], { "Owner/Repo": { maxIssuesPerCycle: 1 } });
     expect(buildIssueEnrichmentStatus({
       config: { issueEnrichment: missing, codexRuntime: { enabled: true } },
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true
     }).liveThresholdsMissingRepos).toEqual(["owner/repo"]);
   });
@@ -85,7 +85,7 @@ describe("issue-enrichment canonical repository policy", () => {
     expect(resolveIssueEnrichmentRepoPolicy(value, "Owner/Repo").allowed).toBe(true);
     expect(buildIssueEnrichmentStatus({
       config: { issueEnrichment: value, codexRuntime: { enabled: true } },
-      canPostAsApp: true,
+      canPost: true,
       modelAnalysisAvailable: true
     })).toMatchObject({ ok: true, state: "ready", liveThresholdsMissingRepos: [] });
   });

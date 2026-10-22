@@ -59,14 +59,18 @@ describe("Codex child authentication", () => {
     expect(codexChildUsesApiKeyOnly({ OPENAI_API_KEY: "fake-api-key" }, defaultHome)).toBe(true);
     expect(String(defaultHome.mock.calls[0]?.[0])).toMatch(/[\\/]\.codex[\\/]auth\.json$/);
   });
-  it("keeps the gate on when the parent has a key that the Codex child never receives", () => {
+  it("turns auto mode off only when a forwarded API key is the Codex child's sole auth", () => {
+    const home = mkdtempSync(join(tmpdir(), "neondiff-codex-home-")); roots.push(home);
+    vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "fake-api-key");
-    vi.stubEnv("CODEX_HOME", mkdtempSync(join(tmpdir(), "neondiff-codex-home-")));
-    const child = buildCodexRuntimeEnv(process.env);
-    expect(codexChildUsesApiKeyOnly()).toBe(Boolean(child.OPENAI_API_KEY || child.CODEX_API_KEY));
-    if (!child.OPENAI_API_KEY && !child.CODEX_API_KEY) {
-      expect(isPublicRepoAuthorBlocked(config(), pull("public", "CONTRIBUTOR"))).toBe(true);
-    }
+    vi.stubEnv("CODEX_HOME", home);
+    expect(buildCodexRuntimeEnv(process.env).CODEX_API_KEY).toBe("fake-api-key");
+    expect(codexChildUsesApiKeyOnly()).toBe(true);
+    expect(isPublicRepoAuthorBlocked(config(), pull("public", "CONTRIBUTOR"))).toBe(false);
+    // A ChatGPT login file the read-only sandbox can still read keeps the gate on.
+    vi.stubEnv("CODEX_HOME", join(process.cwd(), "tests/fixtures/codex-home-chatgpt-login"));
+    expect(codexChildUsesApiKeyOnly()).toBe(false);
+    expect(isPublicRepoAuthorBlocked(config(), pull("public", "CONTRIBUTOR"))).toBe(true);
   });
 });
 
@@ -79,8 +83,7 @@ describe("public repository author gate", () => {
           const cfg = config();
           const pr = pull(visibility, association);
           // A key only lifts the gate once it reaches the Codex child; the runtime allowlist does not forward it.
-          const child = buildCodexRuntimeEnv(process.env);
-          const keyReachesCodex = Boolean(child.CODEX_API_KEY || child.OPENAI_API_KEY);
+          const keyReachesCodex = Boolean(buildCodexRuntimeEnv(process.env).CODEX_API_KEY);
           const blocked = !keyReachesCodex && ["public", "unknown"].includes(visibility) &&
             !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "");
           expect(isPublicRepoAuthorBlocked(cfg, pr)).toBe(blocked);
