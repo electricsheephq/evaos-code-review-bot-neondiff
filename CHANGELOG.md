@@ -23,6 +23,10 @@ for the semver/GA-line and npm dist-tag policy.
   failures still exit 1.
 - The secret-rule differential test allows a cold Swift compile (240 s).
 
+### Docs
+
+- The CI runner guide installs 1.1.1 and pins `neondiff-action` v1.0.1.
+
 ## [1.1.0] - docs/releases/v1.1.0.md
 
 ### Added

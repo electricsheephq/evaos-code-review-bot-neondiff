@@ -9,7 +9,7 @@ normal current-head checks.
 
 ## GitHub Actions
 
-For NeonDiff 1.1.0, save the following as `.github/workflows/neondiff.yml`
+For NeonDiff 1.1.1, save the following as `.github/workflows/neondiff.yml`
 on the default branch. Add your own `OPENAI_API_KEY` in repository or
 organization Actions secrets. NeonDiff uses your model access and never pays
 for or proxies model calls. Public repositories need no activation on this CI
@@ -27,13 +27,16 @@ For most repositories, use the
 [`electricsheephq/neondiff-action`](https://github.com/electricsheephq/neondiff-action)
 GitHub Action, which wraps this workflow. Pin it to a release commit, as this
 repository pins every external action:
-`uses: electricsheephq/neondiff-action@982aaa354930f9d8d69893797ae59e95ec5d4c7f # v1.0.0`
+`uses: electricsheephq/neondiff-action@bb6e4ca4e9e94c7e81cf42d3808ef7b092c681b0 # v1.0.1`
 (`@v1` follows later 1.x releases instead). The workflow below does the same
-with the versioned CLI directly. In 1.1.0 a run that posts no review fails the
-job, for example `/neondiff review` on a draft PR (comment events carry no
-draft state, so the workflow cannot filter them), a skipped outside-contributor
-review, or a head that moved before the job started
+with the versioned CLI directly. From 1.1.1 a run that deliberately posts no
+review passes the job with a notice in the log, for example `/neondiff review`
+on a draft PR (comment events carry no draft state, so the workflow cannot
+filter them) or a head that moved before the job started. A skipped
+outside-contributor review passes with a warning. A license-gate skip on a
+private repository and a failed review still fail the job
 ([#1218](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1218)).
+1.1.0 failed the job on every run that posted no review.
 
 ```yaml
 name: NeonDiff review
@@ -87,7 +90,7 @@ jobs:
         run: |
           if [ -n "$MODEL" ]; then export NEONDIFF_MODEL="$MODEL"; fi
           if [ -n "$EFFORT" ]; then export NEONDIFF_REASONING_EFFORT="$EFFORT"; fi
-          npx --yes neondiff@1.1.0 review-pr --ci
+          npx --yes neondiff@1.1.1 review-pr --ci
 ```
 
 Optionally set repository Actions variables `NEONDIFF_MODEL` and
