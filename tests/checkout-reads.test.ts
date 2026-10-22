@@ -210,7 +210,8 @@ describe("checkout reads", () => {
     expect(() => resolveCodexReadConfinement(top, cli, env, true)).toThrow("native binary not found");
     const cpu = process.arch === "x64" ? "x86_64" : "aarch64";
     const target = process.platform === "darwin" ? `${cpu}-apple-darwin` : `${cpu}-unknown-linux-musl`;
-    const bin = join(scope, `codex-${process.platform}-${process.arch}`, "vendor", target, "codex");
+    // The 0.163 platform-package layout: vendor/<target>/bin/codex.
+    const bin = join(scope, `codex-${process.platform}-${process.arch}`, "vendor", target, "bin");
     mkdirSync(bin, { recursive: true }); writeFileSync(join(bin, "codex"), "fixture");
     // Put the checkout beside the package, as in the actual worker.
     const checkout = join(top, "checkout"); mkdirSync(checkout);

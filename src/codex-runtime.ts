@@ -288,10 +288,12 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
     const cpu = process.arch === "x64" ? "x86_64" : process.arch === "arm64" ? "aarch64" : undefined;
     const target = cpu && (process.platform === "linux" ? `${cpu}-unknown-linux-musl`
       : process.platform === "darwin" ? `${cpu}-apple-darwin` : undefined);
-    const native = target && [
-      join(npmScope, `codex-${process.platform}-${process.arch}`, "vendor", target, "codex", "codex"),
-      join(npmScope, "codex", "vendor", target, "codex", "codex")
-    ].find(path => existsSync(path));
+    // 0.163 ships the binary at vendor/<target>/bin/codex in the platform package; older builds used
+    // vendor/<target>/codex/codex, and a bundled install keeps vendor/ inside @openai/codex.
+    const native = target && [`codex-${process.platform}-${process.arch}`, "codex"].flatMap(pkg => [
+      join(npmScope, pkg, "vendor", target, "bin", "codex"),
+      join(npmScope, pkg, "vendor", target, "codex", "codex")
+    ]).find(path => existsSync(path));
     if (!native) throw new Error("codex_runtime_read_confinement_unavailable: npm native binary not found");
     command = realpathSync(native);
   }
