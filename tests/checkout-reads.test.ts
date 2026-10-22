@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -516,7 +516,7 @@ describe("Linux sandbox startup", () => {
   it.each([false, true])("handles probe success=%s after resolving confinement", ok => {
     const probeSandbox = vi.fn(() => ok ? { ok: true as const } : { ok: false as const, detail: "bwrap: loopback: Failed RTM_NEWADDR" });
     const result = resolveCheckoutReadsStatus(input, { ...deps, probeSandbox });
-    expect(probeSandbox).toHaveBeenCalledWith(confinement.command, confinement.readableRoots, input.cwd, expect.any(Object));
+    expect(probeSandbox).toHaveBeenCalledWith(confinement.command, confinement.readableRoots, expect.any(Object));
     expect(result.status).toBe(ok ? "enabled" : "unavailable:confinement");
     if (!ok) {
       expect(result.detail).toContain("bwrap: loopback: Failed RTM_NEWADDR");
@@ -540,22 +540,42 @@ describe("Linux sandbox startup", () => {
     const dir = root(), cli = join(dir, "codex"), counter = join(dir, "calls");
     writeFileSync(cli, `#!/bin/sh\necho x >> "${counter}"\nprintf '\\nfixture failure\\nignored\\n' >&2\nexit ${status}\n`);
     chmodSync(cli, 0o755);
-    const first = probeLinuxSandbox(cli, [dir], dir, {});
+    const first = probeLinuxSandbox(cli, [dir], {});
     expect(first.ok).toBe(status === 0);
     if (!first.ok) expect(first.detail).toMatch(/^fixture failure; .*kernel\.apparmor_restrict_unprivileged_userns=0/);
-    expect(probeLinuxSandbox(cli, [], dir, {})).toEqual(first);
+    expect(probeLinuxSandbox(cli, [], {})).toEqual(first);
     expect(readFileSync(counter, "utf8")).toBe("x\n");
     resetLinuxSandboxProbeCacheForTests();
-    expect(probeLinuxSandbox(cli, [dir], dir, {})).toEqual(first);
+    expect(probeLinuxSandbox(cli, [dir], {})).toEqual(first);
     expect(readFileSync(counter, "utf8")).toBe("x\nx\n");
+  });
+  it("does not cache a probe ended by a signal", () => {
+    const dir = root(), cli = join(dir, "codex"), marker = join(dir, "ran");
+    writeFileSync(cli, `#!/bin/sh\nif [ ! -e "${marker}" ]; then : > "${marker}"; kill -9 $$; fi\nexit 0\n`);
+    chmodSync(cli, 0o755);
+    const killed = probeLinuxSandbox(cli, [dir], {});
+    expect(killed.ok).toBe(false);
+    if (!killed.ok) expect(killed.detail).toMatch(/^terminated by SIGKILL; /);
+    expect(probeLinuxSandbox(cli, [dir], {})).toEqual({ ok: true });
+  });
+  it("runs the probe in an empty CODEX_HOME and working directory, removed afterwards", () => {
+    const dir = root(), cli = join(dir, "codex"), seen = join(dir, "seen"), home = join(dir, "home");
+    mkdirSync(home);
+    writeFileSync(join(home, "config.toml"), "model = [\n");
+    writeFileSync(cli, `#!/bin/sh\nprintf '%s\\n%s\\n' "$CODEX_HOME" "$PWD" > "${seen}"\n[ -z "$(ls -A "$CODEX_HOME")" ] && [ "$(pwd -P)" = "$(cd "$CODEX_HOME" && pwd -P)" ] && [ ! -e .codex ] || exit 1\nexit 0\n`);
+    chmodSync(cli, 0o755);
+    expect(probeLinuxSandbox(cli, [dir], { CODEX_HOME: home })).toEqual({ ok: true });
+    const [scratchHome] = readFileSync(seen, "utf8").split("\n");
+    expect(scratchHome).not.toBe(home);
+    expect(existsSync(scratchHome!)).toBe(false);
   });
   it("does not cache a probe that could not run", () => {
     const dir = root(), cli = join(dir, "codex");
-    const missing = probeLinuxSandbox(cli, [dir], dir, {});
+    const missing = probeLinuxSandbox(cli, [dir], {});
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.detail).toMatch(/ENOENT.*kernel\.apparmor_restrict_unprivileged_userns=0/);
     writeFileSync(cli, "#!/bin/sh\nexit 0\n");
     chmodSync(cli, 0o755);
-    expect(probeLinuxSandbox(cli, [dir], dir, {})).toEqual({ ok: true });
+    expect(probeLinuxSandbox(cli, [dir], {})).toEqual({ ok: true });
   });
 });

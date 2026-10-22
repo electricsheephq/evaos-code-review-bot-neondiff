@@ -1,8 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
@@ -395,20 +395,29 @@ function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | 
   return result.stdout;
 }
 
-const LINUX_SANDBOX_HINT = "the Codex sandbox cannot start on this host; on Ubuntu 23.10 and later allow unprivileged user namespaces (sysctl kernel.apparmor_restrict_unprivileged_userns=0) or see docs/neondiff-config.md#codex-checkout-reads";
+const LINUX_SANDBOX_HINT = "the Codex sandbox cannot start on this host; on Ubuntu 23.10 and later allow unprivileged user namespaces (sysctl kernel.apparmor_restrict_unprivileged_userns=0), see docs/SETUP.md#codex-sandbox-on-linux";
 const linuxSandboxProbeCache = new Map<string, { ok: true } | { ok: false; detail: string }>();
 export function resetLinuxSandboxProbeCacheForTests(): void { linuxSandboxProbeCache.clear(); }
 
-export function probeLinuxSandbox(command: string, readableRoots: string[], cwd: string, env: NodeJS.ProcessEnv): { ok: true } | { ok: false; detail: string } {
+export function probeLinuxSandbox(command: string, readableRoots: string[], env: NodeJS.ProcessEnv): { ok: true } | { ok: false; detail: string } {
   const cached = linuxSandboxProbeCache.get(command);
   if (cached) return cached;
-  const result = spawnSync(command, ["sandbox", ...checkoutReadPermissionArgs(readableRoots), "--", "/bin/sh", "-c", "exit 0"],
-    { cwd, env, timeout: 15_000, encoding: "utf8" });
-  const line = (result.stderr ?? "").split(/\r?\n/).find(line => line.trim())?.trim() ?? result.error?.message ?? "";
+  // An empty CODEX_HOME and working directory keep user and project Codex config out of the probe, as
+  // `exec --ignore-user-config` does for the review, so it tests sandbox startup alone.
+  const scratch = mkdtempSync(join(tmpdir(), "neondiff-sandbox-probe-"));
+  let result: SpawnSyncReturns<string>;
+  try {
+    result = spawnSync(command, ["sandbox", ...checkoutReadPermissionArgs(readableRoots), "--", "/bin/sh", "-c", "exit 0"],
+      { cwd: scratch, env: { ...env, CODEX_HOME: scratch }, timeout: 15_000, encoding: "utf8" });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  const line = (result.stderr ?? "").split(/\r?\n/).find(line => line.trim())?.trim()
+    ?? result.error?.message ?? (result.signal ? `terminated by ${result.signal}` : `exit ${result.status}`);
   const outcome = result.status === 0 ? { ok: true as const }
     : { ok: false as const, detail: `${redactSecrets(line).slice(0, 200)}; ${LINUX_SANDBOX_HINT}` };
-  // A timeout or spawn error says nothing lasting about the host, so only an exit status is cached.
-  if (!result.error) linuxSandboxProbeCache.set(command, outcome);
+  // A timeout, signal or spawn error says nothing lasting about the host, so only an exit status is cached.
+  if (result.status !== null) linuxSandboxProbeCache.set(command, outcome);
   return outcome;
 }
 
@@ -446,7 +455,7 @@ export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; res
     }
     if (input.restrictTools) return { status: "enabled", confinement };
     if (input.probeSandbox === true && platform === "linux") {
-      const probe = (dependencies.probeSandbox ?? probeLinuxSandbox)(confinement.command, confinement.readableRoots, input.cwd, env);
+      const probe = (dependencies.probeSandbox ?? probeLinuxSandbox)(confinement.command, confinement.readableRoots, env);
       if (!probe.ok) return { status: "unavailable:confinement", detail: probe.detail.includes(LINUX_SANDBOX_HINT) ? probe.detail : `${probe.detail}; ${LINUX_SANDBOX_HINT}` };
     }
   } catch (error) {

@@ -728,9 +728,7 @@ passes.
 
 On Linux, `neondiff daemon start|stop|status` intentionally does not call
 `launchctl`. It returns JSON with `serviceManager: "systemd"` and points to the
-Linux service guide. For Codex checkout reads, see the
-[Linux sandbox setup](neondiff-config.md#codex-checkout-reads).
-Use [docs/systemd.md](systemd.md) for user/system services,
+Linux service guide. Use [docs/systemd.md](systemd.md) for user/system services,
 [docs/docker.md](docker.md) for the Compose recipe, and
 [docs/ci-runner.md](ci-runner.md) for one-shot Ubuntu runner checks.
 
@@ -742,6 +740,17 @@ Platform support at this beta stage:
 | Linux | systemd or Docker | Packaged and guarded by Ubuntu smoke tests; provider setup still varies by host |
 | CI runners | One-shot dry-run/review commands | Documented for Ubuntu-style runners |
 | Windows | CLI-only | Untested; no supervised daemon claim |
+
+### Codex sandbox on Linux
+
+Codex confines checkout reads with a sandbox that needs unprivileged user
+namespaces. Ubuntu 23.10 and later, and most Docker containers, block them. On
+Linux, NeonDiff checks once per Codex binary that the sandbox can start; if it
+cannot, reviews run diff-only with a `[checkout-reads]` warning. Allow the
+namespaces with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`,
+persist the setting in a file under `/etc/sysctl.d/`, then restart the daemon so
+it checks again. The documented Actions workflow in
+[docs/ci-runner.md](ci-runner.md) includes this step.
 
 Public source-beta promotion additionally uses
 [docs/public-release-manifest.json](public-release-manifest.json). The manifest
