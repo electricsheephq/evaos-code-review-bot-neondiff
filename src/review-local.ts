@@ -32,7 +32,8 @@ function gitPath(raw: string): string {
 export function parseLocalDiff(diff: string): PullFilePatch[] {
   return diff.split(/(?=^diff --git )/m).filter(x => x.startsWith("diff --git ")).map(section => {
     const lines = section.split("\n");
-    const header = /^diff --git ("(?:\\.|[^"])*"|a\/.*?) ("(?:\\.|[^"])*"|b\/.*)$/.exec(lines[0]!);
+    // Escapes and plain characters are disjoint, so a quoted path cannot backtrack exponentially.
+    const header = /^diff --git ("(?:\\.|[^"\\])*"|a\/.*?) ("(?:\\.|[^"\\])*"|b\/.*)$/.exec(lines[0]!);
     if (!header) throw new Error("Unsupported git diff header");
     const hunk = lines.findIndex(line => line.startsWith("@@ "));
     const metadata = hunk < 0 ? lines : lines.slice(0, hunk);

@@ -21,7 +21,9 @@ vi.mock("node:child_process", async (original) => {
   const actual = await original<typeof import("node:child_process")>();
   return { ...actual, spawn: (command: string, args: string[], options: object) =>
     mocks.patchOutput !== undefined && args.includes("patch-id")
-      ? actual.spawn(process.execPath, ["-e", `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(mocks.patchOutput)}));`], options)
+      // The fixture output travels in the environment, not in the evaluated code.
+      ? actual.spawn(process.execPath, ["-e", "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(process.env.NEONDIFF_TEST_PATCH_OUTPUT));"],
+        { ...options, env: { ...((options as { env?: NodeJS.ProcessEnv }).env ?? process.env), NEONDIFF_TEST_PATCH_OUTPUT: mocks.patchOutput } })
       : actual.spawn(command, args, options) };
 });
 vi.mock("../src/codex-runtime.js", async (original) => ({
