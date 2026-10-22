@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import { isLeanReleaseVersion } from "../src/release-version.ts";
+import { verifyLeanPack } from "./release-npm.mjs";
+
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -43,6 +46,13 @@ const tarballPath = args.get("tarball");
 const existingPackageRecovery = args.get("existing-package-recovery") ?? "false";
 const prepublication = args.get("prepublication") ?? "false";
 const candidateLedgerArg = args.get("candidate-ledger");
+if (isLeanReleaseVersion(expectedVersion)) {
+  if (!packPath || !tarballPath || !releaseHead) fail("lean release requires --pack --tarball --release-head");
+  if (execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim() !== releaseHead) fail("release head does not match the checked-out commit");
+  const pack = verifyLeanPack(packPath, tarballPath, expectedVersion);
+  console.log(JSON.stringify({ ok: true, version: expectedVersion, releaseHead, packShasum: pack.shasum, packIntegrity: pack.integrity, publicReady: false, publicationGate: "release-npm.yml" }));
+  process.exit(0);
+}
 if (!manifestPath || !expectedVersion || !candidateHead || !releaseHead || !packPath || !tarballPath) {
   fail("required arguments: --manifest --expected-version --candidate-head --release-head --pack --tarball");
 }

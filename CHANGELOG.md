@@ -14,6 +14,13 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+## [1.1.0] - docs/releases/v1.1.0.md
+
+### Changed
+
+- Use the lean npm release path with exact-commit CI, provenance verification,
+  registry read-back and owner-driven channel rollback.
+
 ## [1.0.6] - docs/releases/v1.0.6.md
 
 ### Changed
