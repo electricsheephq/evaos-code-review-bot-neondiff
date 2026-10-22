@@ -375,18 +375,18 @@ describe("beta release status", () => {
     expect(readPublicReleaseManifestStatus({ cwd: root, manifestPath: "public-release.json", expectedVersion: "v1.0.6-beta.1" }).npmPublication.detail).toContain("immutable predecessor must be older than 1.0.6-beta.1");
   });
 
-  it("uses the v1.0.5 candidate ledger for first-publication readiness", () => {
+  it("uses the v1.0.6 candidate ledger for first-publication readiness", () => {
     const candidate = readPublicReleaseManifestStatus({
       cwd: repoRoot,
-      manifestPath: "docs/release-candidates/v1.0.5.json",
-      expectedVersion: "v1.0.5"
+      manifestPath: "docs/release-candidates/v1.0.6.json",
+      expectedVersion: "v1.0.6"
     });
     expect(candidate.releaseLevelGate.ok).toBe(true);
     expect(candidate.docs.ok).toBe(true);
     expect(candidate.licenseApi.ok).toBe(true);
     expect(candidate.updateChannels.ok).toBe(true);
     expect(candidate.licenseApi.activationProofPath).toBe(
-      "docs/evidence/v1.0.5/mandatory-activation-348b99da43fd7282f6b88a0ce5b407528433cd1d.json"
+      "docs/evidence/v1.0.6/mandatory-activation-d9da83bd52c70e388adeb6f000e11e11442c6215.json"
     );
     expect(candidate.npmPublication).toMatchObject({
       ok: false,
@@ -654,8 +654,8 @@ describe("beta release status", () => {
         setupPath: "docs/SETUP.md",
         releaseNotesPath: "docs/releases/v1.0.4.md",
         changelogPath: "CHANGELOG.md",
-        changelogHeadVersion: "1.0.5",
-        changelogReleaseNotesPath: "docs/releases/v1.0.5.md"
+        changelogHeadVersion: "1.0.6",
+        changelogReleaseNotesPath: "docs/releases/v1.0.6.md"
       },
       licenseApi: {
         ok: true,

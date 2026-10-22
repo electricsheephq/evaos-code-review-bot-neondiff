@@ -76,11 +76,34 @@
         }
       }
     },
+    "codexRuntime": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "cliPath": { "type": "string", "pattern": "\\S", "default": "codex" },
+        "model": { "type": "string", "pattern": "\\S", "default": "gpt-6.1-sol" },
+        "reasoningEffort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "default": "high" },
+        "timeoutMs": { "type": "integer", "minimum": 1, "default": 600000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1, "default": 20971520 },
+        "contextWindowTokens": { "type": "integer", "minimum": 1, "default": 500000 }
+      },
+      "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
+      "then": { "properties": { "cliPath": { "pattern": "^(?:codex|/.*|[A-Za-z]:[\\\\/].*|\\\\\\\\.*)$" } } }
+    },
     "reviewGate": {
       "description": "Public review-event selection policy. Omission uses the safe trusted-command-only runtime default.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "publicRepoAuthorGate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "enum": ["auto", "on", "off"], "default": "auto" },
+            "allowedAssociations": { "type": "array", "items": { "enum": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"] }, "default": ["OWNER", "MEMBER", "COLLABORATOR"] },
+            "allowedLogins": { "type": "array", "items": { "type": "string", "pattern": "^\\S(?:.*\\S)?$" }, "default": ["dependabot[bot]", "renovate[bot]"] }
+          }
+        },
         "reviewEventPolicy": {
           "description": "Selects whether REQUEST_CHANGES requires a one-shot exact-head trusted command. automatic is explicit legacy compatibility only.",
           "type": "object",

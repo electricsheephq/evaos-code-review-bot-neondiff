@@ -131,9 +131,9 @@ public struct CodexRuntimeSettings: Equatable, Sendable {
 
     public init(
         enabled: Bool = false,
-        cliPath: String = "/usr/local/bin/codex",
-        model: String = "gpt-5.6-luna",
-        reasoningEffort: String = "max"
+        cliPath: String = "codex",
+        model: String = "gpt-6.1-sol",
+        reasoningEffort: String = "high"
     ) {
         self.enabled = enabled
         self.cliPath = cliPath
@@ -143,7 +143,7 @@ public struct CodexRuntimeSettings: Equatable, Sendable {
 
     public var isReady: Bool {
         enabled
-            && NSString(string: cliPath).isAbsolutePath
+            && (cliPath == "codex" || NSString(string: cliPath).isAbsolutePath)
             && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && ["low", "medium", "high", "xhigh", "max"].contains(reasoningEffort)
     }

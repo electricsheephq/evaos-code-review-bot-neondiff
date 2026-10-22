@@ -161,6 +161,25 @@ describe("NeonDiff config schema draft", () => {
     );
   });
 
+  it("documents Codex runtime defaults and rejects invalid effort, limits, paths, and author policy", () => {
+    const schema = readJson(schemaPath);
+    expect(get("properties.codexRuntime.properties.model.default", schema)).toBe("gpt-6.1-sol");
+    expect(get("properties.codexRuntime.properties.reasoningEffort.default", schema)).toBe("high");
+    expect(get("properties.codexRuntime.properties.contextWindowTokens.default", schema)).toBe(500000);
+    const validate = compileSchema(); const base = readJson(join(fixtureRoot, "valid-minimal.json"));
+    for (const cliPath of ["codex", "/opt/homebrew/bin/codex"]) {
+      expectValidFixture(validate, cliPath, { ...base, codexRuntime: { enabled: true, cliPath, reasoningEffort: "max" } });
+    }
+    for (const codexRuntime of [{ reasoningEffort: "ultra" }, { timeoutMs: 0 }, { contextWindowTokens: 1.5 },
+      { enabled: true, cliPath: "./codex" }, { enabled: false, cliPath: " " }]) {
+      expect(validateConfig(validate, { ...base, codexRuntime })).not.toEqual([]);
+    }
+    expectValidFixture(validate, "author gate defaults", { ...base, reviewGate: { publicRepoAuthorGate: {} } });
+    for (const publicRepoAuthorGate of [{ mode: "invalid" }, { allowedAssociations: ["owner"] }, { allowedLogins: [""] }]) {
+      expect(validateConfig(validate, { ...base, reviewGate: { publicRepoAuthorGate } })).not.toEqual([]);
+    }
+  });
+
   it("accepts the safe review-event default and only the explicit legacy compatibility mode", () => {
     const validate = compileSchema();
     const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
