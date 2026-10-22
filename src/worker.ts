@@ -2414,6 +2414,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
     // dry-run branch, immediately before posting — so exactly one of a racing manual-review-pr and
     // daemon posts a review on this head. The loser records a structured skip and no-ops.
+    const otherProcessedOwnerSupersession = commandReviewRequested ||
+      (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
+      input.processedHeadPolicy === "approved_dry_run" ||
+      input.processedHeadPolicy === "retry_failed_head";
     const headClaimAttempt = state.tryClaimReviewHeadWithOutcome({
       repo,
       pullNumber: pull.number,
@@ -2421,17 +2425,21 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       claimTtlMs: config.reviewConcurrency.leaseTtlMs,
       // retry_failed_head is admitted only after the earlier processed-status validation; it must
       // be able to replace that failed/deferred row after a successful provider retry.
-      allowProcessedOwnerSupersession: baseMergeOnlySupersession || commandReviewRequested ||
-        (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
-        input.processedHeadPolicy === "approved_dry_run" ||
-        input.processedHeadPolicy === "retry_failed_head",
+      allowProcessedOwnerSupersession: baseMergeOnlySupersession || otherProcessedOwnerSupersession,
       ...(input.processedHeadPolicy === "approved_dry_run"
         ? {
             requiredProcessedStatusForSupersession: "dry_run" as const,
             requiredProcessedConfigRevisionForSupersession: input.configRevision,
             consumeProcessedApprovalOnAcquire: true
           }
-        : {})
+        // A carried skip read before the claim authorizes replacing only that skip; the claim
+        // transaction re-checks it so a review posted in between is never superseded.
+        : baseMergeOnlySupersession && !otherProcessedOwnerSupersession
+          ? {
+              requiredProcessedStatusForSupersession: "skipped" as const,
+              requiredProcessedErrorForSupersession: "base_merge_only"
+            }
+          : {})
     });
     if (headClaimAttempt.status === "blocked") {
       if (headClaimAttempt.reason === "active_claim") {

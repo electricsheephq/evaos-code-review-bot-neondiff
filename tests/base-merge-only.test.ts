@@ -329,6 +329,24 @@ it.each([false, true])("preserves a posted row arriving before %s dry-run/claim 
   if (dryRun) expect(record).toHaveBeenCalledWith(expect.objectContaining({ allowBaseMergeOnlySupersession: false }));
   else expect(claim).toHaveBeenCalledWith(expect.objectContaining({ allowProcessedOwnerSupersession: false }));
 });
+it("re-checks the carried skip inside the claim transaction", async () => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  expect(await f.run()).toBe("skipped_base_merge_only");
+  const winner = { repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, status: "posted" as const,
+    reviewUrl: "https://github.com/org/repo/pull/1#pullrequestreview-99" };
+  const realClaim = f.state.tryClaimReviewHeadWithOutcome.bind(f.state);
+  // Another run posts after the pre-claim read but before this run's claim transaction.
+  const claim = vi.spyOn(f.state, "tryClaimReviewHeadWithOutcome").mockImplementationOnce((input) => {
+    f.state.recordProcessed(winner);
+    return realClaim(input);
+  });
+  vi.spyOn(GitHubApi.prototype, "createReview").mockImplementation(f.post);
+  expect(await f.run({ dryRun: false, manualQueueJob: true })).toBe("skipped_processed");
+  expect(claim).toHaveBeenCalledWith(expect.objectContaining({ allowProcessedOwnerSupersession: true,
+    requiredProcessedStatusForSupersession: "skipped", requiredProcessedErrorForSupersession: "base_merge_only" }));
+  expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)).toMatchObject(winner);
+  expect(f.post).not.toHaveBeenCalled();
+});
 it.each(["dry_run", "posted", "claim"])("a racing %s prevents the skip and readiness write", async (kind) => {
   const f = fixture(); await f.anchor(); f.mergeBase();
   const prepare = mocks.prepare.getMockImplementation()!;

@@ -172,6 +172,7 @@ export interface ReviewHeadClaimInput {
   allowProcessedOwnerSupersession?: boolean;
   requiredProcessedStatusForSupersession?: ProcessedStatus;
   requiredProcessedConfigRevisionForSupersession?: string;
+  requiredProcessedErrorForSupersession?: string;
   consumeProcessedApprovalOnAcquire?: boolean;
 }
 
@@ -1792,11 +1793,12 @@ export class ReviewStateStore {
       }
       const processed = this.db
         .prepare(
-          "select status, config_revision from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+          "select status, config_revision, error from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
         )
         .get(input.repo, input.pullNumber, input.headSha) as {
           status: ProcessedStatus;
           config_revision: string | null;
+          error: string | null;
         } | undefined;
       if (processed) {
         const allowed = input.allowProcessedOwnerSupersession &&
@@ -1807,6 +1809,10 @@ export class ReviewStateStore {
           (
             input.requiredProcessedConfigRevisionForSupersession === undefined ||
             processed.config_revision === input.requiredProcessedConfigRevisionForSupersession
+          ) &&
+          (
+            input.requiredProcessedErrorForSupersession === undefined ||
+            processed.error === input.requiredProcessedErrorForSupersession
           );
         if (!allowed) {
           this.db.exec("commit");
