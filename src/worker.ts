@@ -1302,7 +1302,8 @@ function retryQueuePatchForStatus(input: {
         sessionProcessedStatus: "skipped"
       };
     case "untrusted_author_public_repo":
-      return { state: "blocked_on_proof", lastError: input.status,
+      // Terminal, matching the scheduler path: blocked_on_proof jobs are re-leased every cycle.
+      return { state: "stale_retired", lastError: input.status,
         sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
     case "skipped_license_gate":
       return {
