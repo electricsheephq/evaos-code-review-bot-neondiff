@@ -127,6 +127,192 @@ describe("changed-surface validation selector", () => {
     }
   });
 
+  it("keeps proof stated in one bullet when an unrelated bullet contains a negation", () => {
+    const body = [
+      "## Evidence",
+      "- `npm run build`: exit 0.",
+      "- Focused Vitest on worker.ts and scheduler.ts: 287 passed.",
+      "- New tests check for no provider call and no post; config validation."
+    ].join("\n");
+    const pullWithProof = pull({ body });
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: pullWithProof,
+      files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+    });
+    const proof = evaluateProofRequirements({ pull: pullWithProof, validation });
+
+    expect(proof.status).toBe("sufficient");
+    expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests"]));
+  });
+
+  it("still vetoes proof negated in the same sentence or line", () => {
+    const weakBodies = [
+      "The previous build passed in v1.0.6 but we reverted that branch.",
+      "- prior head only: tests passed",
+      "Not yet: focused Vitest on worker.ts passed only locally"
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status, body).toBe("missing");
+      expect(proof.detectedEvidence, body).toEqual([]);
+    }
+  });
+
+  it("keeps a proof match that spans a semicolon or a line break", () => {
+    const cases = [
+      { repo: "electricsheephq/evaos-code-review-bot", file: "src/worker.ts", body: "`npm run build`\n`npm test`; passed." },
+      { repo: "electricsheephq/WorldOS", file: "Assets/Scenes/Main.unity", body: "Play\nMode verified." }
+    ];
+
+    for (const { repo, file, body } of cases) {
+      const pullWithProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo,
+        pull: pullWithProof,
+        files: [{ filename: file, additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithProof, validation }).status, body).toBe("sufficient");
+    }
+  });
+
+  it("keeps historical qualifiers across semicolons and from a list's lead-in line", () => {
+    const weakBodies = [
+      "Previous validation: build passed; tests passed.\nCurrent head: npm run build passed.",
+      "Previous validation:\n\n- build passed\n- tests passed\n\nCurrent head: npm run build passed."
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status, body).toBe("missing");
+      expect(proof.detectedEvidence, body).not.toContain("tests");
+    }
+  });
+
+  it("does not let a proof match borrow an outcome or a qualifier across sentences and lists", () => {
+    const weakBodies = [
+      "build: not run. tests passed",
+      "- Previous validation:\n  - build passed\n  - tests passed",
+      "## Previous validation\nThe build passed and tests passed.\n\n## Notes\nNothing else.",
+      "build passed; tests passed (previous validation only).",
+      "No validation was run, e.g. npm run build."
+    ];
+
+    for (const body of weakBodies) {
+      const pullWithWeakProof = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithWeakProof,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      const proof = evaluateProofRequirements({ pull: pullWithWeakProof, validation });
+
+      expect(proof.status, body).toBe("missing");
+      expect(proof.detectedEvidence, body).not.toContain("build/typecheck");
+    }
+  });
+
+  it("finds current proof after a rejected historical mention", () => {
+    const body = "Previous tests passed. Current tests passed.\nBuild passed.";
+    const pullWithProof = pull({ body });
+    const validation = buildChangedSurfaceValidationReport({
+      repo: "electricsheephq/evaos-code-review-bot",
+      pull: pullWithProof,
+      files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+    });
+    const proof = evaluateProofRequirements({ pull: pullWithProof, validation });
+
+    expect(proof.status).toBe("sufficient");
+    expect(proof.detectedEvidence).toEqual(expect.arrayContaining(["build/typecheck", "tests"]));
+  });
+
+  it("reads abbreviations, prose lead-ins and nested headings the way authors write them", () => {
+    const cases: Array<[string, "sufficient" | "missing"]> = [
+      ["## Validation\nBuild passed.\nTests (e.g. worker and scheduler) passed.", "sufficient"],
+      ["## Validation\n- npm run build: exit 0\n- Unit tests (incl. regression cases): 42 passed.", "sufficient"],
+      ["## Previous release\nPrevious validation: build passed; tests passed.\n\n## Validation for this release\n- Build passed.\n- Tests passed.", "sufficient"],
+      ["Previous validation:\nBuild passed.\nTests passed.", "missing"],
+      ["## Previous validation\n### Commands\n- Build passed.\n- Tests passed.", "missing"],
+      ["Previous validation\n- build passed\n- tests passed", "missing"],
+      ["Previous validation\n\n- build passed\n- tests passed", "missing"],
+      ["- Previous validation:\n  Build passed and tests passed.", "missing"],
+      ["## Previous validation\n```md\n## Example\n```\n- build passed\n- tests passed", "missing"],
+      ["## Validation\n- npm run build passed\n  (all 12 packages)\n- tests passed", "sufficient"],
+      ["## Validation\n```\n$ npm test\n```\n- build passed\n- tests passed", "sufficient"],
+      ["## Previous validation\n```bash\n# run\nnpm run build\n```\nBuild passed.", "missing"],
+      ["```bash\n# not run\n```\n- npm run build passed\n- tests passed", "sufficient"],
+      ["Previous validation:\n- build passed\n\nCurrent head: npm run build passed.\nTests passed.", "sufficient"]
+    ];
+
+    for (const [body, expected] of cases) {
+      const pullWithBody = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithBody,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithBody, validation }).status, body).toBe(expected);
+    }
+  });
+
+  it("keeps historical scope through blockquotes, Setext headings, long fences and standalone labels", () => {
+    const cases: Array<[string, "sufficient" | "missing"]> = [
+      ["> ## Previous validation\n> - build passed\n> - tests passed", "missing"],
+      ["> ## Validation\n> - build passed\n> - tests passed", "sufficient"],
+      ["Previous validation\n===================\nBuild passed.\nTests passed.", "missing"],
+      ["Previous validation\n---\n- build passed\n- tests passed", "missing"],
+      ["Previous validation\n===\nOld.\n\nValidation\n===\nBuild passed.\nTests passed.", "sufficient"],
+      ["Some notes.\n\n---\n\n- build passed\n- tests passed", "sufficient"],
+      ["## Previous validation\n````md\n```\n## Example\n```\n````\n- build passed\n- tests passed", "missing"],
+      ["## Validation\n~~~\n```\n## Previous validation\n~~~\n- build passed\n- tests passed", "sufficient"],
+      ["**Previous validation**\nBuild passed.\nTests passed.", "missing"],
+      ["Current head:\nPrevious validation\nBuild passed.\nTests passed.", "missing"],
+      ["**Previous validation**\n\nBuild passed.\nTests passed.", "sufficient"]
+    ];
+
+    for (const [body, expected] of cases) {
+      const pullWithBody = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/evaos-code-review-bot",
+        pull: pullWithBody,
+        files: [{ filename: "src/worker.ts", additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithBody, validation }).status, body).toBe(expected);
+    }
+  });
+
+  it("applies Unity qualifiers to screenshot and recording proof", () => {
+    const cases: Array<[string, "sufficient" | "missing"]> = [
+      ["## Previous Unity validation\n- Screenshot attached.", "missing"],
+      ["## Unity validation\n- Screenshot attached.", "sufficient"]
+    ];
+
+    for (const [body, expected] of cases) {
+      const pullWithBody = pull({ body });
+      const validation = buildChangedSurfaceValidationReport({
+        repo: "electricsheephq/WorldOS",
+        pull: pullWithBody,
+        files: [{ filename: "Assets/Scenes/Main.unity", additions: 1, deletions: 0 }]
+      });
+      expect(evaluateProofRequirements({ pull: pullWithBody, validation }).status, body).toBe(expected);
+    }
+  });
+
   it("does not count negated Unity visual proof as evidence", () => {
     const pullWithNegatedProof = pull({
       body: "No screenshot or recording was captured."
