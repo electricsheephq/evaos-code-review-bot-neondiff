@@ -1,6 +1,6 @@
-import { accessSync, constants, readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import type { BotConfig } from "./config.js";
 import type { CodexReasoningEffort } from "./codex-runtime.js";
 import { isAuthoredBy, type GitHubApi } from "./github.js";
@@ -32,9 +32,11 @@ export function readCiPullContext(env: NodeJS.ProcessEnv = process.env): CiPullC
 export function buildCiConfig(base: BotConfig, ctx: CiPullContext, env: NodeJS.ProcessEnv = process.env): BotConfig {
   const effort = env.NEONDIFF_REASONING_EFFORT ?? "high";
   if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error("NEONDIFF_REASONING_EFFORT must be a valid Codex reasoning effort");
-  const cliPath = (env.PATH ?? "").split(delimiter).map((dir) => resolve(dir, "codex")).find((path) => {
-    try { accessSync(path, constants.X_OK); return true; } catch { return false; }
-  });
+  // Empty or relative PATH entries resolve against the cwd, which in CI is the PR-controlled checkout.
+  const cliPath = (env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0 && isAbsolute(dir))
+    .map((dir) => join(dir, "codex")).find((path) => {
+      try { accessSync(path, constants.X_OK); return statSync(path).isFile(); } catch { return false; }
+    });
   if (!cliPath) throw new Error("--ci requires codex on PATH");
   const root = join(env.RUNNER_TEMP || tmpdir(), "neondiff-ci");
   return {

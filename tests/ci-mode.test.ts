@@ -56,6 +56,17 @@ describe("CI review", () => {
     expect(custom.codexRuntime).toMatchObject({ model: "fixture-model", reasoningEffort: "medium" });
     expect(() => buildCiConfig(base, ctx, { ...env, NEONDIFF_REASONING_EFFORT: "invalid" })).toThrow(/effort/);
   });
+  it("ignores empty and relative PATH entries so a PR-planted codex is never chosen", () => {
+    const env = context({ pull_request: { number: 1, head: { sha } } });
+    const ctx = readCiPullContext(env), base = loadConfig();
+    const checkout = mkdtempSync(join(tmpdir(), "neondiff-ci-checkout-")); roots.push(checkout);
+    const planted = join(checkout, "codex"); writeFileSync(planted, "#!/bin/sh\nexit 0\n"); chmodSync(planted, 0o700);
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(checkout);
+    try {
+      expect(() => buildCiConfig(base, ctx, { ...env, PATH: ["", ".", "bin"].join(":") })).toThrow(/codex on PATH/);
+      expect(buildCiConfig(base, ctx, { ...env, PATH: ["", ".", env.PATH].join(":") }).codexRuntime!.cliPath).toBe(join(env.PATH, "codex"));
+    } finally { cwd.mockRestore(); }
+  });
   it("uses the fallback token for review and comment creation/update without App credentials", async () => {
     const requests: { url: string; method: string; body: any }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url, init) => {
