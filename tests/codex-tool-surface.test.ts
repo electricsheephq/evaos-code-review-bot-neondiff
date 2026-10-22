@@ -78,7 +78,8 @@ it.skipIf(!enabled || process.platform !== "linux" || !process.env.CI)("Linux pe
   const flags = invocation.args.flatMap((arg, i, args) => arg === "-c" ? [arg, args[i + 1]!] : []);
   // Exact paths arrive as arguments (the sandbox may not forward RUNNER_TEMP); the checkout file is the positive control.
   const script = 'for path in "$@" /proc/$PPID/environ; do if cat "$path" >/dev/null 2>&1; then printf "READABLE:%s\\n" "$path"; else printf "DENIED:%s\\n" "$path"; fi; done';
-  const result = await run(invocation.command, ["sandbox", "linux", "--ignore-user-config", ...flags, "--", "/bin/sh", "-c", script, "probe",
+  // Codex 0.163 runs the platform sandbox from `codex sandbox` itself; the fixture's CODEX_HOME holds no user config.
+  const result = await run(invocation.command, ["sandbox", ...flags, "--", "/bin/sh", "-c", script, "probe",
     inside, "/proc/self/environ", runnerFile, outside], cwd, env);
   expect(result.code, result.output).toBe(0);
   expect(result.output, "the probe must be able to read the checkout").toContain(`READABLE:${inside}\n`);
