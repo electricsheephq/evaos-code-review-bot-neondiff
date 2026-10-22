@@ -83,7 +83,8 @@ describe("public NeonDiff CLI surface", () => {
       "license status",
       "license deactivate",
       "status",
-      "review-pr"
+      "review-pr",
+      "review-local"
     ]);
     expect(output.examples).toContain("neondiff init --config config.local.json");
     expect(output.examples).toContain("neondiff pricing");
@@ -100,6 +101,13 @@ describe("public NeonDiff CLI surface", () => {
     ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
     const reviewHelp = JSON.parse((await runCli(["review-pr", "--help"])).stdout);
+    const localHelp = JSON.parse((await runCli(["review-local", "--help"])).stdout);
+    expect(localHelp.licenseBoundary.activationRequired).toContain("requires no activation");
+    expect(localHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--reviewbench-env" }),
+      expect.objectContaining({ name: "--base" }),
+      expect.objectContaining({ name: "--out" })
+    ]));
     expect(reviewHelp).toMatchObject({ ok: true, command: "review-pr" });
     expect(reviewHelp.usage.flags).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--expected-config-revision" }),

@@ -214,6 +214,23 @@ describe("public repository author gate", () => {
       expect(findFile(cfg.evidenceDir, "author-gate.json")).toBeUndefined();
     } finally { state.close(); }
   });
+  it("keeps existing non-failed processed rows when the gate blocks, so clearing the gate cannot drop them", () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-preserve-")); roots.push(root);
+    const cfg = config(); cfg.evidenceDir = join(root, "evidence");
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    try {
+      for (const [index, row] of [{ status: "skipped", error: "activation_baseline" }, { status: "dry_run" }].entries()) {
+        const pr = { ...pull("public", "NONE"), head: { sha: String(index).repeat(40), ref: "fixture" } };
+        state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, ...row } as Parameters<typeof state.recordProcessed>[0]);
+        expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
+        expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject(row);
+        const gate = cfg.reviewGate!.publicRepoAuthorGate;
+        const allowed = { ...cfg, reviewGate: { ...cfg.reviewGate!, publicRepoAuthorGate: { ...gate, allowedLogins: ["fixture-author"] } } };
+        expect(recordPublicRepoAuthorGateSkip({ config: allowed, state, repo: "org/repo", pull: pr })).toBe(false);
+        expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject(row);
+      }
+    } finally { state.close(); }
+  });
   it("failed-head retry preserves the author skip and suppresses status comments", async () => {
     apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-retry-")); roots.push(root);
     const cfg = config(); cfg.reviewStatusComment!.enabled = true; cfg.evidenceDir = join(root, "evidence");
@@ -227,6 +244,30 @@ describe("public repository author gate", () => {
         reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
       expect(result.status).toBe("untrusted_author_public_repo"); expect(post).not.toHaveBeenCalled();
       expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: result.status });
+    } finally { state.close(); }
+  });
+  it("failed-head retry retires an author-blocked queued job so the scheduler never re-leases it", async () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-retry-queue-")); roots.push(root);
+    const cfg = config(); cfg.reviewScheduler!.enabled = true;
+    cfg.evidenceDir = join(root, "evidence"); cfg.statePath = join(root, "state.sqlite");
+    const state = new ReviewStateStore(cfg.statePath); const pr = pull("public", "NONE");
+    state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, status: "failed", error: "fixture_failure" });
+    state.enqueueReviewQueueJob({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, baseSha: pr.base.sha });
+    const post = vi.fn(); const provider = vi.fn();
+    try {
+      const result = await retryFailedHeadWithDeps({ config: cfg, state, budget: new ReviewRunBudget(1),
+        github: { getPull: async () => pr, canPostAsApp: () => true, upsertIssueComment: post } as unknown as GitHubApi,
+        options: { repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, dryRun: false },
+        reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
+      expect(result.status).toBe("untrusted_author_public_repo");
+      // Same terminal state the scheduler path uses; a blocked_on_proof job would be re-leased every cycle.
+      expect(state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({
+        state: "stale_retired", lastError: "untrusted_author_public_repo" });
+      const getPull = vi.fn(async () => pr);
+      await runScheduledCycleWithDeps({ config: cfg, state,
+        github: { listOpenPulls: async () => [], getPull, listIssueComments: vi.fn(), canPostAsApp: () => true, upsertIssueComment: post },
+        options: { dryRun: false }, reviewPullImpl: provider, licenseAdmission: testLicenseAdmission });
+      expect(getPull).not.toHaveBeenCalled(); expect(provider).not.toHaveBeenCalled(); expect(post).not.toHaveBeenCalled();
     } finally { state.close(); }
   });
   it("renders the stored reason in operator/dashboard output without a new status enum", () => {

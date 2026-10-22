@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { runReviewLocal } from "./review-local.js";
 import { createPrivateKey } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readCiPullContext, buildCiConfig, findPostedCiReview } from "./ci-mode.js";
@@ -165,6 +166,11 @@ async function main(): Promise<void> {
 
   if (isHelpRequested(args)) {
     console.log(JSON.stringify(buildHelp(command), null, 2));
+    return;
+  }
+
+  if (command === "review-local") {
+    await runReviewLocal(args);
     return;
   }
 
@@ -3680,6 +3686,21 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--output", description: "Optional proof JSON path, normally docs/evidence/license-checkout-issuance-authenticated.json." }
     ]
   },
+  "review-local": {
+    description: "Review a local checkout; posts nothing and needs no license.",
+    flags: [
+      { name: "--repo-path", description: "Checkout directory (default cwd); --head must equal its HEAD." },
+      { name: "--base", description: "Required base SHA; --head defaults to checkout HEAD." },
+      { name: "--head", description: "Exact checkout HEAD SHA." },
+      { name: "--diff-file", description: "Optional diff; defaults to git diff base...head." },
+      { name: "--pr-json", description: "PR metadata JSON, or use --repo, --pr-number, --title." },
+      ...["repo", "pr-number", "title", "out", "agent", "config", "model", "reasoning-effort", "evidence-dir"].map(name => ({ name: `--${name}`, description: `Local review ${name}.` })),
+      { name: "--format", description: "neondiff (default) or reviewbench." },
+      { name: "--checkout-reads", description: "true or false; overrides config." },
+      { name: "--keep-evidence", description: "Keep temporary review evidence (default false)." },
+      { name: "--reviewbench-env", description: "Read inputs and settings from RB_* variables." }
+    ]
+  },
   "review-pr": {
     description: "Run a single dry-run-by-default PR review for one repo/PR (public alias of run-once, scoped to one PR). With --ci true it runs inside GitHub Actions and posts live by default.",
     flags: [
@@ -3788,7 +3809,9 @@ function buildHelp(command?: string) {
     ok: true,
     licenseBoundary: {
       sourceAvailableCommercial: true,
-      activationRequired: "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none through the GitHub Action or `review-pr --ci`; the self-hosted worker (providers verify, daemon, run-once, local review-pr), the Mac app, and the npm CLI 1.0.x require it for public, private, internal, and unknown repositories (issue #1191).",
+      activationRequired: command === "review-local"
+        ? "Local checkout review posts nothing and requires no activation."
+        : "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none through the GitHub Action or `review-pr --ci`; the self-hosted worker (providers verify, daemon, run-once, local review-pr), the Mac app, and the npm CLI 1.0.x require it for public, private, internal, and unknown repositories (issue #1191).",
       packageVersion,
       releaseState: packageVersion === "1.0.3"
         ? "Mandatory activation is staged for v1.0.4; public npm latest v1.0.3 does not enforce this boundary."
@@ -3816,7 +3839,8 @@ function buildHelp(command?: string) {
         "license status",
         "license deactivate",
         "status",
-        "review-pr"
+        "review-pr",
+        "review-local"
       ],
       operator: [
         "status",

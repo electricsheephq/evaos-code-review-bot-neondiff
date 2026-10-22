@@ -16,7 +16,7 @@ import {
 import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -34,7 +34,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import { activateCiLicenseForReview } from "./ci-mode.js";
@@ -56,6 +56,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { collectAnsweredThreads, suppressAnsweredDemotedComments, type AnsweredThread } from "./prior-thread-suppression.js";
 import { buildFindingFingerprint } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
@@ -92,6 +93,7 @@ import {
 } from "./review-lenses.js";
 import {
   postReviewStatusComment,
+  settleBaseMergeOnlyStatusComment,
   type ReviewStatusCommentGithub,
   type ReviewStatusCommentState
 } from "./review-status-comment.js";
@@ -137,7 +139,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -353,6 +355,7 @@ export type ReviewPullResult =
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
+  | "skipped_base_merge_only"
   | "untrusted_author_public_repo"
   | "skipped_license_gate"
   | "skipped_command_stop"
@@ -372,6 +375,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "dry_run":
     case "skipped_processed":
     case "skipped_closed":
+    case "skipped_base_merge_only":
       return true;
     case "failed":
     case "skipped_draft":
@@ -545,6 +549,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             ...(options.explicitPullReview
               ? { explicitPullReview: options.explicitPullReview }
               : {}),
+            ci: Boolean(options.ciConfig),
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             ...(reviewApprovalRevision
@@ -631,6 +636,7 @@ export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, stat
     case "skipped_canary":
       result.skippedCanary += 1;
       return;
+    case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
     case "skipped_policy":
       result.skippedPolicy += 1;
@@ -1061,6 +1067,17 @@ async function syncRetryReviewStatusComment(input: {
 }): Promise<void> {
   if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
   const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.headSha);
+  if (input.status === "skipped_base_merge_only" ||
+    (input.status === "skipped_processed" && processed?.error === "base_merge_only")) {
+    await settleBaseMergeOnlyStatusComment({
+      enabled: input.config.reviewStatusComment?.enabled ?? false, dryRun: input.dryRun,
+      github: input.github, stateStore: input.state, repo: input.repo, pullNumber: input.pull.number,
+      headSha: input.headSha, botLogin: input.config.github.botLogin ?? DEFAULT_BOT_LOGIN,
+      pullTitle: input.pull.title, pullUrl: input.pull.html_url,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    return;
+  }
   const state = retryStatusCommentState(input.status, processed?.status, processed?.error);
   if (!state) return;
   await postReviewStatusComment({
@@ -1100,6 +1117,7 @@ function retryStatusCommentState(
       if (processedStatus === "skipped" && processedError && parseProviderCooldownError(processedError)) {
         return "provider_deferred";
       }
+      if (processedError === "base_merge_only") return undefined;
       if (processedStatus === "skipped") return "skipped";
       return undefined;
     case "skipped_provider_cooldown":
@@ -1119,6 +1137,7 @@ function retryStatusCommentState(
       return "provider_deferred";
     case "skipped_draft":
     case "skipped_canary":
+    case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -1295,7 +1314,7 @@ function retryQueuePatchForStatus(input: {
         : {
             state: retryQueueJobStateForProcessedStatus(input.processedStatus, input.dryRun),
             ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
-            lastError: `retry_did_not_review=skipped_processed:${input.processedStatus ?? "unknown"}`,
+            lastError: input.processedError === "base_merge_only" ? "base_merge_only" : `retry_did_not_review=skipped_processed:${input.processedStatus ?? "unknown"}`,
             sessionJobState: reviewerSessionJobStateForProcessedStatus(input.processedStatus),
             ...(input.processedStatus ? { sessionProcessedStatus: input.processedStatus } : {})
           };
@@ -1308,8 +1327,11 @@ function retryQueuePatchForStatus(input: {
         sessionJobState: "skipped",
         sessionProcessedStatus: "skipped"
       };
+    case "skipped_base_merge_only":
+      return { state: "stale_retired", lastError: "base_merge_only", sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
     case "untrusted_author_public_repo":
-      return { state: "blocked_on_proof", lastError: input.status,
+      // Terminal, matching the scheduler path: blocked_on_proof jobs are re-leased every cycle.
+      return { state: "stale_retired", lastError: input.status,
         sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
     case "skipped_license_gate":
       return {
@@ -1414,6 +1436,7 @@ export function restoreFailedRetryRowIfNeeded(input: {
     input.retryTarget.headSha
   );
   if (current?.status === "posted") return;
+  if (current?.status === "skipped" && current.error === "base_merge_only") return;
   if (current?.status === "failed") return;
   if (current?.status === "skipped" && current.error === "untrusted_author_public_repo") return;
 
@@ -1484,6 +1507,7 @@ export interface ReviewPullInput {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
+  ci?: boolean;
   explicitPullReview?: ExplicitPullReviewScope;
   dryRun: boolean;
   useZCode: boolean;
@@ -1491,6 +1515,8 @@ export interface ReviewPullInput {
   sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run" | "retry_failed_head";
+  manualQueueJob?: boolean;
+  onReviewStarted?: () => Promise<void>;
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
@@ -1515,8 +1541,9 @@ export function recordPublicRepoAuthorGateSkip(input: {
   } catch {
     // Best-effort evidence: this runs inside scheduler discovery, and the processed row below is the durable record.
   }
-  // Preserve an existing posted review as historical truth.
-  if (existing?.status !== "posted") {
+  // Preserve every existing non-failed row (posted, dry_run, retirement/baseline skips) as historical truth;
+  // a failed row stays replaceable so the retry path still sees the gate decision.
+  if (!existing || existing.status === "failed") {
     input.state.recordProcessed({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
       status: "skipped", error: reason });
     input.state.recordReviewReadiness({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
@@ -1567,6 +1594,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     input.dryRun &&
     input.processedHeadPolicy === "refresh_dry_run" &&
     processed?.status === "dry_run";
+  const baseMergeOnlyOverride = processed?.status === "skipped" && processed.error === "base_merge_only" &&
+    Boolean(input.explicitPullReview || input.allowActivationBaselineCommandLookup || input.manualQueueJob);
   const scopedActivationBaselineOverride =
     input.allowActivationBaselineCommandLookup &&
     isActivationBaselineProcessedReview(processed);
@@ -1799,6 +1828,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !retryableApprovedDryRunPrePostFailure &&
     !refreshableDryRun &&
     !scopedActivationBaselineOverride &&
+    !baseMergeOnlyOverride &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1909,6 +1939,38 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       workRoot: config.workRoot,
       protectedCheckoutRoots: getProtectedCheckoutRoots()
     });
+    const ownDiff = await computeOwnDiffFingerprint(worktree.path, pull.base.sha, pull.head.sha);
+    const reviewDiff = { baseRef: pull.base.ref, baseSha: pull.base.sha,
+      ...("fingerprint" in ownDiff ? { diffFingerprint: ownDiff.fingerprint } : {}) };
+    if (!input.dryRun && !input.ci && !manualReviewRequested && !input.manualQueueJob && !input.explicitPullReview) {
+      const anchor = state.getBaseMergeOnlyAnchor(repo, pull.number);
+      const excluded = config.baseMergeOnlySkip?.enabled === false ||
+        config.baseMergeOnlySkip?.excludeRepos?.some((slug) => slug.toLowerCase() === repo.toLowerCase());
+      const reason = excluded ? "excluded" : "error" in ownDiff ? "fingerprint_error" : !anchor ? "no_anchor"
+        : anchor.baseRef !== pull.base.ref ? "base_ref_changed"
+        : !await isGitAncestor(worktree.path, anchor.headSha, pull.head.sha) ? "not_ancestor"
+        : anchor.diffFingerprint !== ownDiff.fingerprint ? "fingerprint_differs"
+        : !await isBaseMergeOnlyTree(worktree.path, anchor.headSha, ownDiff.mergeBase, pull.head.sha) ? "merge_tree_differs"
+        : undefined;
+      const evidence = {
+        previousHead: anchor?.headSha, previousReviewUrl: anchor?.reviewUrl, previousEvent: anchor?.event,
+        newHead: pull.head.sha, ...reviewDiff, ...ownDiff
+      };
+      if (!reason && anchor) {
+        let refusalReason: "active_claim" | "existing_row" = "existing_row";
+        const recorded = state.recordBaseMergeOnlySkip({ repo, pullNumber: pull.number, headSha: pull.head.sha,
+          carriedFromHead: anchor.headSha, ...reviewDiff }, (reason) => { refusalReason = reason; });
+        writeRedactedJson(join(evidenceDir, "base-merge-only.json"), {
+          ...evidence, decision: recorded ? "skipped" : "refused", ...(!recorded ? { reason: refusalReason } : {})
+        });
+        if (!recorded) return "skipped_processed";
+        state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha,
+          state: "skipped", reason: "base_merge_only" });
+        return "skipped_base_merge_only";
+      }
+      writeRedactedJson(join(evidenceDir, "base-merge-only.json"), { ...evidence, decision: "reviewed", reason });
+    }
+    await input.onReviewStarted?.();
     if (isLcmReviewRepository(repo)) {
       try {
         reviewFiles = await hydratePullFilePatchesFromWorktree({
@@ -1983,10 +2045,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           evidenceDir
         });
 
+    // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
+    // schema, sandbox and citation checks all agree on the fallback.
+    const checkoutReads = config.codexRuntime?.enabled
+      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: config.codexRuntime.cliPath })
+      : { status: "disabled" as const };
+    const reviewConfig: BotConfig = config.codexRuntime && config.codexRuntime.checkoutReads === true && checkoutReads.status !== "enabled"
+      ? { ...config, codexRuntime: { ...config.codexRuntime, checkoutReads: false } }
+      : config;
+    if (checkoutReads.status !== "disabled") writeRedactedJson(join(evidenceDir, "checkout-reads.json"), checkoutReads);
+    if (checkoutReads.status.startsWith("unavailable:")) {
+      console.warn(
+        `[checkout-reads] ${checkoutReads.status} repo=${repo} pr=${pull.number}: ${checkoutReads.detail ?? "unavailable"}; running a diff-only review`
+      );
+    }
     const promptForFiles = (filesForPrompt: PullFilePatch[]) => buildReviewPrompt({
       repo,
       pull,
       files: filesForPrompt,
+      ...(checkoutReads.status === "enabled" ? { checkoutAccess: "shell_read_only" as const } : {}),
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(reviewLensContext.packet ? { reviewLensPacket: reviewLensContext.packet } : {}),
@@ -2052,7 +2129,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     };
     assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
-      config,
+      config: reviewConfig,
       github,
       state,
       repo,
@@ -2118,6 +2195,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
     const zcodeResult = zcodeExecution.result;
+    if (checkoutReads.status.startsWith("unavailable:") && Array.isArray(zcodeResult.runtime.notes)) {
+      zcodeResult.runtime.notes.push(`Checkout reads ${checkoutReads.status}; this was a diff-only review.`);
+    }
 
     await assertGitClean(worktree.path);
 
@@ -2133,13 +2213,35 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       zcodeResult.degradedRecovery,
       config.reviewGate?.retryDegradedConfidencePenalty
     );
+    const priorThreadsEnabled = config.reviewGate?.priorThreadSuppression?.enabled ?? true;
+    let answeredThreads: AnsweredThread[] | undefined;
+    const priorThreadEvidence = {
+      enabled: priorThreadsEnabled, commentsRead: 0, ownRoots: 0, answeredRoots: 0,
+      suppressedFindings: 0, matches: [] as Array<{ findingTitle: string | undefined; threadId: number | undefined }>,
+      errorClass: undefined as string | undefined
+    };
+    if (priorThreadsEnabled) {
+      try {
+        const priorComments = await github.listPullReviewComments(repo, pull.number);
+        priorThreadEvidence.commentsRead = priorComments.length;
+        const identity = await github.postingIdentity();
+        const isOwn = (comment: (typeof priorComments)[number]) => isAuthoredBy(comment.user, identity);
+        priorThreadEvidence.ownRoots = priorComments.filter((comment) => comment.in_reply_to_id == null && isOwn(comment)).length;
+        answeredThreads = collectAnsweredThreads(priorComments, isOwn);
+        priorThreadEvidence.answeredRoots = answeredThreads.length;
+      } catch (error) {
+        answeredThreads = undefined;
+        priorThreadEvidence.errorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
       files: reviewFiles,
-      droppedFromSchema: zcodeResult.droppedFromSchema,
+      droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
       repoMemoryFalsePositives: repoMemory.falsePositives,
+      answeredThreads,
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
       ...(config.reviewGate?.requestChangesConfidenceFloors
         ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
@@ -2148,6 +2250,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
         : {})
     });
+    priorThreadEvidence.matches = gate.dropped.filter((finding) => finding.reason === "prior_thread_answered")
+      .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId }));
+    priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
+    writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
@@ -2173,10 +2279,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
-    const comments = selfConsistency.comments;
+    // A P0 lowered to P2 skipped the gate's prior-thread match; re-apply it at the published severity.
+    // P2 is never REQUEST_CHANGES-eligible, so dropping one leaves selfConsistency.event unchanged.
+    const answeredDemoted = suppressAnsweredDemotedComments(selfConsistency.comments, gatedFindings, answeredThreads ?? []);
+    if (answeredDemoted.dropped.length) {
+      priorThreadEvidence.matches.push(...answeredDemoted.dropped
+        .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId })));
+      priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
+      writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
+    }
+    const comments = answeredDemoted.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
-    const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
+    const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDemoted.dropped], config.confidenceCalibration?.publicDisplay);
     const candidateEvent = selfConsistency.event;
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({
@@ -2262,6 +2377,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     let assessmentBody = buildLcmReviewAssessmentBody({
       repo, prNumber: pull.number, baseSha: pull.base.sha, headSha: pull.head.sha,
       rawResponse: zcodeResult.rawResponse,
+      secretRedacted: zcodeResult.secretRedacted === true,
       complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
         !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
         reviewFiles.length === files.length && lcmReviewFileInventoryIsComplete(files.length) &&
@@ -2307,6 +2423,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     assertApprovedProviderConfigCurrent();
+    // A competing review may have posted during provider work. Only the current
+    // carried skip can authorize this override at the record/claim boundary.
+    const processedBeforeClaim = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+    const baseMergeOnlySupersession = (baseMergeOnlyOverride || manualReviewRequested) &&
+      processedBeforeClaim?.status === "skipped" && processedBeforeClaim.error === "base_merge_only";
     if (input.dryRun) {
       // Dry-run posts nothing public, but its durable proof must not replace an
       // active or completed live review. The state transaction admits this row
@@ -2317,6 +2438,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         headSha: pull.head.sha,
         ...(input.configRevision ? { configRevision: input.configRevision } : {}),
         event: plan.event,
+        allowBaseMergeOnlySupersession: baseMergeOnlySupersession,
         ...(scopedActivationBaselineOverride
           ? { allowActivationBaselineSupersession: true }
           : {})
@@ -2328,6 +2450,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
     // dry-run branch, immediately before posting — so exactly one of a racing manual-review-pr and
     // daemon posts a review on this head. The loser records a structured skip and no-ops.
+    const otherProcessedOwnerSupersession = commandReviewRequested ||
+      (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
+      input.processedHeadPolicy === "approved_dry_run" ||
+      input.processedHeadPolicy === "retry_failed_head";
     const headClaimAttempt = state.tryClaimReviewHeadWithOutcome({
       repo,
       pullNumber: pull.number,
@@ -2335,17 +2461,21 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       claimTtlMs: config.reviewConcurrency.leaseTtlMs,
       // retry_failed_head is admitted only after the earlier processed-status validation; it must
       // be able to replace that failed/deferred row after a successful provider retry.
-      allowProcessedOwnerSupersession: commandReviewRequested ||
-        (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
-        input.processedHeadPolicy === "approved_dry_run" ||
-        input.processedHeadPolicy === "retry_failed_head",
+      allowProcessedOwnerSupersession: baseMergeOnlySupersession || otherProcessedOwnerSupersession,
       ...(input.processedHeadPolicy === "approved_dry_run"
         ? {
             requiredProcessedStatusForSupersession: "dry_run" as const,
             requiredProcessedConfigRevisionForSupersession: input.configRevision,
             consumeProcessedApprovalOnAcquire: true
           }
-        : {})
+        // A carried skip read before the claim authorizes replacing only that skip; the claim
+        // transaction re-checks it so a review posted in between is never superseded.
+        : baseMergeOnlySupersession && !otherProcessedOwnerSupersession
+          ? {
+              requiredProcessedStatusForSupersession: "skipped" as const,
+              requiredProcessedErrorForSupersession: "base_merge_only"
+            }
+          : {})
     });
     if (headClaimAttempt.status === "blocked") {
       if (headClaimAttempt.reason === "active_claim") {
@@ -2571,6 +2701,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           headSha: pull.head.sha,
           commentId: reviewEventResolution.authorization.commentId,
           author: reviewEventResolution.authorization.author,
+          ...reviewDiff,
           event: plan.event,
           reviewUrl: review.html_url,
           preserveExistingBlocking: preservedPriorBlockingRow
@@ -2581,12 +2712,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           pullNumber: pull.number,
           headSha: pull.head.sha,
           status: "posted",
+          ...reviewDiff,
           event: plan.event,
           reviewUrl: review.html_url
         });
       }
     } catch (error) {
       throw new ReviewPostPersistenceError(error, {
+        ...reviewDiff,
         event: plan.event,
         reviewUrl: review.html_url ?? `${pull.html_url}#pullrequestreview-${review.id}`,
         preserveExistingBlocking: preservedPriorBlockingRow,
@@ -2647,6 +2780,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           pullNumber: pull.number,
           headSha: pull.head.sha,
           status: "posted",
+          baseRef: durablePosted.baseRef, baseSha: durablePosted.baseSha, diffFingerprint: durablePosted.diffFingerprint,
           ...(durablePosted.event ? { event: durablePosted.event } : {}),
           ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
           error: uncertaintyReason
@@ -3745,6 +3879,9 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
 }
 
 interface PostedReviewReceipt {
+  baseRef?: string;
+  baseSha?: string;
+  diffFingerprint?: string;
   event: ReviewEvent;
   reviewUrl: string;
   preserveExistingBlocking: boolean;
@@ -3797,6 +3934,7 @@ export function recoverPostedReviewReceipt(input: {
       headSha: input.pull.head.sha,
       commentId: receipt.authorization.commentId,
       author: receipt.authorization.author,
+      baseRef: receipt.baseRef, baseSha: receipt.baseSha, diffFingerprint: receipt.diffFingerprint,
       event: receipt.event,
       reviewUrl: receipt.reviewUrl,
       preserveExistingBlocking: receipt.preserveExistingBlocking
@@ -3807,6 +3945,7 @@ export function recoverPostedReviewReceipt(input: {
       pullNumber: input.pull.number,
       headSha: input.pull.head.sha,
       status: "posted",
+      baseRef: receipt.baseRef, baseSha: receipt.baseSha, diffFingerprint: receipt.diffFingerprint,
       event: receipt.event,
       reviewUrl: receipt.reviewUrl
     });
@@ -3894,6 +4033,7 @@ export async function recoverPostedReviewReceiptForCurrentHead(input: {
         pullNumber: input.pull.number,
         headSha: input.pull.head.sha,
         status: "posted",
+        baseRef: durablePosted.baseRef, baseSha: durablePosted.baseSha, diffFingerprint: durablePosted.diffFingerprint,
         ...(durablePosted.event ? { event: durablePosted.event } : {}),
         ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
         error: uncertaintyReason
@@ -4103,7 +4243,7 @@ async function applySelfConsistencyRecheck(input: {
               appConfigPath: input.config.zcode.appConfigPath,
               model: input.config.zcode.model,
               ...(providerId ? { providerId } : {}),
-              timeoutMs: input.config.zcode.timeoutMs,
+              timeoutMs: selfConsistencyConfig.timeoutMs ?? input.config.zcode.timeoutMs,
               retryMaxRetries: input.config.zcode.retryMaxRetries
             });
         return parseSevereVerificationTransport(rawResponse, transportInput);
@@ -4123,6 +4263,7 @@ async function applySelfConsistencyRecheck(input: {
   // Redacted evidence: verdicts + both confidences, never raw model prose beyond the sanitized fields.
   writeRedactedJson(join(input.evidenceDir, "self-consistency.json"), {
     enabled: true,
+    onUnsupported: selfConsistencyConfig.onUnsupported ?? "suppress",
     provider: providerId,
     maxFindingsPerReview: selfConsistencyConfig.maxFindingsPerReview ?? 5,
     verdicts: result.verdicts
@@ -4133,7 +4274,11 @@ async function applySelfConsistencyRecheck(input: {
   const redrawn = result.verdicts.length - capped;
   const suppressed = result.verdicts.filter((verdict) => verdict.refuted === true && verdict.error !== "severe_verifier_cap_exceeded").length;
   const failed = result.verdicts.filter((verdict) => verdict.error !== undefined && verdict.error !== "severe_verifier_cap_exceeded").length;
-  const runtimeNote = result.verdicts.length
+  const demoted = result.verdicts.filter((verdict) => verdict.action === "demoted").length;
+  const demoteSuppressed = result.verdicts.filter((verdict) => verdict.action === "suppressed").length;
+  const runtimeNote = result.verdicts.length && selfConsistencyConfig.onUnsupported === "demote"
+    ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${demoted} lowered to P2, ${demoteSuppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s).`
+    : result.verdicts.length
     ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${suppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s). Suppression is fail-closed and is not a provider refutation.`
     : undefined;
 
@@ -4160,7 +4305,7 @@ async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: str
   try {
     return (await runCodexStructuredOutput<unknown>({
       cwd, prompt, cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort,
-      evidenceDir: scratch, timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
+      evidenceDir: scratch, timeoutMs: config.reviewGate?.selfConsistency?.timeoutMs ?? runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
       artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value,
       usageEvidenceDir
     })).rawResponse;
@@ -4272,8 +4417,9 @@ async function runReviewWithContextBudget(input: {
       const execution = leaf.id === "anchor"
         ? await anchorPromise
         : await (async () => {
-            const prompt = buildReviewEnsembleLeafPrompt(input.prompt, leaf.id);
-            const promptForFiles = (files: PullFilePatch[]) => buildReviewEnsembleLeafPrompt(input.promptForFiles(files), leaf.id);
+            const leafOptions = { checkoutReads: input.config.codexRuntime?.enabled && input.config.codexRuntime.checkoutReads === true };
+            const prompt = buildReviewEnsembleLeafPrompt(input.prompt, leaf.id, leafOptions);
+            const promptForFiles = (files: PullFilePatch[]) => buildReviewEnsembleLeafPrompt(input.promptForFiles(files), leaf.id, leafOptions);
             const evidenceDir = join(input.evidenceDir, "review-ensemble", "leaves", leaf.id, "provider");
             const contextBudget = planContextBudget({
               prompt,
@@ -4306,7 +4452,7 @@ async function runReviewWithContextBudget(input: {
           execution.result.degradedRecovery,
           input.config.reviewGate?.retryDegradedConfidencePenalty
         ),
-        dropped: execution.result.droppedFromSchema,
+        dropped: [...execution.result.droppedFromSchema, ...(execution.result.droppedFromEvidence ?? [])],
         runtime: execution.result.runtime
       };
     }
@@ -4395,6 +4541,7 @@ async function runChunkedZCodeReview(input: {
   const startedAt = new Date();
   const findings: ZCodeReviewResult["findings"] = [];
   const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
+  const droppedFromEvidence: NonNullable<ZCodeReviewResult["droppedFromEvidence"]> = [];
   const rawResponses: Array<{ index: number; rawResponse: string }> = [];
   const modelSummaries: ReviewModelSummary[] = [];
   const runtimeNotes: string[] = [`Context budget chunked review executed in ${input.contextBudget.chunks.length} chunks.`];
@@ -4467,6 +4614,7 @@ async function runChunkedZCodeReview(input: {
       .map((finding) => ({ ...finding, reason: "chunk_path_mismatch" }));
     findings.push(...chunkFindings);
     droppedFromSchema.push(...result.droppedFromSchema, ...droppedCrossChunkFindings);
+    droppedFromEvidence.push(...(result.droppedFromEvidence ?? []));
     rawResponses.push({ index: chunk.index, rawResponse: result.rawResponse });
     if (result.summary) modelSummaries.push(result.summary);
     attempts += result.attempts;
@@ -4487,6 +4635,7 @@ async function runChunkedZCodeReview(input: {
       findings,
       summary: mergeReviewModelSummaries(modelSummaries),
       droppedFromSchema,
+      ...(input.config.codexRuntime?.checkoutReads === true ? { droppedFromEvidence } : {}),
       rawResponse: JSON.stringify({ findings, chunks: rawResponses }),
       attempts,
       degradedRecovery,
@@ -4536,6 +4685,7 @@ async function runConfiguredReview(input: {
   const startedAt = new Date();
   const result = await runCodexReview({
     lcmReviewAssessment: input.lcmReviewAssessment,
+    checkoutReads: input.config.codexRuntime.checkoutReads === true,
     cwd: input.worktreePath,
     prompt: input.prompt,
     cliPath: input.config.codexRuntime.cliPath,
@@ -4778,6 +4928,7 @@ function summarizeRetryProviderCooldownResults(results: RetryFailedHeadResult[])
       case "skipped_stale_head":
         summary.skippedStaleHead += 1;
         break;
+      case "skipped_base_merge_only":
       case "skipped_processed":
         summary.skippedProcessed += 1;
         break;

@@ -1,0 +1,14 @@
+{
+  "evidenceKind": "desktop",
+  "releaseVersion": "v1.0.6",
+  "candidateHead": "d9da83bd52c70e388adeb6f000e11e11442c6215",
+  "packShasum": "9ce0fdf6421dedeedfe0f7f6852ae5ff9f495caa",
+  "packIntegrity": "sha512-lJmw5I7w9UVB0nTCMhqLl6AmHD8GubMc0nge12KSbUx+0BkARXmQgcfl3a70mFP0ngj/OLYlVBBnHrUe1YIkaQ==",
+  "harnessRunId": "fe1a2d2872b71aeec9a4047eee3b9ba20f5697abfc1a397669ec8c0cf0d7f3ca",
+  "records": [
+    {
+      "brokerUnavailable": true,
+      "usefulWorkBlocked": true
+    }
+  ]
+}

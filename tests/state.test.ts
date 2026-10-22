@@ -2663,6 +2663,27 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("supersedes only the exact processed error required by the claimant", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-claim-required-error-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "owner/repo", pullNumber: 978, headSha: "c".repeat(40) };
+    const claimInput = {
+      ...head,
+      claimTtlMs: 60_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "skipped" as const,
+      requiredProcessedErrorForSupersession: "base_merge_only"
+    };
+    store.recordProcessed({ ...head, status: "posted", reviewUrl: "https://github.com/owner/repo/pull/978#pullrequestreview-1" });
+    expect(store.tryClaimReviewHeadWithOutcome(claimInput)).toEqual({ status: "blocked", reason: "processed" });
+    store.recordProcessed({ ...head, status: "skipped", error: "untrusted_author_public_repo" });
+    expect(store.tryClaimReviewHeadWithOutcome(claimInput)).toEqual({ status: "blocked", reason: "processed" });
+    store.recordProcessed({ ...head, status: "skipped", error: "base_merge_only" });
+    expect(store.tryClaimReviewHeadWithOutcome(claimInput).status).toBe("acquired");
+    store.close();
+  });
+
   it("consumes one matching dry-run receipt before a concurrent claimant can proceed", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-approved-receipt-race-"));
     roots.push(root);

@@ -114,7 +114,7 @@ export function validateReviewEnsembleConfig(config: ReviewEnsembleConfig, label
   if (config.mode !== "shadow") throw new Error(`${label}.mode must be shadow`);
 }
 
-export function buildReviewEnsembleLeafPrompt(basePrompt: string, leafId: ReviewEnsembleLeafId): string {
+export function buildReviewEnsembleLeafPrompt(basePrompt: string, leafId: ReviewEnsembleLeafId, options?: { checkoutReads?: boolean }): string {
   if (leafId === "anchor") return basePrompt;
   const guidance = getBuiltInReviewLensDefinition(leafId);
   return [
@@ -123,7 +123,9 @@ export function buildReviewEnsembleLeafPrompt(basePrompt: string, leafId: Review
     "## Additional isolated review focus",
     guidance.title,
     guidance.body,
-    "Do not use tools, agents, web, MCP, shell, memory, or writes. Use only the supplied immutable review context.",
+    options?.checkoutReads
+      ? "Do not use agents, web, MCP, memory, or writes; read-only checkout inspection is allowed only as described above."
+      : "Do not use tools, agents, web, MCP, shell, memory, or writes. Use only the supplied immutable review context.",
     "For each reproduced finding, include the smallest safe fix direction, a focused acceptance check, and relevant non-goals in the finding body.",
     "Return the same strict findings schema. This leaf cannot post, approve, edit, or change review policy.",
     ""

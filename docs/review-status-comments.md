@@ -1,5 +1,10 @@
 # Review Status Comments
 
+A base-merge-only head skipped by automatic review gets no new review-status
+comment. If that head already has a status comment (for example after provider
+cooldown), it is settled as `completed`, with the anchor review URL and a note
+that the review was carried from the earlier head via a base-merge-only push.
+
 `evaos-code-review-bot` can post one App-authored status comment per PR head as
 soon as that head enters the durable review queue. The comment is marker-backed
 and edited in place as the head moves through the review lifecycle.

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normalizeFindingCategory, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
-import type { DroppedFinding, Finding, ReviewComment, ReviewEvent, Severity } from "./types.js";
+import type { DroppedFinding, Finding, FindingEvidenceRef, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 /**
  * Deterministic per-finding fingerprint (sha256 over the canonical finding identity). Computed over
@@ -76,6 +76,9 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
       continue;
     }
 
+    const evidence = Array.isArray(raw.evidence) ? raw.evidence.filter(isFindingEvidenceRef) : [];
+    const evidenceMalformed = Object.hasOwn(raw, "evidence") &&
+      (!Array.isArray(raw.evidence) || raw.evidence.length > 5 || evidence.length !== raw.evidence.length);
     findings.push({
       severity: severity as Severity,
       path,
@@ -83,6 +86,8 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
       title: title.trim(),
       body: body.trim(),
       confidence,
+      ...(Array.isArray(raw.evidence) ? { evidence: evidence.map(({ path, startLine, endLine, excerpt }) => ({ path, startLine, endLine, excerpt })) } : {}),
+      ...(evidenceMalformed ? { evidenceMalformed: true } : {}),
       ...(isRegressionCategory(category) ? { category } : {}),
       ...(typeof raw.why_this_matters === "string" && raw.why_this_matters.trim()
         ? { why_this_matters: raw.why_this_matters.trim() }
@@ -91,6 +96,13 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
   }
 
   return { findings, dropped };
+}
+
+function isFindingEvidenceRef(ref: unknown): ref is FindingEvidenceRef {
+  return isRecord(ref) && typeof ref.path === "string" && ref.path.length > 0 &&
+    Number.isInteger(ref.startLine) && (ref.startLine as number) > 0 &&
+    Number.isInteger(ref.endLine) && (ref.endLine as number) >= (ref.startLine as number) &&
+    typeof ref.excerpt === "string" && ref.excerpt.length > 0 && ref.excerpt.length <= 1_000;
 }
 
 export function normalizeFindingsForReview(
@@ -269,6 +281,21 @@ export function decideReviewEvent(
   return findings.some((finding) => isRequestChangesEligible(finding, confidenceFloors, categoryPrecisionFloors))
     ? "REQUEST_CHANGES"
     : "COMMENT";
+}
+
+export const SEVERITY_DEMOTION_NOTE = "a second check did not confirm it.";
+
+export function demoteReviewComment(comment: ReviewComment, note: string): ReviewComment | undefined {
+  const original = comment.severity;
+  const prefix = `**${original}: `;
+  if ((original !== "P0" && original !== "P1") || !comment.body.startsWith(prefix)) return undefined;
+  return {
+    ...comment,
+    severity: "P2",
+    body: `**P2: ${comment.body.slice(prefix.length)}\n\n_Severity lowered from ${original}: ${note}_`,
+    severityDemotedFrom: original,
+    severityDemotionReason: note
+  };
 }
 
 export function formatReviewComment(
