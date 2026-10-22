@@ -79,7 +79,8 @@ describe("public repository author gate", () => {
           const cfg = config();
           const pr = pull(visibility, association);
           // A key only lifts the gate once it reaches the Codex child; the runtime allowlist does not forward it.
-          const keyReachesCodex = Boolean(buildCodexRuntimeEnv(process.env).CODEX_API_KEY);
+          const child = buildCodexRuntimeEnv(process.env);
+          const keyReachesCodex = Boolean(child.CODEX_API_KEY || child.OPENAI_API_KEY);
           const blocked = !keyReachesCodex && ["public", "unknown"].includes(visibility) &&
             !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "");
           expect(isPublicRepoAuthorBlocked(cfg, pr)).toBe(blocked);
@@ -208,6 +209,23 @@ describe("public repository author gate", () => {
       rmSync(evidence);
       expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
       expect(findFile(cfg.evidenceDir, "author-gate.json")).toBeUndefined();
+    } finally { state.close(); }
+  });
+  it("keeps existing non-failed processed rows when the gate blocks, so clearing the gate cannot drop them", () => {
+    apiEnv(); const root = mkdtempSync(join(tmpdir(), "neondiff-author-preserve-")); roots.push(root);
+    const cfg = config(); cfg.evidenceDir = join(root, "evidence");
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    try {
+      for (const [index, row] of [{ status: "skipped", error: "activation_baseline" }, { status: "dry_run" }].entries()) {
+        const pr = { ...pull("public", "NONE"), head: { sha: String(index).repeat(40), ref: "fixture" } };
+        state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: pr.head.sha, ...row } as Parameters<typeof state.recordProcessed>[0]);
+        expect(recordPublicRepoAuthorGateSkip({ config: cfg, state, repo: "org/repo", pull: pr })).toBe(true);
+        expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject(row);
+        const gate = cfg.reviewGate!.publicRepoAuthorGate;
+        const allowed = { ...cfg, reviewGate: { ...cfg.reviewGate!, publicRepoAuthorGate: { ...gate, allowedLogins: ["fixture-author"] } } };
+        expect(recordPublicRepoAuthorGateSkip({ config: allowed, state, repo: "org/repo", pull: pr })).toBe(false);
+        expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject(row);
+      }
     } finally { state.close(); }
   });
   it("failed-head retry preserves the author skip and suppresses status comments", async () => {

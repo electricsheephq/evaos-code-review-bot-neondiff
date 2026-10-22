@@ -1508,8 +1508,9 @@ export function recordPublicRepoAuthorGateSkip(input: {
   } catch {
     // Best-effort evidence: this runs inside scheduler discovery, and the processed row below is the durable record.
   }
-  // Preserve an existing posted review as historical truth.
-  if (existing?.status !== "posted") {
+  // Preserve every existing non-failed row (posted, dry_run, retirement/baseline skips) as historical truth;
+  // a failed row stays replaceable so the retry path still sees the gate decision.
+  if (!existing || existing.status === "failed") {
     input.state.recordProcessed({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
       status: "skipped", error: reason });
     input.state.recordReviewReadiness({ repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
