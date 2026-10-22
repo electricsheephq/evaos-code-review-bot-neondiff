@@ -74,17 +74,23 @@ for (const pattern of required) {
 }
 
 // Sentence boundaries preserve wrapped prose and dotted version numbers.
-function sentenceAt(text, index) {
+function sentenceSpan(text, index) {
   const boundaries = /[.!?](?=\s|$)|\n\s*\n|\n(?=\s*(?:[-*] |#{1,6} ))/g;
   let start = 0;
   for (const boundary of text.matchAll(boundaries)) {
-    if (boundary.index >= index) return text.slice(start, boundary.index);
+    if (boundary.index >= index) return [start, boundary.index];
     start = boundary.index + boundary[0].length;
   }
-  return text.slice(start);
+  return [start, text.length];
+}
+function sentenceAt(text, index) {
+  return text.slice(...sentenceSpan(text, index));
 }
 const boundaryLanguage = /\b(?:not|avoid|unless|forbidden|never)\b/i;
-const publicFreeClaim = /reports\s+as\s+public\s+is\s+free|public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
+// The canonical claim keeps the strict rule: both surfaces within 200 characters, no exemption.
+const canonicalPublicFree = /reports\s+as\s+public\s+is\s+free/gi;
+const canonicalScope = /GitHub\s+Action[\s\S]{0,40}review-pr\s+--ci/i;
+const publicFreeClaim = /public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
 const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
@@ -96,9 +102,19 @@ for (const path of paths) {
       }
     }
   }
+  for (const match of text.matchAll(canonicalPublicFree)) {
+    if (!canonicalScope.test(text.slice(match.index, match.index + 200))) {
+      const line = text.slice(0, match.index).split("\n").length;
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action and review-pr --ci)`);
+      failed = true;
+    }
+  }
+  // Paraphrases are exempt only when boundary language precedes them ("Do not describe ... as open source"),
+  // so a trailing "never need a license" cannot excuse a broad promise.
   for (const match of text.matchAll(publicFreeClaim)) {
     const sentence = sentenceAt(text, match.index);
-    if (!boundaryLanguage.test(sentence) && !scopedPublicFree.test(sentence)) {
+    const before = text.slice(sentenceSpan(text, match.index)[0], match.index);
+    if (!boundaryLanguage.test(before) && !scopedPublicFree.test(sentence)) {
       const line = text.slice(0, match.index).split("\n").length;
       console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action or review-pr --ci)`);
       failed = true;

@@ -15,7 +15,7 @@ organization Actions secrets. NeonDiff uses your model access and never pays
 for or proxies model calls. Public repositories need no activation on this CI
 path; private repositories also need the `NEONDIFF_LICENSE_KEY` secret described
 below. Each license covers one GitHub organization or user account: Solo is
-$9/mo or $90/yr, Team is $29/mo or $290/yr.
+$9/mo or $90/yr, Team is $290/yr.
 
 This workflow posts a current-head review when a PR opens or becomes ready,
 or when an OWNER, MEMBER, or COLLABORATOR comments `/neondiff review` on a PR.

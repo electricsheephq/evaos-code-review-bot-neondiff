@@ -98,3 +98,11 @@ it.each([
 ])("allows scoped or explicitly disallowed copy: %s", (claim) => {
   expect(runGuardWith(claim).status).toBe(0);
 });
+// Review of lane B: the canonical claim keeps both surfaces and no exemption; a trailing negation exempts nothing.
+it.each([
+  "From 1.1.0, review of repositories that GitHub reports as public is free on every surface, so you never need a license.",
+  "From 1.1.0, review of repositories that GitHub reports as public is free in the Mac app and the GitHub Action.",
+  "Public repositories are free everywhere and never need a license."
+])("rejects a broad public-free claim despite negation or a single surface: %s", (claim) => {
+  expect(runGuardWith(claim).status).toBe(1);
+});
