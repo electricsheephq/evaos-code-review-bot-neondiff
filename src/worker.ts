@@ -3695,7 +3695,7 @@ export async function buildGitHubRelatedContext(input: {
     config: { ...relatedConfig, includeCrossRepoRefs: Boolean(input.licenseAdmission?.privateRepoAllowed) && relatedConfig.includeCrossRepoRefs },
     reader: input.github,
     ...((input.visibility ?? visibilityFromPullSummary(input.pull)) === "public"
-      ? { repositoryCovered: createPublicRelatedContextCoverage(input.github, input.repo) } : {}),
+      ? { repositoryCovered: createPublicRelatedContextCoverage(input.github, input.repo), concealUncheckedRepositories: true } : {}),
     ...(input.files ? { files: input.files } : {})
   });
 

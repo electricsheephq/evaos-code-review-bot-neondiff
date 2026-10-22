@@ -1193,6 +1193,7 @@ async function main(): Promise<void> {
       reader: github,
       repositoryCovered: visibility === "public" ? createPublicRelatedContextCoverage(github, repo)
         : (refRepo) => repositoryContentCovered(github, refRepo, commandAdmission),
+      concealUncheckedRepositories: visibility === "public",
       generatedAt
     });
     if (args["output-dir"]) {

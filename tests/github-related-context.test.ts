@@ -56,30 +56,56 @@ describe("GitHub related context packets", () => {
     expect(rateLimited.packet.markdown).not.toMatch(/owner\/(?:private|hidden)/);
   });
 
-  it("bounds coverage checks and lists no unchecked or disabled cross-repository reference", async () => {
+  it("bounds coverage checks and, on a public review, lists no unchecked or disabled cross-repository reference", async () => {
     const checks: string[] = [];
     const reader = { getIssueOrPull: async (_repo: string, number: number) => ({ number, title: "Fixture" }) };
     const repositoryCovered = async (repo: string) => { checks.push(repo); return repo === "owner/repo" || repo.startsWith("owner/pub"); };
     const many = Array.from({ length: 15 }, (_, index) => `owner/r${String(index).padStart(2, "0")}#1`).join(" ");
     const flooded = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: `${many} owner/zpub#1 #2 #3` }),
-      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, reader });
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, concealUncheckedRepositories: true, reader });
     if (!flooded.ok) throw new Error("expected packet");
     expect(checks.filter((repo) => repo !== "owner/repo")).toHaveLength(10);
     expect(flooded.packet.references.map((ref) => `${ref.repo}#${ref.number}`)).toEqual(["owner/repo#2"]);
     expect(flooded.packet.omittedReferences.map((omitted) => omitted.id)).toEqual(["owner/repo#3"]);
     checks.length = 0;
     const filled = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "owner/puba#1 owner/pubb#1 owner/pubc#1" }),
-      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, reader });
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, concealUncheckedRepositories: true, reader });
     if (!filled.ok) throw new Error("expected packet");
     expect(checks).toEqual(["owner/puba"]);
     expect(filled.packet.omittedReferences).toEqual([]);
     checks.length = 0;
     const disabled = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "owner/private#1 and #2" }),
-      config: config({ includeCrossRepoRefs: false }), repositoryCovered, reader });
+      config: config({ includeCrossRepoRefs: false }), repositoryCovered, concealUncheckedRepositories: true, reader });
     if (!disabled.ok) throw new Error("expected packet");
     expect(checks).toEqual(["owner/repo"]);
     expect(disabled.packet.omittedReferences).toEqual([]);
     expect(disabled.packet.markdown).not.toContain("owner/private");
+  });
+
+  it("checks each repository once and keeps omission records on a packet that does not conceal them", async () => {
+    const checks: string[] = [];
+    const reader = { getIssueOrPull: async (_repo: string, number: number) => ({ number, title: "Fixture" }) };
+    const repositoryCovered = async (repo: string) => { checks.push(repo); return repo !== "other/private"; };
+    const many = Array.from({ length: 40 }, (_, index) => `#${index + 10}`).join(" ");
+    const limited = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: `${many} other/private#1 other/private#2 other/public#3` }),
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 2 }), repositoryCovered, reader });
+    if (!limited.ok) throw new Error("expected packet");
+    expect(checks).toEqual(["other/private", "other/public", "owner/repo"]);
+    expect(limited.packet.references.map((ref) => `${ref.repo}#${ref.number}`)).toEqual(["other/public#3", "owner/repo#10"]);
+    expect(limited.packet.omittedReferences).toHaveLength(39);
+    expect(limited.packet.omittedReferences.map((omitted) => omitted.id)).not.toContain("other/private#1");
+    checks.length = 0;
+    const filled = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "other/puba#1 other/pubb#1" }),
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }), repositoryCovered, reader });
+    if (!filled.ok) throw new Error("expected packet");
+    expect(checks).toEqual(["other/puba"]);
+    expect(filled.packet.omittedReferences).toEqual([expect.objectContaining({ id: "other/pubb#1", reason: "reference_limit" })]);
+    checks.length = 0;
+    const disabled = await buildGitHubRelatedContextPacket({ repo: "owner/repo", pull: pull({ body: "other/private#1 and #2" }),
+      config: config({ includeCrossRepoRefs: false }), repositoryCovered, reader });
+    if (!disabled.ok) throw new Error("expected packet");
+    expect(checks).toEqual(["owner/repo"]);
+    expect(disabled.packet.omittedReferences).toEqual([expect.objectContaining({ id: "other/private#1", reason: "cross_repo_disabled" })]);
   });
 
   it("extracts explicit issue and PR references from title/body deterministically", () => {
