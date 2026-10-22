@@ -2072,6 +2072,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           github: createGitHubRelatedContextReader(config, github),
           repo,
           pull,
+          visibility,
           files: reviewFiles,
           evidenceDir
         });
@@ -3132,7 +3133,7 @@ export async function buildLicenseGateForPull(input: {
   });
 }
 
-function visibilityFromRepositorySummary(repoMetadata: RepositorySummary): "public" | "private" | "unknown" {
+export function visibilityFromRepositorySummary(repoMetadata: RepositorySummary): "public" | "private" | "unknown" {
   if (repoMetadata.private || repoMetadata.visibility === "private" || repoMetadata.visibility === "internal") return "private";
   if (repoMetadata.visibility === "public" || repoMetadata.private === false) return "public";
   return "unknown";
@@ -3604,12 +3605,27 @@ export function buildReviewLensContext(input: {
   return { packet: packetResult.packet };
 }
 
+export function createPublicRelatedContextCoverage(github: Partial<Pick<GitHubApi, "getRepo">>, publicRepo?: string): (repo: string) => Promise<boolean> {
+  const cache = new Map<string, Promise<boolean>>();
+  if (publicRepo) cache.set(publicRepo.toLowerCase(), Promise.resolve(true));
+  return (repo) => {
+    const key = repo.toLowerCase();
+    if (!cache.has(key)) cache.set(key, (async () => {
+      try {
+        return github.getRepo ? visibilityFromRepositorySummary(await github.getRepo(repo)) === "public" : false;
+      } catch { return false; }
+    })());
+    return cache.get(key)!;
+  };
+}
+
 export async function buildGitHubRelatedContext(input: {
   config: BotConfig;
   licenseAdmission?: ProductionLicenseAdmission;
-  github: GitHubRelatedContextReader;
+  github: GitHubRelatedContextReader & Partial<Pick<GitHubApi, "getRepo">>;
   repo: string;
   pull: PullRequestSummary;
+  visibility?: "public" | "private" | "unknown";
   files?: PullFilePatch[];
   evidenceDir: string;
 }): Promise<{ packet?: GitHubRelatedContextPacket }> {
@@ -3621,6 +3637,8 @@ export async function buildGitHubRelatedContext(input: {
     pull: input.pull,
     config: { ...relatedConfig, includeCrossRepoRefs: Boolean(input.licenseAdmission?.privateRepoAllowed) && relatedConfig.includeCrossRepoRefs },
     reader: input.github,
+    ...((input.visibility ?? visibilityFromPullSummary(input.pull)) === "public"
+      ? { repositoryCovered: createPublicRelatedContextCoverage(input.github, input.repo) } : {}),
     ...(input.files ? { files: input.files } : {})
   });
 
@@ -3638,7 +3656,7 @@ export async function buildGitHubRelatedContext(input: {
   return { packet: packetResult.packet };
 }
 
-export function createGitHubRelatedContextReader(config: BotConfig, fallback: GitHubRelatedContextReader): GitHubRelatedContextReader {
+export function createGitHubRelatedContextReader(config: BotConfig, fallback: GitHubRelatedContextReader): GitHubRelatedContextReader & Partial<Pick<GitHubApi, "getRepo">> {
   const relatedConfig = config.githubRelatedContext;
   if (!relatedConfig?.enabled) return fallback;
   const githubConfig = {
