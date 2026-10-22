@@ -34,7 +34,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
@@ -55,7 +55,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
-import { collectAnsweredThreads, type AnsweredThread } from "./prior-thread-suppression.js";
+import { collectAnsweredThreads, suppressAnsweredDemotedComments, type AnsweredThread } from "./prior-thread-suppression.js";
 import { buildFindingFingerprint } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
@@ -138,7 +138,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -186,13 +186,16 @@ function recordConsumedAuthorizationIncident(input: {
   });
 }
 
-export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+export function buildReviewProviderMetadata(config: BotConfig, env: NodeJS.ProcessEnv = process.env): ReviewProviderMetadata {
   if (config.codexRuntime?.enabled) {
+    // providerId stays the stable registry/ledger key; the display name says which credential Codex
+    // uses. buildCodexRuntimeEnv passes either API key to the child, and Codex prefers it over OAuth.
+    const apiKey = Boolean(env.CODEX_API_KEY || env.OPENAI_API_KEY);
     return {
       providerId: "codex-cli-oauth",
       adapter: "codex-cli",
       model: config.codexRuntime.model,
-      displayName: "Codex CLI (existing OAuth session)"
+      displayName: apiKey ? "Codex CLI (API key)" : "Codex CLI (existing OAuth session)"
     };
   }
   const providerId = resolveReviewRegistryProviderId(config);
@@ -2039,11 +2042,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           evidenceDir
         });
 
+    // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
+    // schema, sandbox and citation checks all agree on the fallback.
+    const checkoutReads = config.codexRuntime?.enabled
+      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: config.codexRuntime.cliPath })
+      : { status: "disabled" as const };
+    const reviewConfig: BotConfig = config.codexRuntime && config.codexRuntime.checkoutReads === true && checkoutReads.status !== "enabled"
+      ? { ...config, codexRuntime: { ...config.codexRuntime, checkoutReads: false } }
+      : config;
+    if (checkoutReads.status !== "disabled") writeRedactedJson(join(evidenceDir, "checkout-reads.json"), checkoutReads);
+    if (checkoutReads.status.startsWith("unavailable:")) {
+      console.warn(
+        `[checkout-reads] ${checkoutReads.status} repo=${repo} pr=${pull.number}: ${checkoutReads.detail ?? "unavailable"}; running a diff-only review`
+      );
+    }
     const promptForFiles = (filesForPrompt: PullFilePatch[]) => buildReviewPrompt({
       repo,
       pull,
       files: filesForPrompt,
-      ...(config.codexRuntime?.enabled && config.codexRuntime.checkoutReads === true ? { checkoutAccess: "shell_read_only" as const } : {}),
+      ...(checkoutReads.status === "enabled" ? { checkoutAccess: "shell_read_only" as const } : {}),
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(reviewLensContext.packet ? { reviewLensPacket: reviewLensContext.packet } : {}),
@@ -2109,7 +2126,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     };
     assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
-      config,
+      config: reviewConfig,
       github,
       state,
       repo,
@@ -2175,6 +2192,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
     const zcodeResult = zcodeExecution.result;
+    if (checkoutReads.status.startsWith("unavailable:") && Array.isArray(zcodeResult.runtime.notes)) {
+      zcodeResult.runtime.notes.push(`Checkout reads ${checkoutReads.status}; this was a diff-only review.`);
+    }
 
     await assertGitClean(worktree.path);
 
@@ -2201,7 +2221,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       try {
         const priorComments = await github.listPullReviewComments(repo, pull.number);
         priorThreadEvidence.commentsRead = priorComments.length;
-        const isOwn = (comment: (typeof priorComments)[number]) => github.isBotAuthoredComment(comment);
+        const identity = await github.postingIdentity();
+        const isOwn = (comment: (typeof priorComments)[number]) => isAuthoredBy(comment.user, identity);
         priorThreadEvidence.ownRoots = priorComments.filter((comment) => comment.in_reply_to_id == null && isOwn(comment)).length;
         answeredThreads = collectAnsweredThreads(priorComments, isOwn);
         priorThreadEvidence.answeredRoots = answeredThreads.length;
@@ -2255,10 +2276,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
-    const comments = selfConsistency.comments;
+    // A P0 lowered to P2 skipped the gate's prior-thread match; re-apply it at the published severity.
+    // P2 is never REQUEST_CHANGES-eligible, so dropping one leaves selfConsistency.event unchanged.
+    const answeredDemoted = suppressAnsweredDemotedComments(selfConsistency.comments, gatedFindings, answeredThreads ?? []);
+    if (answeredDemoted.dropped.length) {
+      priorThreadEvidence.matches.push(...answeredDemoted.dropped
+        .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId })));
+      priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
+      writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
+    }
+    const comments = answeredDemoted.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
-    const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
+    const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDemoted.dropped], config.confidenceCalibration?.publicDisplay);
     const candidateEvent = selfConsistency.event;
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({
