@@ -105,6 +105,11 @@ describe("worker review failures", () => {
       expect(JSON.stringify(context.packet)).not.toContain("org/private");
       expect(github.getRepo.mock.calls.map(([repo]) => repo).sort()).toEqual(["org/internal", "org/private", "org/public", "org/unavailable", "org/unknown"]);
     } else expect(github.getRepo).not.toHaveBeenCalled();
+    config.githubRelatedContext = { ...config.githubRelatedContext, includeCrossRepoRefs: false };
+    const disabled = await buildGitHubRelatedContext({ config, github, repo: "org/reviewed", pull, evidenceDir,
+      licenseAdmission: await createTestLicenseAdmission({ privateRepoAllowed: true }) });
+    // Only a public review conceals the disabled cross-repository references it never checked.
+    expect(JSON.stringify(disabled.packet).includes("org/private#1")).toBe(visibility === "private");
   });
 
   it("records a failed head with redacted evidence so duplicate suppression can hold", () => {

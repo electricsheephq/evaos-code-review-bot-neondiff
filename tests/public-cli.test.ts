@@ -64,6 +64,25 @@ describe("public NeonDiff CLI surface", () => {
     } finally { await closeServer(server); }
   });
 
+  it("never lists a disabled cross-repository reference in a public repository's related-context packet", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-public-related-"));
+    roots.push(root);
+    const server = createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ private: false, visibility: "public", number: 1, title: "Fixture", body: request.url!.includes("/issues/") ? "" : "Refs other/private#1 and #2", labels: [], head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40), repo: { private: false, visibility: "public" } } }));
+    });
+    await listen(server);
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, JSON.stringify({ pilotRepos: ["fixture/public"], statePath: join(root, "state.sqlite"), workRoot: join(root, "runtime"), evidenceDir: join(root, "evidence"), github: { token: "fixture-token", apiBaseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` } }));
+      const result = await runCli(["build-github-related-context-packet", "--config", configPath, "--repo", "fixture/public", "--pr", "1"]);
+      const packet = JSON.parse(result.stdout) as { ok: boolean; packet: { references: Array<{ repo: string; number: number }> } };
+      expect(packet.ok).toBe(true);
+      expect(packet.packet.references.map((ref) => `${ref.repo}#${ref.number}`)).toEqual(["fixture/public#2"]);
+      expect(result.stdout).not.toContain("other/private");
+    } finally { await closeServer(server); }
+  });
+
   it.each([
     ["build-memory-packet", []],
     ["finishing-touch-dry-run", ["--pr", "1", "--head-sha", "a".repeat(40), "--current-head", "a".repeat(40), "--author", "fixture-owner", "--comment-id", "7", "--body", "@neondiff changelog draft", "--trusted-authors", "fixture-owner", "--dry-run", "false", "--record", "true"]]
