@@ -540,6 +540,7 @@ issues.
 Issue mode requires an authenticated token or GitHub App installation with
 Issues read access. Live App-authored issue comments require Issues write
 permission and must not be enabled until that permission expansion is tracked.
+Issue analysis reads only the repository source snapshot, under the same Codex permission profile as checkout reads, and needs Codex CLI 0.163.0 or later.
 
 Dry-run scan issue enrichment against the separate issue allowlist:
 

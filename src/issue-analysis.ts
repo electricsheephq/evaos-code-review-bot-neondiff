@@ -7,6 +7,7 @@ import {
   runCodexStructuredOutput,
   type CodexExecInvocation,
   type CodexProcessResult,
+  type CodexReadConfinement,
   type CodexReasoningEffort
 } from "./codex-runtime.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -230,6 +231,7 @@ export async function runIssueAnalysis(input: {
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
+  resolveReadConfinement?: (cwd: string, cliPath: string, env: NodeJS.ProcessEnv) => CodexReadConfinement;
 } = {}): Promise<{
   analysis: IssueAnalysis;
   scorecard: IssueAnalysisQualityScorecard;
@@ -250,6 +252,7 @@ export async function runIssueAnalysis(input: {
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,
     artifactPrefix: "codex-issue-analysis",
+    confineReadsToCheckout: true,
     rejectSecretOutput: true,
     schema: ISSUE_ANALYSIS_JSON_SCHEMA,
     parse: parseIssueAnalysis
@@ -270,6 +273,7 @@ export async function runIssueAnalysis(input: {
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,
     artifactPrefix: "codex-issue-fact-adjudication",
+    confineReadsToCheckout: true,
     rejectSecretOutput: true,
     schema: ISSUE_ANALYSIS_FACT_ENTAILMENT_SCHEMA,
     parse: (value) => parseIssueFactEntailment(value, result.value.verifiedFacts.length)
