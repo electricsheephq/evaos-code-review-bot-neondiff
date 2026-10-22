@@ -220,7 +220,7 @@ describe("worker context budget preflight", () => {
     });
     const github = githubForPull(pull, [file]);
     if (mode !== "missing") Object.assign(github, { listPullReviewComments,
-      isBotAuthoredComment: (comment: typeof comments[number]) => comment.user.type === "Bot" && comment.user.login === "evaos-code-review-bot[bot]" });
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
     try {
       expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
       expect(createdReviews).toHaveLength(1);

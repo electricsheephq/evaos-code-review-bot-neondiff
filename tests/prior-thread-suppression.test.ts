@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { GitHubApi } from "../src/github.js";
+import { GitHubApi, isAuthoredBy } from "../src/github.js";
 import { collectAnsweredThreads, matchPriorThread, titleWords, wordSetJaccard } from "../src/prior-thread-suppression.js";
 import type { Finding, PullReviewComment } from "../src/types.js";
 
-const github = new GitHubApi({});
-const isOwn = (comment: PullReviewComment) => github.isBotAuthoredComment(comment);
+const ownIdentity = { login: "evaos-code-review-bot[bot]", type: "Bot" as const };
+const isOwn = (comment: PullReviewComment) => isAuthoredBy(comment.user, ownIdentity);
 const root: PullReviewComment = {
   id: 1, path: "src/save.ts", line: 30, original_line: 2,
   user: { login: "evaos-code-review-bot[bot]", type: "Bot" },
@@ -30,10 +30,10 @@ describe("prior thread suppression", () => {
     expect(collectAnsweredThreads([{ ...root, user: { login: "other[bot]", type: "Bot" } }, reply], isOwn)).toEqual([]);
     expect(collectAnsweredThreads([reply, root], isOwn)).toEqual(threads());
   });
-  it("uses the existing CI bot identity", () => {
-    const ci = new GitHubApi({ token: "fixture-token" });
-    expect(ci.isBotAuthoredComment({ ...root, user: { login: "github-actions[bot]", type: "Bot" } })).toBe(true);
-    expect(ci.isBotAuthoredComment(root)).toBe(false);
+  it("matches own roots by the client's posting identity", async () => {
+    const app = await new GitHubApi({}).postingIdentity();
+    expect(isAuthoredBy(root.user, app)).toBe(true);
+    expect(isAuthoredBy({ ...root.user!, type: "User" }, app)).toBe(false);
   });
   it("ignores outdated or unanchored roots even with original_line", () => {
     for (const line of [null, undefined]) expect(collectAnsweredThreads([{ ...root, line }, reply], isOwn)).toEqual([]);
