@@ -5281,7 +5281,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(active.gates).toContainEqual({
       name: "background_pr_lane",
       ok: true,
-      detail: "active; reviews enrolled repositories; dry run writes local evidence without posting"
+      detail: "active; reviews enrolled repositories and posts reviews"
     });
     expect(active.gates).toContainEqual(expect.objectContaining({
       name: "daemon_heartbeat_recent",
@@ -5300,6 +5300,47 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
           : "unknown background PR lane; wait for a classified heartbeat"
       });
     }
+  });
+
+  it("fails the background PR lane gate when the active worker runs in dry run", () => {
+    const statusFor = (dryRun: { heartbeat?: boolean; launchd?: boolean }) => buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/config/live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/config/live.json",
+        ...(dryRun.launchd === undefined ? {} : { dryRun: dryRun.launchd }),
+        usesSystemCa: true
+      },
+      database: { rowCount: 0, errorCount: 0 },
+      heartbeat: {
+        ...freshHeartbeat(),
+        ...(dryRun.heartbeat === undefined ? {} : { dryRun: dryRun.heartbeat })
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+    const dryRunDetail =
+      "active in dry run; reviews are written to local evidence and not posted; restart the worker with --dry-run false";
+
+    for (const dryRun of [
+      { heartbeat: true, launchd: false },
+      { heartbeat: false, launchd: true },
+      { heartbeat: true }
+    ]) {
+      const status = statusFor(dryRun);
+      expect(status.ok).toBe(false);
+      expect(status.gates).toContainEqual({ name: "background_pr_lane", ok: false, detail: dryRunDetail });
+    }
+
+    const live = statusFor({ heartbeat: false });
+    expect(live.ok).toBe(true);
+    expect(live.gates).toContainEqual(expect.objectContaining({ name: "background_pr_lane", ok: true }));
   });
 
   it("reports active provider cooldown skips without treating them as blocking DB errors", () => {
