@@ -1,0 +1,8 @@
+exec
+/bin/zsh -lc "python3 - <<'PY'
+from pathlib import Path
+p=Path('src/issue-analysis.ts');s=p.read_text().replace('source: FindingEvidenceRef): NonNullable<DroppedFinding[\"evidenceFailure\"]> | null {','source: FindingEvidenceRef): Exclude<DroppedFinding[\"evidenceFailure\"], \"malformed\" | undefined> | null {');p.write_text(s)
+print('Narrowed verifier return type: malformed is a parse failure, never a source-ref failure; issue-analysis messages unchanged.')
+PY" in /work/repo
+ succeeded in 0ms:
+Narrowed verifier return type: malformed is a parse failure, never a source-ref failure; issue-analysis messages unchanged.

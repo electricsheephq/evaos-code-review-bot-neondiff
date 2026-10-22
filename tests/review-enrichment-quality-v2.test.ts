@@ -275,6 +275,11 @@ describe("review and issue-enrichment quality v2", () => {
     )).toThrow("public_review_config_leak_rejected");
 
     expect(() => assertPublicReviewOutputSafe(
+      "You are NeonDiff, a code reviewer",
+      reviewPromptForbiddenFragments()
+    )).toThrow("public_review_config_leak_rejected");
+
+    expect(() => assertPublicReviewOutputSafe(
       "Do not modify files",
       reviewPromptForbiddenFragments()
     )).toThrow("public_review_config_leak_rejected");

@@ -331,9 +331,11 @@ registry target; it never puts that key in GitHub App settings or config.
 For public/private entitlement proof, keep the GitHub doctor JSON and the review
 evidence path together. The proof packet should show `visibility_result`,
 `visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.
-Public repos with no license fail this gate, as do private repos without an
-active private entitlement, expired or revoked entitlements, and unknown
-visibility. Every denial must happen before checkout, provider calls, or GitHub
+From 1.1.0, public repos with no license pass this gate on the CI review path
+(the GitHub Action or `neondiff review-pr --ci`); the self-hosted worker
+(`daemon`, `run-once`, and local `review-pr`) and the npm CLI 1.0.x still fail
+them (#1191). Private repos without an active private entitlement, expired or
+revoked entitlements, and unknown visibility fail it. Every denial must happen before checkout, provider calls, or GitHub
 review posting. A provider API key alone is not repository entitlement evidence.
 
 ## First Review Path
@@ -361,17 +363,17 @@ and fix App credentials before continuing.
 
 ## License Boundary
 
-The supported distribution requires live API-backed activation before public,
-private, internal, or unknown repository work. Legacy `publicReposFree` and
-`privateReposRequireEntitlement` values are migration inputs only and cannot
-weaken the production policy — a local visibility flag would trust the client's
-own claim.
-
-Coming with the native app: public open-source repository review will be free
-with no NeonDiff Activation Key, while private/commercial review will require an
-active entitlement. This managed public-free/private-paid model ships with the
-native NeonDiff app and the server-side GitHub App broker (#614), which verifies
-repository visibility; it is not enforced by the current CLI.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
+free with no license key through the GitHub Action and `neondiff review-pr --ci`.
+The self-hosted worker this guide sets up (`providers verify`, `daemon`,
+`run-once`, and local `review-pr`) and the Mac app still ask for a license key
+for every repository for now; extending free public review to them is tracked
+in [#1191](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191). The visibility comes from GitHub's repository metadata
+read with the App installation token. Private, internal, and unknown-visibility
+repositories require live API-backed activation before any work.
+Legacy `publicReposFree` and `privateReposRequireEntitlement` values in user
+config are migration inputs only and cannot change the production policy. The npm CLI 1.0.x
+requires activation for every repository.
 
 Private repo data stays local to the worker and GitHub App installation. Do not
 send private repository names, diffs, logs, private keys, provider keys, license

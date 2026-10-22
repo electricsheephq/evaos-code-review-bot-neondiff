@@ -112,6 +112,12 @@ export async function requireActiveProductionLicense(
   input: ProductionLicenseAdmissionInput
 ): Promise<{ ok: true; admission: ProductionLicenseAdmission } | { ok: false; decision: RedactedLicenseDecision }> {
   const config = resolveProductionLicensePolicy(input.config);
+  if (input.operation === "review_cycle" && input.visibility === "public" && config.publicReposFree) {
+    return { ok: true, admission: mintProductionLicenseAdmission({
+      operation: "review_cycle", checkedAt: (input.now ?? new Date()).toISOString(),
+      fingerprint: "public-free", repoVisibilityScope: "public", privateRepoAllowed: false, updateEntitlement: false
+    }) };
+  }
   const machineId = input.machineId ?? readRuntimeLicenseMachineId();
   const status = await getLicenseStatus({
     config,

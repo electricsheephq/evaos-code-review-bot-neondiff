@@ -1667,7 +1667,7 @@ describe("worker review failures", () => {
     const result = await reviewPull({
       config,
       github: {
-        canPostAsApp: () => true,
+        canPost: () => true,
         upsertIssueComment: async (input: { marker: string; body: string }) => {
           statusCalls.push(input);
           return { action: "updated" as const, id: 12348, html_url: "https://github.test/status-comment" };
@@ -1738,7 +1738,7 @@ describe("worker review failures", () => {
       const result = await reviewPull({
         config,
         github: {
-          canPostAsApp: () => true,
+          canPost: () => true,
           upsertIssueComment: async () => {
             throw new Error("reconcile should fail before status upsert");
           },
@@ -2041,7 +2041,7 @@ describe("worker review failures", () => {
       listPullFiles: async () => {
         throw new Error("stale retry should not fetch files");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     const result = await retryFailedHeadWithDeps({
@@ -2086,7 +2086,7 @@ describe("worker review failures", () => {
       listPullFiles: async () => {
         throw new Error("already-resolved retry should not fetch files");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     const result = await retryFailedHeadWithDeps({
@@ -2437,7 +2437,7 @@ describe("worker review failures", () => {
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
       getPull: async () => pull,
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12345, html_url: "https://github.test/status-comment" };
@@ -2508,7 +2508,7 @@ describe("worker review failures", () => {
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1235#pullrequestreview-3";
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12346, html_url: "https://github.test/status-comment" };
@@ -2582,7 +2582,7 @@ describe("worker review failures", () => {
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1242#pullrequestreview-10";
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12348, html_url: "https://github.test/status-comment" };
@@ -2657,7 +2657,7 @@ describe("worker review failures", () => {
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1243#pullrequestreview-11";
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12349, html_url: "https://github.test/status-comment" };
@@ -2723,7 +2723,7 @@ describe("worker review failures", () => {
     const headSha = "cccccccccccccccccccccccccccccccccccccccc";
     const pull = pullSummary(1236, headSha);
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async () => {
         throw new Error("status comment should not be posted");
       }
@@ -2794,7 +2794,7 @@ describe("worker review failures", () => {
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1238#pullrequestreview-4";
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12347, html_url: "https://github.test/status-comment" };
@@ -2922,7 +2922,7 @@ describe("worker review failures", () => {
     const pull = pullSummary(1240, headSha);
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1240#pullrequestreview-8";
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async () => {
         throw new Error("status comment disabled");
       }
@@ -2978,7 +2978,7 @@ describe("worker review failures", () => {
     const pull = pullSummary(1239, headSha);
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1239#pullrequestreview-7";
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async () => {
         throw new Error("status comment disabled");
       }
@@ -3046,7 +3046,7 @@ describe("worker review failures", () => {
     const pull = pullSummary(1241, headSha);
     const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/1241#pullrequestreview-9";
     const github = {
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async () => {
         throw new Error("status comment disabled");
       }
@@ -3116,7 +3116,7 @@ describe("worker review failures", () => {
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
       getPull: async () => pull,
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12345, html_url: "https://github.test/status-comment" };
@@ -3181,7 +3181,7 @@ describe("worker review failures", () => {
     const statusCalls: Array<{ marker: string; body: string }> = [];
     const github = {
       getPull: async () => pull,
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async (input: { marker: string; body: string }) => {
         statusCalls.push(input);
         return { action: "updated" as const, id: 12345, html_url: "https://github.test/status-comment" };

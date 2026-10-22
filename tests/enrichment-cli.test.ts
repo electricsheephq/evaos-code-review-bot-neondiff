@@ -491,7 +491,7 @@ describe("build-enrichment-comment issue CLI", () => {
       const parsed = JSON.parse(stdout);
 
       expect(parsed.summary).toMatchObject({ wouldComment: 1, posted: 0, failed: 0 });
-      expect(parsed.status.blockers).toContain("github_app_credentials_required_for_live_issue_comments");
+      expect(parsed.status.blockers).not.toContain("github_app_credentials_required_for_live_issue_comments");
       expect(requests).toContainEqual(expect.objectContaining({
         method: "GET",
         path: "/repos/owner/issue-repo/issues/17",
@@ -1208,7 +1208,7 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
     codexRuntime: {
       enabled: true,
       cliPath: codexCliPath,
-      model: "gpt-5.6-luna",
+      model: "gpt-6.1-sol",
       reasoningEffort: "max",
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024,

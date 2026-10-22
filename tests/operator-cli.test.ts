@@ -445,7 +445,7 @@ describe("operator CLI summaries", () => {
       codexRuntime: {
         enabled: true,
         cliPath: "/usr/bin/codex",
-        model: "gpt-5.6-luna",
+        model: "gpt-6.1-sol",
         reasoningEffort: "max",
         timeoutMs: 30_000,
         maxOutputBytes: 1_048_576
@@ -475,7 +475,7 @@ describe("operator CLI summaries", () => {
       durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
       issueEnrichment: buildIssueEnrichmentStatus({
         config: loadConfig(configPath),
-        canPostAsApp: false,
+        canPost: false,
         checkedAt: "2026-07-03T00:00:00.000Z"
       }),
       checkedAt: "2026-07-03T00:00:00.000Z"

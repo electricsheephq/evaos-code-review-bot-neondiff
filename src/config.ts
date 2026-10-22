@@ -70,6 +70,7 @@ export interface BotConfig {
     ttlMs: number;
     headCountLimit: number;
   };
+  baseMergeOnlySkip?: { enabled?: boolean; excludeRepos?: string[] };
   reviewScheduler?: ReviewSchedulerConfig;
   reviewEnsemble?: ReviewEnsembleConfig;
   riskWeightedQueue?: RiskWeightedQueueConfig;
@@ -113,6 +114,7 @@ export interface BotConfig {
   providers?: ProviderRegistryConfig;
   codexRuntime?: {
     enabled: boolean;
+    checkoutReads?: boolean;
     cliPath: string;
     model: string;
     reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
@@ -247,7 +249,22 @@ export interface ReviewSchedulerConfig {
   backgroundPriority: number;
 }
 
+export const PUBLIC_REPO_AUTHOR_ASSOCIATIONS = [
+  "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"
+] as const;
+export interface PublicRepoAuthorGateConfig {
+  mode: "auto" | "on" | "off";
+  allowedAssociations: string[];
+  allowedLogins: string[];
+}
+export const DEFAULT_PUBLIC_REPO_AUTHOR_GATE: PublicRepoAuthorGateConfig = {
+  mode: "auto", allowedAssociations: ["OWNER", "MEMBER", "COLLABORATOR"],
+  allowedLogins: ["dependabot[bot]", "renovate[bot]"]
+};
+
 export interface ReviewGateConfig {
+  publicRepoAuthorGate?: PublicRepoAuthorGateConfig;
+  priorThreadSuppression?: { enabled: boolean };
   /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
   maxInlineComments: number;
   /** The public GitHub event selection policy; defaults to trusted owner authorization only. */
@@ -274,6 +291,10 @@ export interface SelfConsistencyConfig {
   provider?: string;
   /** Cost bound: max findings re-checked per review, in ranked order. Default 5. */
   maxFindingsPerReview?: number;
+  /** Policy for unconfirmed or unsupported findings: suppress (default) or lower to P2. */
+  onUnsupported?: "suppress" | "demote";
+  /** Optional positive per-verifier-call timeout in milliseconds; absent inherits the runtime timeout. */
+  timeoutMs?: number;
 }
 
 export interface RiskWeightedQueueConfig {
@@ -326,6 +347,7 @@ const DEFAULT_CONFIG: BotConfig = {
   pilotRepos: ["example-org/example-repo"],
   pollIntervalMs: 90_000,
   skipDrafts: true,
+  baseMergeOnlySkip: { enabled: true, excludeRepos: [] },
   // workRoot must resolve outside this checkout (validateWorkRootIsolation); /tmp/neondiff is a
   // portable placeholder that satisfies that check on any machine without edits.
   workRoot: "/tmp/neondiff/runtime",
@@ -389,6 +411,8 @@ const DEFAULT_CONFIG: BotConfig = {
     publicDisplay: buildPublicConfidencePolicy()
   },
   reviewGate: {
+    publicRepoAuthorGate: DEFAULT_PUBLIC_REPO_AUTHOR_GATE,
+    priorThreadSuppression: { enabled: true },
     maxInlineComments: 25,
     reviewEventPolicy: {
       mode: "trusted_command_only"
@@ -466,7 +490,7 @@ const DEFAULT_CONFIG: BotConfig = {
     keychainAccount: OFFICIAL_LICENSE_KEYCHAIN_ACCOUNT,
     requestTimeoutMs: 10_000,
     offlineGraceMs: 0,
-    publicReposFree: false,
+    publicReposFree: true,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: true
   },
@@ -599,12 +623,13 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   codexRuntime: {
     enabled: false,
-    cliPath: "/usr/local/bin/codex",
-    model: "gpt-5.6-luna",
-    reasoningEffort: "max",
+    checkoutReads: true,
+    cliPath: "codex",
+    model: "gpt-6.1-sol",
+    reasoningEffort: "high",
     timeoutMs: 600_000,
     maxOutputBytes: 20 * 1024 * 1024,
-    contextWindowTokens: 128_000
+    contextWindowTokens: 500_000
   },
   github: {}
 };
@@ -619,6 +644,25 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     && isRecord(fromFile.github)
     && Object.prototype.hasOwnProperty.call(fromFile.github, "privateKey")) {
     throw new Error("config files must not contain github.privateKey; use the bounded runtime stdin channel");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.publicRepoAuthorGate !== undefined) {
+    const gate = fromFile.reviewGate.publicRepoAuthorGate;
+    validatePublicRepoAuthorGateConfig(isRecord(gate) ? { ...DEFAULT_PUBLIC_REPO_AUTHOR_GATE, ...gate } : gate,
+      "config.reviewGate.publicRepoAuthorGate");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.priorThreadSuppression !== undefined) {
+    const gate = fromFile.reviewGate.priorThreadSuppression;
+    validatePriorThreadSuppressionConfig(isRecord(gate) ? { enabled: true, ...gate } : gate,
+      "config.reviewGate.priorThreadSuppression");
+  }
+  if (isRecord(fromFile) && isRecord(fromFile.codexRuntime) && fromFile.codexRuntime.checkoutReads !== undefined) {
+    validateBoolean(fromFile.codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
+  }
+  if (isRecord(fromFile) && fromFile.baseMergeOnlySkip !== undefined) {
+    const skip = fromFile.baseMergeOnlySkip;
+    if (!isRecord(skip)) throw new Error("config.baseMergeOnlySkip must be an object");
+    if (skip.enabled !== undefined) validateBoolean(skip.enabled, "config.baseMergeOnlySkip.enabled");
+    if (skip.excludeRepos !== undefined) validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
   merged.github = { ...merged.github };
@@ -672,6 +716,18 @@ function validateConfig(config: BotConfig): void {
   if (config.canaryPulls !== undefined) {
     validateStringArray(config.canaryPulls, "config.canaryPulls");
     for (const canary of config.canaryPulls) validateCanaryPull(canary, "config.canaryPulls");
+  }
+  if (config.baseMergeOnlySkip !== undefined) {
+    const skip = config.baseMergeOnlySkip;
+    if (!isRecord(skip)) throw new Error("config.baseMergeOnlySkip must be an object");
+    for (const key of Object.keys(skip)) {
+      if (!["enabled", "excludeRepos"].includes(key)) throw new Error(`config.baseMergeOnlySkip.${key} is unknown`);
+    }
+    if (skip.enabled !== undefined) validateBoolean(skip.enabled, "config.baseMergeOnlySkip.enabled");
+    if (skip.excludeRepos !== undefined) {
+      validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
+      for (const repo of skip.excludeRepos) validateRepoName(repo, "config.baseMergeOnlySkip.excludeRepos");
+    }
   }
   validateBoolean(config.skipDrafts, "config.skipDrafts");
   validatePositiveInteger(config.pollIntervalMs, "config.pollIntervalMs");
@@ -796,9 +852,10 @@ function validateConfig(config: BotConfig): void {
   const codexRuntime = config.codexRuntime ?? DEFAULT_CONFIG.codexRuntime!;
   config.codexRuntime = codexRuntime;
   validateBoolean(codexRuntime.enabled, "config.codexRuntime.enabled");
+  if (codexRuntime.checkoutReads !== undefined) validateBoolean(codexRuntime.checkoutReads, "config.codexRuntime.checkoutReads");
   validateNonEmptyString(codexRuntime.cliPath, "config.codexRuntime.cliPath");
-  if (codexRuntime.enabled && !isAbsolute(codexRuntime.cliPath)) {
-    throw new Error("config.codexRuntime.cliPath must be absolute when enabled");
+  if (codexRuntime.enabled && codexRuntime.cliPath !== "codex" && !isAbsolute(codexRuntime.cliPath)) {
+    throw new Error("config.codexRuntime.cliPath must be codex or absolute when enabled");
   }
   validateNonEmptyString(codexRuntime.model, "config.codexRuntime.model");
   if (!["low", "medium", "high", "xhigh", "max"].includes(codexRuntime.reasoningEffort)) {
@@ -903,6 +960,10 @@ function validatePublicCommandsConfig(value: unknown, label: string): void {
 
 function validateReviewGateConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  if (value.priorThreadSuppression !== undefined) {
+    validatePriorThreadSuppressionConfig(value.priorThreadSuppression, `${label}.priorThreadSuppression`);
+  }
+  if (value.publicRepoAuthorGate !== undefined) validatePublicRepoAuthorGateConfig(value.publicRepoAuthorGate, `${label}.publicRepoAuthorGate`);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
   validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
   if (value.requestChangesConfidenceFloors !== undefined) {
@@ -936,6 +997,28 @@ function validateReviewGateConfig(value: unknown, label: string): void {
   if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
 }
 
+function validatePriorThreadSuppressionConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "enabled") throw new Error(`${label} has unknown key "${key}"`);
+  }
+  validateBoolean(value.enabled, `${label}.enabled`);
+}
+
+function validatePublicRepoAuthorGateConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (!["mode", "allowedAssociations", "allowedLogins"].includes(key)) throw new Error(`${label} has unknown key "${key}"`);
+  }
+  if (!["auto", "on", "off"].includes(value.mode as string)) throw new Error(`${label}.mode must be auto, on, or off`);
+  if (!Array.isArray(value.allowedAssociations) || value.allowedAssociations.some(
+    (entry) => !(PUBLIC_REPO_AUTHOR_ASSOCIATIONS as readonly unknown[]).includes(entry)
+  )) throw new Error(`${label}.allowedAssociations must contain GitHub author associations`);
+  if (!Array.isArray(value.allowedLogins) || value.allowedLogins.some(
+    (entry) => typeof entry !== "string" || !entry.trim() || entry !== entry.trim()
+  )) throw new Error(`${label}.allowedLogins must contain non-empty exact logins`);
+}
+
 function validateReviewEventPolicyConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   for (const key of Object.keys(value)) {
@@ -965,6 +1048,10 @@ function validateSelfConsistencyConfig(value: unknown, label: string): void {
   if (value.maxFindingsPerReview !== undefined) {
     validatePositiveInteger(value.maxFindingsPerReview, `${label}.maxFindingsPerReview`);
   }
+  if (value.onUnsupported !== undefined && value.onUnsupported !== "suppress" && value.onUnsupported !== "demote") {
+    throw new Error(`${label}.onUnsupported must be one of suppress or demote`);
+  }
+  if (value.timeoutMs !== undefined) validatePositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
 }
 
 function validateCalibrationLoopConfig(value: unknown, label: string): void {

@@ -186,7 +186,7 @@ describe("NeonDiff public release readiness", () => {
       expect(normalizedReleaseNotice).toContain(
         "If those identities do not agree, keep using the verified v1.0.4 package"
       );
-      expect(normalizedReleaseNotice).toMatch(/current (?:npm )?CLI \(v1\.0\.x\) requires API-backed activation for every repository/i);
+      expect(normalizedReleaseNotice).toMatch(/npm CLI 1\.0\.x requires API-backed activation for every repository/i);
       expect(normalizedReleaseNotice).toContain("matching non-prerelease GitHub Release");
       expect(normalizedReleaseNotice).toContain("v1.0.3 and earlier do not enforce this boundary.");
       expect(releaseNotice).not.toContain("this source branch");
@@ -809,8 +809,8 @@ describe("NeonDiff public release readiness", () => {
     expect(docs).toMatch(/neondiff dashboard --config config\.local\.json/i);
     expect(docs).toMatch(/Verify API Key/i);
     expect(docs).toMatch(/license\s+status,\s+GitHub App status,\s+daemon status,\s+and provider readiness/i);
-    expect(docs).toMatch(/current npm CLI \(v1\.0\.x\) requires API-backed activation for every repository/i);
-    expect(docs).toMatch(/public open-source repositor(?:y|ies) will be free/i);
+    expect(docs).toMatch(/npm CLI 1\.0\.x requires API-backed activation for every repository/i);
+    expect(docs).toMatch(/repositories that GitHub reports as public is\s+free/i);
     expect(docs).toMatch(/active NeonDiff entitlement before\s+>\s*worktree prep, provider calls, or GitHub review posting/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
@@ -855,7 +855,7 @@ describe("NeonDiff public release readiness", () => {
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/selling-your-app-on-github-marketplace/pricing-plans-for-github-marketplace-apps");
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/listing-an-app-on-github-marketplace");
     expect(listing).toMatch(/requires\s+API-backed activation for public, private, internal, and unknown repository\s+work/i);
-    expect(listing).toMatch(/public open-source repository review will be free/i);
+    expect(listing).toMatch(/repositories that GitHub reports as public is\s+free/i);
     expect(listing).toMatch(/provider\/model costs stay external/i);
     expect(listing).toMatch(/support@electricsheephq\.com/);
     expect(listing).toMatch(/SECURITY\.md/);

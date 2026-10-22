@@ -75,7 +75,7 @@ describe("desktop config CLI", () => {
       enabled: true,
       apiBaseUrl: "https://neondiff-license.fly.dev",
       offlineGraceMs: 0,
-      publicReposFree: false,
+      publicReposFree: true,
       privateReposRequireEntitlement: true,
       productionPolicy: { mode: "mandatory_online" }
     });

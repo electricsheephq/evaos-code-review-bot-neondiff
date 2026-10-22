@@ -92,7 +92,7 @@ export type IssueEnrichmentDryRunOutput =
     };
 
 export interface EnrichmentCommentGithub {
-  canPostAsApp(): boolean;
+  canPost(): boolean;
   upsertIssueComment(input: {
     repo: string;
     issueNumber: number;
@@ -512,7 +512,7 @@ export async function postEnrichmentComment(input: {
 }): Promise<EnrichmentCommentPostResult> {
   if (!input.enabled || !input.enrichment?.postIssueComment) return { posted: false, reason: "disabled" };
   if (input.dryRun) return { posted: false, reason: "dry_run" };
-  if (!input.github.canPostAsApp()) return { posted: false, reason: "missing_app_credentials" };
+  if (!input.github.canPost()) return { posted: false, reason: "missing_app_credentials" };
   try {
     const result = await input.github.upsertIssueComment({
       repo: input.repo,

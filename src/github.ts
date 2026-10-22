@@ -109,6 +109,23 @@ export interface GitHubApiOptions {
   requestTimeoutMs?: number;
 }
 
+export interface GitHubAuthorIdentity {
+  login: string;
+  type: "Bot" | "User";
+}
+
+export interface PullReviewSummary {
+  id: number;
+  commit_id?: string | null;
+  body?: string | null;
+  html_url?: string;
+  user?: { login: string; type?: string } | null;
+}
+
+export function isAuthoredBy(user: { login: string; type?: string } | null | undefined, identity: GitHubAuthorIdentity): boolean {
+  return user?.type === identity.type && user.login === identity.login;
+}
+
 export type GitHubRepositoryVisibility = "public" | "private" | "internal" | "unknown";
 export type GitHubRepositoryVisibilitySource = "repository_api" | "private_flag" | "unavailable";
 export type GitHubRepositoryAccessErrorClass =
@@ -217,6 +234,7 @@ export class GitHubApi {
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
   private repositoryIds = new Map<string, Promise<number>>();
+  private tokenAuthorIdentity?: Promise<GitHubAuthorIdentity>;
 
   constructor(options: GitHubApiOptions) {
     if (options.privateKey && options.privateKeyPath) {
@@ -226,12 +244,48 @@ export class GitHubApi {
     this.privateKey = options.privateKey ?? (options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined);
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
-    this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
+    this.botLogin = options.botLogin ?? (!this.canPostAsApp() && this.token ? "github-actions[bot]" : DEFAULT_BOT_LOGIN);
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
   canPostAsApp(): boolean {
     return Boolean(this.appId && this.privateKey);
+  }
+
+  canPost(): boolean {
+    return this.canPostAsApp() || Boolean(this.token);
+  }
+
+  /**
+   * The author GitHub records on comments and reviews this client posts. App posts use the
+   * configured bot login. A token is resolved once through GET /user, so a personal access token
+   * matches its own User-authored comments; the Actions GITHUB_TOKEN cannot read /user and keeps
+   * the configured bot login.
+   */
+  async postingIdentity(): Promise<GitHubAuthorIdentity> {
+    const fallback: GitHubAuthorIdentity = { login: this.botLogin, type: "Bot" };
+    if (this.canPostAsApp() || !this.token) return fallback;
+    const identity = this.tokenAuthorIdentity ?? this.request<{ login?: unknown; type?: unknown }>("/user", { token: this.token })
+      .then((user): GitHubAuthorIdentity => typeof user?.login === "string" && user.login.length > 0
+        ? { login: user.login, type: user.type === "Bot" ? "Bot" : "User" }
+        : fallback)
+      .catch(() => fallback);
+    this.tokenAuthorIdentity = identity;
+    return identity;
+  }
+
+  /** Read-only, bounded list of submitted reviews on a PR (same page cap as review comments). */
+  async listPullReviews(repo: string, pullNumber: number): Promise<PullReviewSummary[]> {
+    const reviews: PullReviewSummary[] = [];
+    for (let page = 1; page <= MAX_REVIEW_COMMENT_PAGES; page += 1) {
+      const chunk = await this.request<PullReviewSummary[]>(
+        `/repos/${repo}/pulls/${pullNumber}/reviews?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      reviews.push(...chunk);
+      if (chunk.length < 100) break;
+    }
+    return reviews;
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
@@ -567,10 +621,10 @@ export class GitHubApi {
     if (!/^[0-9a-f]{40}$/i.test(input.headSha)) {
       throw new Error("headSha must be a 40-character hexadecimal commit SHA");
     }
-    if (!this.canPostAsApp()) {
-      throw new Error("GitHub App credentials are required before posting reviews.");
+    if (!this.canPost()) {
+      throw new Error("GitHub App credentials or a token are required before posting reviews.");
     }
-    const token = await this.getInstallationToken(input.repo);
+    const token = (await this.getReadToken(input.repo))!;
     return this.request<{ html_url?: string; id: number }>(`/repos/${input.repo}/pulls/${input.pullNumber}/reviews`, {
       method: "POST",
       token,
@@ -594,10 +648,10 @@ export class GitHubApi {
     marker: string;
     body: string;
   }): Promise<{ action: "created" | "updated"; html_url?: string; id: number }> {
-    if (!this.canPostAsApp()) {
-      throw new Error("GitHub App credentials are required before posting comments.");
+    if (!this.canPost()) {
+      throw new Error("GitHub App credentials or a token are required before posting comments.");
     }
-    const token = await this.getInstallationToken(input.repo);
+    const token = (await this.getReadToken(input.repo))!;
     const existing = await this.findIssueCommentByMarker(input.repo, input.issueNumber, input.marker, token);
     if (existing) {
       const updated = await this.request<{ html_url?: string; id: number }>(
@@ -625,19 +679,16 @@ export class GitHubApi {
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
       );
+      const identity = await this.postingIdentity();
       const issueMarker = marker.includes(" issue=");
       const normalizedMarker = issueMarker ? marker.toLowerCase() : marker;
       const existing = comments.find((comment) => {
         const body = issueMarker ? comment.body?.toLowerCase() : comment.body;
-        return body?.includes(normalizedMarker) && this.isBotAuthoredComment(comment);
+        return body?.includes(normalizedMarker) && isAuthoredBy(comment.user, identity);
       });
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
-  }
-
-  private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
-    return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
   }
 
   private async getInstallationToken(repo: string): Promise<string> {
@@ -763,6 +814,8 @@ export class GitHubApi {
 function normalizePullRequestSummary(pull: PullRequestSummary): PullRequestSummary {
   return {
     ...pull,
+    authorAssociation: pull.author_association,
+    authorLogin: pull.user?.login,
     head: {
       ...pull.head,
       ...(pull.head.repo ? { repo: normalizePullRepoSummary(pull.head.repo) } : {})

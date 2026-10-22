@@ -1,3 +1,4 @@
+import { isPublicRepoAuthorBlocked, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
@@ -26,6 +27,7 @@ import {
   isRepairableReviewStatusCommentState,
   parseReviewStatusCommentState,
   postReviewStatusComment,
+  settleBaseMergeOnlyStatusComment,
   type ReviewStatusCommentGithub,
   type ReviewStatusCommentPostResult,
   type ReviewStatusCommentState
@@ -68,6 +70,7 @@ import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
   recordFailedReview,
+  recordPublicRepoAuthorGateSkip,
   classifyProviderError,
   recordProviderRateLimitCooldownIfNeeded,
   providerCooldownDurationMs,
@@ -110,7 +113,7 @@ export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
-  canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
+  canPost?: ReviewStatusCommentGithub["canPost"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
   listPullFiles?(repo: string, pullNumber: number): Promise<PullFilePatch[]>;
@@ -205,9 +208,13 @@ export async function runScheduledCycleWithDeps(input: {
     }
     result.pullsSeen += pulls.length;
     const admittedPulls = pulls.filter((pull) => {
+      if (recordPublicRepoAuthorGateSkip({ config, state: input.state, repo, pull })) {
+        result.skippedPolicy += 1;
+        return false;
+      }
       const decision = authorizeAdmissionForVisibility(
         input.licenseAdmission!,
-        schedulerPullVisibility(pull),
+        visibilityFromPullSummary(pull),
         "review_discovery"
       );
       if (decision.ok) return true;
@@ -354,12 +361,6 @@ export async function runScheduledCycleWithDeps(input: {
   return result;
 }
 
-function schedulerPullVisibility(pull: PullRequestSummary): "public" | "private" | "unknown" {
-  const repo = pull.base.repo;
-  if (repo.private === true || repo.visibility === "private" || repo.visibility === "internal") return "private";
-  if (repo.private === false || repo.visibility === "public") return "public";
-  return "unknown";
-}
 
 /**
  * Runs the scheduled, default-off outcome observation pass at the tail of a daemon cycle (#357, deepened
@@ -785,17 +786,8 @@ async function enqueuePullIfEligible(input: {
     source: "automatic",
     now: input.now
   });
-  if (enqueued.enqueued) {
-    await syncReviewStatusComment({
-      config: input.config,
-      github: input.github,
-      dryRun: input.dryRun,
-      repo: input.repo,
-      pull: input.pull,
-      state: "queued",
-      onStatusCommentFailure: input.onStatusCommentFailure,
-      now: input.now
-    });
+  if (enqueued.enqueued && !deferAutomaticStatusComments(input)) {
+    await syncReviewStatusComment({ ...input, state: "queued" });
   }
   return enqueued.enqueued ? "enqueued" : "already_queued";
 }
@@ -1457,6 +1449,13 @@ async function runLeasedQueueJob(input: {
     return "stale_retired";
   }
 
+  // After the closed/stale retirements, so terminal PR states never requeue as author-blocked.
+  if (recordPublicRepoAuthorGateSkip({ ...input, repo: input.job.repo, pull })) {
+    updateQueueJobAfterReviewStatus({ ...input, pull, status: "untrusted_author_public_repo", now });
+    updateReviewerSessionJobAfterReviewStatus({ ...input, status: "untrusted_author_public_repo", now });
+    return "untrusted_author_public_repo";
+  }
+
   if (input.job.source !== "manual_command" && input.job.baseSha && pull.base.sha !== input.job.baseSha) {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
@@ -1489,19 +1488,20 @@ async function runLeasedQueueJob(input: {
 
   const sessionId = ensureReviewerSessionForLeasedJob(input, now);
   updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) }, now }, "running");
-  if (input.job.source !== "manual_command" && shouldPostInProgressStatusForLeasedJob(input.job)) {
-    await syncReviewStatusComment({
-      config: input.config,
-      github: input.github,
-      dryRun: input.dryRun,
-      repo: input.job.repo,
-      pull,
-      state: "in_progress",
-      onStatusCommentFailure: input.onStatusCommentFailure,
-      now
-    });
-  }
+  const deferStatus = input.job.source !== "manual_command" &&
+    deferAutomaticStatusComments({ ...input, repo: input.job.repo, pull });
+  let reviewStarted = false;
+  const onReviewStarted = async () => {
+    if (reviewStarted) return;
+    reviewStarted = true;
+    if (input.job.source !== "manual_command" && shouldPostInProgressStatusForLeasedJob(input.job)) {
+      for (const state of deferStatus ? ["queued", "in_progress"] as const : ["in_progress"] as const) {
+        await syncReviewStatusComment({ ...input, repo: input.job.repo, pull, state, now });
+      }
+    }
+  };
 
+  if (!deferStatus) await onReviewStarted();
   try {
     const status = await input.reviewPullImpl({
       config: input.config,
@@ -1514,9 +1514,12 @@ async function runLeasedQueueJob(input: {
       budget: input.budget,
       licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: processedHeadPolicyForQueueJob(input.state, input.job, pull),
+      manualQueueJob: input.job.source === "manual_command", onReviewStarted,
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
+    if (status !== "skipped_base_merge_only" &&
+      input.state.getProcessedReview(input.job.repo, pull.number, pull.head.sha)?.error !== "base_merge_only") await onReviewStarted();
     const completionNow = input.clock?.() ?? new Date();
     updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun, now: completionNow });
     syncReadinessForReviewResult({
@@ -1627,7 +1630,7 @@ async function syncReviewStatusComment(input: {
   onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
-  if (!isReviewStatusCommentGithub(input.github)) return;
+  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
   const result = await postReviewStatusComment({
     enabled: input.config.reviewStatusComment?.enabled ?? false,
     dryRun: input.dryRun,
@@ -1661,12 +1664,23 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
   repo: string;
   pull: PullRequestSummary;
   dryRun: boolean;
-  processed?: { status: ProcessedStatus; reviewUrl?: string };
+  processed?: { status: ProcessedStatus; reviewUrl?: string; error?: string };
   onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
   if (!input.config.reviewStatusComment?.enabled || input.dryRun || !isReviewStatusCommentGithub(input.github)) return;
   const processed = input.processed ?? input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  if (processed?.status === "skipped" && processed.error === "base_merge_only") {
+    const result = await settleBaseMergeOnlyStatusComment({
+      enabled: true, dryRun: false, github: input.github, stateStore: input.state,
+      repo: input.repo, pullNumber: input.pull.number, headSha: input.pull.head.sha,
+      botLogin: input.config.github.botLogin ?? DEFAULT_BOT_LOGIN,
+      pullTitle: input.pull.title, pullUrl: input.pull.html_url, now: input.now,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    if (result && !result.posted) input.onStatusCommentFailure?.();
+    return;
+  }
   if (processed?.status !== "posted") return;
   const postedJob = input.state
     .listReviewQueueJobsForPull({ repo: input.repo, pullNumber: input.pull.number, state: "posted" })
@@ -1720,6 +1734,19 @@ async function syncReviewStatusCommentForReviewResult(input: {
   now?: Date;
 }): Promise<void> {
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+  if (input.status === "skipped_base_merge_only" ||
+    (input.status === "skipped_processed" && processed?.error === "base_merge_only")) {
+    if (!isReviewStatusCommentGithub(input.github)) return;
+    const result = await settleBaseMergeOnlyStatusComment({
+      enabled: input.config.reviewStatusComment?.enabled ?? false, dryRun: input.dryRun,
+      github: input.github, stateStore: input.state, repo: input.job.repo, pullNumber: input.pull.number,
+      headSha: input.pull.head.sha, botLogin: input.config.github.botLogin ?? DEFAULT_BOT_LOGIN,
+      pullTitle: input.pull.title, pullUrl: input.pull.html_url, now: input.now,
+      publicConfidencePolicy: input.config.confidenceCalibration?.publicDisplay
+    });
+    if (result && !result.posted) input.onStatusCommentFailure?.();
+    return;
+  }
   const nextState = reviewResultStatusCommentState(input.status, processed);
   if (!nextState) return;
   await syncReviewStatusComment({
@@ -1733,6 +1760,13 @@ async function syncReviewStatusCommentForReviewResult(input: {
     onStatusCommentFailure: input.onStatusCommentFailure,
     now: input.now
   });
+}
+
+// Only defer notifications that could announce a review the worker will skip; enqueue policy is unchanged.
+function deferAutomaticStatusComments(input: { config: BotConfig; state: ReviewStateStore; repo: string; pull: PullRequestSummary }): boolean {
+  return input.config.baseMergeOnlySkip?.enabled !== false &&
+    !input.config.baseMergeOnlySkip?.excludeRepos?.some((slug) => slug.toLowerCase() === input.repo.toLowerCase()) &&
+    Boolean(input.state.getBaseMergeOnlyAnchor(input.repo, input.pull.number));
 }
 
 function shouldPostInProgressStatusForLeasedJob(job: ReviewQueueJobRecord): boolean {
@@ -1758,7 +1792,7 @@ function reviewResultStatusCommentState(
     case "skipped_consumed_authorization":
       return "failed";
     case "skipped_processed":
-      return reviewStatusCommentStateForProcessedStatus(processed);
+      return processed?.error === "base_merge_only" ? undefined : reviewStatusCommentStateForProcessedStatus(processed);
     case "skipped_provider_cooldown":
       return "provider_deferred";
     case "skipped_stale_head":
@@ -1769,6 +1803,9 @@ function reviewResultStatusCommentState(
       return "provider_deferred";
     case "skipped_context_budget":
       return "skipped";
+    case "skipped_base_merge_only":
+      return undefined;
+    case "untrusted_author_public_repo":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -1965,6 +2002,8 @@ function readinessStateForReviewResult(
       return "stale";
     case "skipped_closed":
       return "closed";
+    case "skipped_base_merge_only":
+    case "untrusted_author_public_repo":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_command_stop":
@@ -2007,6 +2046,10 @@ function readinessReasonForReviewResult(
       return "stale_head";
     case "skipped_closed":
       return processed?.error ?? "closed_or_merged_before_review";
+    case "skipped_base_merge_only":
+      return "base_merge_only";
+    case "untrusted_author_public_repo":
+      return status;
     case "skipped_draft":
       return "draft_pr";
     case "skipped_canary":
@@ -2058,6 +2101,7 @@ function readinessStateForProcessedStatus(
 function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; error?: string }): string {
   const providerCooldown = parseProviderCooldownError(processed.error);
   if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
+  if (processed.status === "skipped" && processed.error === "base_merge_only") return "base_merge_only";
   if (processed.status === "skipped" && processed.error === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR) {
     return ACTIVATION_BASELINE_EXISTING_HEAD_ERROR;
   }
@@ -2152,7 +2196,7 @@ function pullForQueueJobWithoutLive(job: ReviewQueueJobRecord): PullRequestSumma
 }
 
 function isReviewStatusCommentGithub(github: SchedulerGitHubApi): github is SchedulerGitHubApi & ReviewStatusCommentGithub {
-  return typeof github.canPostAsApp === "function" && typeof github.upsertIssueComment === "function";
+  return typeof github.canPost === "function" && typeof github.upsertIssueComment === "function";
 }
 
 function ensureReviewerSessionForLeasedJob(input: {
@@ -2220,6 +2264,8 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_capacity":
       updateReviewerSessionJobFromQueueStatus(input, "assigned");
       return;
+    case "skipped_base_merge_only":
+    case "untrusted_author_public_repo":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -2335,7 +2381,7 @@ function updateQueueJobAfterReviewStatus(input: {
         jobId: input.job.jobId,
         state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun, processed?.error),
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: `processed_head_already_${processed?.status ?? "unknown"}`,
+        lastError: processed?.error === "base_merge_only" ? "base_merge_only" : `processed_head_already_${processed?.status ?? "unknown"}`,
         now: input.now
       });
       return;
@@ -2369,6 +2415,13 @@ function updateQueueJobAfterReviewStatus(input: {
           : `unexpected_scheduler_review_status=${input.status}`,
         now: input.now
       });
+      return;
+    case "skipped_base_merge_only":
+    case "untrusted_author_public_repo":
+      // Terminal: a leasable blocked job would be re-leased every cycle. If the gate later allows
+      // the head, discovery enqueues a fresh job after this terminal one.
+      input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired",
+        lastError: input.status === "skipped_base_merge_only" ? "base_merge_only" : input.status, now: input.now });
       return;
     case "skipped_draft":
       input.state.updateReviewQueueJobState({
@@ -2431,7 +2484,7 @@ function reconcileProcessedSkippedFailedQueueJobs(
     state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: "stale_retired",
-      lastError: "processed_head_already_skipped_reconciled",
+      lastError: processed.error === "base_merge_only" ? "base_merge_only" : "processed_head_already_skipped_reconciled",
       now
     });
     result.staleRetired += 1;
@@ -2645,6 +2698,11 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
     case "skipped_consumed_authorization":
       result.failed += 1;
       result.queue.failedQueueJobs += 1;
+      break;
+    case "skipped_base_merge_only":
+    case "untrusted_author_public_repo":
+      result.skippedPolicy += 1;
+      result.queue.staleRetired += 1;
       break;
     case "skipped_draft":
       result.skippedDraft += 1;

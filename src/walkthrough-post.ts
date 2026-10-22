@@ -4,7 +4,7 @@ import { writeSecureFileSync } from "./temp-files.js";
 import type { ReviewPlan, WalkthroughComment, WalkthroughCommentPostResult } from "./types.js";
 
 export interface WalkthroughCommentGithub {
-  canPostAsApp(): boolean;
+  canPost(): boolean;
   upsertIssueComment(input: {
     repo: string;
     issueNumber: number;
@@ -21,7 +21,7 @@ export async function postWalkthroughComment(input: {
   walkthrough?: WalkthroughComment;
 }): Promise<WalkthroughCommentPostResult> {
   if (!input.walkthrough?.postIssueComment) return { posted: false, reason: "disabled" };
-  if (!input.github.canPostAsApp()) return { posted: false, reason: "missing_app_credentials" };
+  if (!input.github.canPost()) return { posted: false, reason: "missing_app_credentials" };
 
   try {
     const comment = await input.github.upsertIssueComment({
@@ -44,4 +44,11 @@ export function reviewBodyAfterWalkthroughPost(plan: Pick<ReviewPlan, "summary" 
   if (!plan.walkthrough.postIssueComment) return plan.walkthrough.body;
   if (!plan.walkthroughComment?.posted) return plan.walkthrough.body;
   return plan.summary;
+}
+
+export const REVIEW_ATTRIBUTION_PREFIX = "Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ";
+
+export function appendReviewAttribution(body: string, model: string): string {
+  const footer = `${REVIEW_ATTRIBUTION_PREFIX}${model}`;
+  return `${body.split("\n").filter((line) => line !== footer).join("\n").trimEnd()}\n\n${footer}`;
 }

@@ -8,8 +8,8 @@ describe("mandatory activation no-bypass matrix", () => {
     expect(result.bypassAllowedCases).toBe(0);
     expect(result.records).toHaveLength(19);
     expect(new Set(result.records.map((record) => record.id)).size).toBe(19);
-    expect(result.records.filter((record) => record.expected === "allowed")).toHaveLength(2);
-    expect(result.records.filter((record) => record.expected === "denied")).toHaveLength(17);
+    expect(result.records.filter((record) => record.expected === "allowed")).toHaveLength(3);
+    expect(result.records.filter((record) => record.expected === "denied")).toHaveLength(16);
     for (const record of result.records) {
       expect(record.actual, record.id).toBe(record.expected);
       expect(record.licenseApiCalls, record.id).toBe(record.expectedLicenseApiCalls);
@@ -19,12 +19,13 @@ describe("mandatory activation no-bypass matrix", () => {
       forged_cache: 0,
       disabled_policy_attempt: 0,
       dashboard_provider_pre_activation: 0,
-      public_active: 1,
+      public_active: 0,
+      public_free_allowed: 0,
       private_active: 1
     });
     expect(result.records.find((record) => record.id === "disabled_policy_attempt")).toEqual({
       id: "disabled_policy_attempt",
-      visibility: "public",
+      visibility: "private",
       expected: "denied",
       actual: "denied",
       expectedLicenseApiCalls: 0,

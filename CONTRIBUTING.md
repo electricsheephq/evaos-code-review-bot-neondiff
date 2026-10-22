@@ -106,11 +106,11 @@ Agents should read [AGENTS.md](AGENTS.md) before editing this repository.
 - Preserve source-available beta wording unless #104 is updated with approved license text.
 - Preserve mandatory API-backed activation for private, internal, and commercial
   repository work, and fail closed on unknown visibility; the "no free-use bypass"
-  rule protects the PRIVATE-entitlement boundary. Public open-source review will
-  be free with no Activation Key in the native app (managed GitHub App broker
-  #614; owner ruling — policy, not a bypass); the current CLI still requires
-  activation for every repository, since a local visibility flag would trust the
-  client's own claim. Keep
+  rule protects the PRIVATE-entitlement boundary. From 1.1.0, review of
+  repositories that GitHub reports as public is free with no license key through
+  the GitHub Action and `neondiff review-pr --ci` (product decision 2026-10-22 —
+  policy, not a bypass; the Mac app and the self-hosted worker follow in #1191); the npm CLI 1.0.x requires
+  activation for every repository. Keep
   GitHub-authoritative visibility with unknown failing closed; provider
   verification remains required for all tiers. Public-facing website copy migration
   is owned by website #52.

@@ -1,5 +1,7 @@
 # CI Runner Guide
 
+All `review-pr --ci` runs bypass the base-merge-only skip: CI state is temporary and the shared Actions bot identity is not a trusted prior-review anchor.
+
 NeonDiff can run one-shot dry-run checks on Linux CI runners when you want PR
 review evidence without a long-lived daemon. This guide covers GitHub Actions
 and generic CI hosts. It does not grant extra GitHub permissions or bypass the
@@ -54,6 +56,44 @@ normal NeonDiff gates: the target head must be current, duplicate suppression
 must allow the head, and the public alias must be invoked with
 `--dry-run false --confirm true` after the repo, PR, head SHA, and config path
 are approved.
+
+## Private repositories
+
+For `review-pr --ci` (1.1.0+), one license covers one GitHub organization or
+user account in CI, across all its repositories. Store the key in the Action
+secret `NEONDIFF_LICENSE_KEY`. Write it in a separate step with these two shell
+lines; only the file path is passed to NeonDiff:
+
+```yaml
+- name: Write NeonDiff license file
+  env:
+    ACTION_LICENSE_KEY: ${{ secrets.NEONDIFF_LICENSE_KEY }}
+  run: |
+    install -m 600 /dev/null "$RUNNER_TEMP/neondiff-license-key"
+    printf '%s' "$ACTION_LICENSE_KEY" > "$RUNNER_TEMP/neondiff-license-key"
+- run: neondiff review-pr --ci
+  env:
+    NEONDIFF_LICENSE_KEY_FILE: ${{ runner.temp }}/neondiff-license-key
+```
+
+These steps supplement the Action's normal GitHub token and provider setup.
+The key file must be owned by the runner user with mode 0600; symlinks and
+group/world-readable files are refused. Do not pass the key in NeonDiff argv
+or environment variables. Private and internal repositories require activation
+then live validation; unknown visibility fails closed. A missing key file
+fails closed and names `NEONDIFF_LICENSE_KEY_FILE`. Public repositories make
+no license call.
+
+CI binds the seat to the stable numeric `GITHUB_REPOSITORY_OWNER_ID`, so owner
+renames and fresh runners retain the same identity. HTTP 409 reports:
+"this license is active for a different GitHub organization or account;
+deactivate it there or use another license".
+To free the seat, use a trusted secret-safe client to POST to the license API's
+`/v1/license/deactivate` with the key and the **old owner's** machine ID:
+base64url (without padding) of SHA-256 of `neondiff-ci:owner:` followed by that
+numeric owner ID. License support can assist with this operation. Deleting the
+Action secret or running local `license deactivate` does not free the CI owner
+identity. Alternatively, use another license.
 
 ## Generic CI
 

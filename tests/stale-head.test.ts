@@ -58,7 +58,7 @@ describe("exact-head stale guards", () => {
       listPullFiles: async () => {
         throw new Error("stale command review should not fetch files");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     await expect(reviewPull({
@@ -95,7 +95,7 @@ describe("exact-head stale guards", () => {
       listPullFiles: async () => {
         throw new Error("finishing-touch drafts must not fetch files or enter review work");
       },
-      canPostAsApp: () => true,
+      canPost: () => true,
       upsertIssueComment: async () => {
         acknowledgementAttempts += 1;
         throw new Error("finishing-touch drafts must not post acknowledgements");
@@ -175,7 +175,7 @@ describe("exact-head stale guards", () => {
       listPullFiles: async () => {
         throw new Error("finishing-touch drafts must not fetch files or enter review work");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     await expect(reviewPull({
@@ -237,7 +237,7 @@ describe("exact-head stale guards", () => {
       listPullFiles: async () => {
         throw new Error("stale finishing-touch command should not fetch files");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     await expect(reviewPull({
@@ -288,7 +288,7 @@ describe("exact-head stale guards", () => {
       listPullFiles: async () => {
         throw new Error("disabled finishing-touch command should not fetch files");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     await expect(reviewPull({
@@ -347,7 +347,7 @@ describe("exact-head stale guards", () => {
       listPullFiles: async () => {
         throw new Error("dirty finishing-touch command should not fetch files");
       },
-      canPostAsApp: () => false
+      canPost: () => false
     } as unknown as GitHubApi;
 
     await expect(reviewPull({
