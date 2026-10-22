@@ -87,18 +87,23 @@ sudo mkdir -p /etc/neondiff /var/lib/neondiff/state
 sudo cp systemd/neondiff.service.example /etc/systemd/system/neondiff.service
 sudo install -m 600 -o root -g neondiff /dev/null /etc/neondiff/neondiff.env
 sudo chown -R neondiff:neondiff /var/lib/neondiff
+sudo chmod 700 /var/lib/neondiff
 ```
 
 Populate `/etc/neondiff/neondiff.env` with redacted-safe variable names, not raw
 secrets in tracked files:
 
 ```bash
-NEONDIFF_CONFIG=/etc/neondiff/config.local.json
+NEONDIFF_CONFIG=/var/lib/neondiff/config.local.json
 NEONDIFF_GITHUB_APP_ID=123456
-NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/etc/neondiff/neondiff.private-key.pem
+NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/var/lib/neondiff/neondiff.private-key.pem
 ```
 
-Set `statePath` in `/etc/neondiff/config.local.json` so the hardened system
+The configuration and App key live in the service-owned `0700` directory (the unit sets
+`StateDirectoryMode=0700`, so systemd keeps that mode on every start), outside the
+Codex sandbox's readable roots, so checkout reads stay available (see
+[Checkout-read confinement](#checkout-read-confinement)). Set `statePath` in
+`/var/lib/neondiff/config.local.json` so the hardened system
 unit writes all SQLite state and leases under the service account's writable
 state directory:
 
@@ -162,3 +167,12 @@ Common failures:
 - GitHub read failure: verify App ID, private key path, and selected repo install.
 - Provider failure: verify local provider config and use redacted provider output
   from `providers doctor`.
+
+### Checkout-read confinement
+
+Checkout reads cannot safely expose service credentials under system directories.
+Keep the App key, configuration, state DB, license key and evidence outside the
+sandbox's readable roots (including `/etc`, `/usr`, `/opt`, the checkout and the
+Codex installation). For example, use a service-owned `/var/lib/neondiff` directory
+with mode `0700`. Existing `/etc/neondiff` layouts can still run reviews, but
+checkout reads fall back to diff-only with a confinement warning until moved.

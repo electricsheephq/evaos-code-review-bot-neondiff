@@ -207,6 +207,15 @@ export async function runScheduledCycleWithDeps(input: {
       continue;
     }
     result.pullsSeen += pulls.length;
+    const activation = activateRepoForNewOnlyReview({
+      config,
+      state: input.state,
+      repo,
+      pulls,
+      scopedPullNumber: input.options.pullNumber,
+      now
+    });
+    result.baselinedExisting += activation.baselined;
     const admittedPulls = pulls.filter((pull) => {
       if (recordPublicRepoAuthorGateSkip({ config, state: input.state, repo, pull })) {
         result.skippedPolicy += 1;
@@ -221,15 +230,7 @@ export async function runScheduledCycleWithDeps(input: {
       result.skippedLicenseGate += 1;
       return false;
     });
-    const activation = activateRepoForNewOnlyReview({
-      config,
-      state: input.state,
-      repo,
-      pulls: admittedPulls,
-      scopedPullNumber: input.options.pullNumber,
-      now
-    });
-    result.baselinedExisting += activation.baselined;
+
 
     for (const pull of admittedPulls) {
       const enqueueStatus = await enqueuePullIfEligible({

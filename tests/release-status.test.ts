@@ -662,7 +662,7 @@ describe("beta release status", () => {
         changelogReleaseNotesPath: "docs/releases/v1.1.0.md"
       },
       licenseApi: {
-        ok: true,
+        ok: false,
         requiredForThisRelease: true,
         state: "healthy",
         healthUrl: "https://neondiff-license.fly.dev/healthz",
@@ -676,6 +676,8 @@ describe("beta release status", () => {
         ok: false
       }
     });
+    // The immutable v1.0.4 proof predates the public-free activation matrix.
+    expect(manifest.licenseApi.detail).toContain("invalid mandatory activation proof");
     expect(manifest.updateChannels.channels).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -875,7 +877,6 @@ describe("beta release status", () => {
     const packIntegrity = `sha512-${"Y".repeat(86)}==`;
     const deniedScenarioIds = [
       "unknown_repo",
-      "public_denied",
       "private_denied",
       "missing_key",
       "missing_api_url",
@@ -900,14 +901,13 @@ describe("beta release status", () => {
       { id: "validate_denied", outcome: "denied", statusCode: 409, apiBaseUrl: "https://neondiff-license.fly.dev", redactedResponse: { status: "scope_mismatch" } }
     ];
     const scenarioRecords = [
-      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 1, licenseApiCalls: 1 },
+      { id: "public_active", visibility: "public", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 0, licenseApiCalls: 0 },
+      { id: "public_free_allowed", visibility: "public", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 0, licenseApiCalls: 0 },
       { id: "private_active", visibility: "private", expected: "allowed", actual: "allowed", expectedLicenseApiCalls: 1, licenseApiCalls: 1 },
       ...deniedScenarioIds.map((id) => ({
         id,
         visibility:
-          id === "public_denied" || id === "disabled_policy_attempt"
-            ? "public"
-            : id === "private_denied"
+          id === "disabled_policy_attempt" || id === "private_denied"
               ? "private"
               : id === "unknown_repo"
                 ? "unknown"
@@ -1060,7 +1060,7 @@ describe("beta release status", () => {
       }));
     };
 
-    for (const visibility of ["not_applicable", "private", "unknown"] as const) {
+    for (const visibility of ["not_applicable", "public", "unknown"] as const) {
       writeSynchronizedMatrixMutation((record) => ({ ...record, visibility }));
       const invalidVisibility = readPublicReleaseManifestStatus({
         cwd: root,
@@ -1070,7 +1070,7 @@ describe("beta release status", () => {
       });
       expect(invalidVisibility.licenseApi.ok, visibility).toBe(false);
       expect(invalidVisibility.licenseApi.detail).toContain(
-        "matrix.disabled_policy_attempt.visibility must be public"
+        "matrix.disabled_policy_attempt.visibility must be private"
       );
     }
 
@@ -5257,6 +5257,14 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       detail: "fresh; age 1000ms; max 120000ms; event daemon_cycle_complete; cycle 5; review lane active"
     });
     expect(status.database.skippedCount).toBe(16);
+  });
+
+  it("rejects a fresh failed cycle heartbeat even with an active review lane", () => {
+    const status = buildReleaseStatus({ repo: { branch: "main", head: "head", dirtyFiles: [] }, expectedHead: "head",
+      configPath: "/config/live.json", launchd: { label: "worker", state: "running", configPath: "/config/live.json", usesSystemCa: true },
+      database: { rowCount: 0, errorCount: 0 }, heartbeat: { ...freshHeartbeat(), event: "daemon_cycle_failed", error: "daemon_cycle_failed", reviewLane: "active" } });
+    expect(status.ok).toBe(false);
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "daemon_heartbeat_recent", ok: false }));
   });
 
   it("requires the active background PR lane while keeping liveness separate", () => {

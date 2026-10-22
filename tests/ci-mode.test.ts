@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCiConfig, ciLicenseMachineId, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
+import { buildCiConfig, ciGitAuthToken, ciLicenseMachineId, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
 import { buildReviewProviderMetadata, runOnce } from "../src/worker.js";
 import { loadConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
 import { appendReviewAttribution, reviewBodyAfterWalkthroughPost } from "../src/walkthrough-post.js";
 import { requireActiveProductionLicense, authorizeAdmissionForVisibility, requireActiveDaemonCycleAdmissions } from "../src/license-admission.js";
+
+vi.mock("node:fs", async original => ({ ...await original<typeof import("node:fs")>() }));
 
 const roots: string[] = [];
 const sha = "a".repeat(40);
@@ -52,6 +54,10 @@ describe("CI review", () => {
     expect(config.commands.enabled).toBe(false);
     for (const path of [config.statePath, config.evidenceDir, config.workRoot]) expect(path.startsWith(roots[0] + "/")).toBe(true);
     expect(base.pilotRepos).not.toEqual(["owner/repo"]);
+    config.github.token = "fixture-git-credential";
+    expect(ciGitAuthToken(config)).toBe(config.github.token);
+    expect(ciGitAuthToken({ ...config })).toBeUndefined();
+    expect(ciGitAuthToken(base)).toBeUndefined();
     const custom = buildCiConfig(base, ctx, { ...env, PATH: env.PATH, NEONDIFF_MODEL: "fixture-model", NEONDIFF_REASONING_EFFORT: "medium" });
     expect(custom.codexRuntime).toMatchObject({ model: "fixture-model", reasoningEffort: "medium" });
     expect(() => buildCiConfig(base, ctx, { ...env, NEONDIFF_REASONING_EFFORT: "invalid" })).toThrow(/effort/);
@@ -64,7 +70,7 @@ describe("CI review", () => {
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(checkout);
     try {
       expect(() => buildCiConfig(base, ctx, { ...env, PATH: ["", ".", "bin"].join(":") })).toThrow(/codex on PATH/);
-      expect(buildCiConfig(base, ctx, { ...env, PATH: ["", ".", env.PATH].join(":") }).codexRuntime!.cliPath).toBe(join(env.PATH, "codex"));
+      expect(buildCiConfig(base, ctx, { ...env, PATH: ["", ".", env.PATH].join(":") }).codexRuntime!.cliPath).toBe(realpathSync(join(env.PATH, "codex")));
     } finally { cwd.mockRestore(); }
   });
   it("uses the fallback token for review and comment creation/update without App credentials", async () => {
@@ -257,7 +263,7 @@ describe("CI owner license admission", () => {
       expect(ciConfig.license).toMatchObject({ storageBackend: "file", keyPath: env.NEONDIFF_LICENSE_KEY_FILE, cachePath: join(env.RUNNER_TEMP, "neondiff-ci/license/cache.json") });
       expect(await runOnce(options)).toMatchObject({ skippedDraft: 1, failed: 0 });
       expect(readFileSync(ciConfig.license!.cachePath, "utf8")).not.toContain(fakeKey);
-      expect(readFileSync(env.NEONDIFF_LICENSE_KEY_FILE, "utf8")).toBe(fakeKey + "\n");
+      expect(existsSync(env.NEONDIFF_LICENSE_KEY_FILE)).toBe(false);
     }
     expect(requests.map((r) => r.path)).toEqual(["/v1/license/activate", "/v1/license/validate", "/v1/license/activate", "/v1/license/validate"]);
     expect(new Set(requests.map((r) => r.machineId))).toEqual(new Set([ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: "123" })]));
@@ -270,6 +276,18 @@ describe("CI owner license admission", () => {
     expect(output.join("\n")).not.toContain(fakeKey);
   });
 
+  it("warns without failing admission when unlink of the consumed key fails", async () => {
+    const output = captureOutput(); github(); apiDouble();
+    const { env, options } = fixture();
+    const fs = await import("node:fs");
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => { throw new Error("fixture failure"); });
+    try {
+      expect(await runOnce(options)).toMatchObject({ skippedDraft: 1, failed: 0 });
+      expect(unlink).toHaveBeenCalledWith(env.NEONDIFF_LICENSE_KEY_FILE);
+      expect(output.join("\n")).toContain("CI license key cleanup failed");
+    } finally { unlink.mockRestore(); }
+  });
+
   it("makes no license call or key read for a public repo, even with an unsafe file and no owner ID", async () => {
     const output = captureOutput(); github("public");
     const { fetchImpl } = apiDouble();
@@ -279,6 +297,7 @@ describe("CI owner license admission", () => {
     chmodSync(env.NEONDIFF_LICENSE_KEY_FILE, 0o644);
     expect(await runOnce(options)).toMatchObject({ skippedDraft: 1, failed: 0 });
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(existsSync(env.NEONDIFF_LICENSE_KEY_FILE)).toBe(true);
     expect(output.join("\n")).not.toContain(fakeKey);
   });
 

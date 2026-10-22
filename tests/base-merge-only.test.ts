@@ -52,7 +52,7 @@ function fixture() {
   const state = new ReviewStateStore(join(temp, "state.sqlite")); stores.push(state);
   const config = loadConfigFromObject({ workRoot: join(temp, "work"), evidenceDir: join(temp, "evidence"),
     pilotRepos: ["org/repo"], repoProfiles: { repos: { "org/repo": { enabled: true } } },
-    codexRuntime: { enabled: true }, commands: { enabled: false }, walkthrough: { enabled: false },
+    codexRuntime: { enabled: true, cliPath: "/fixture/codex" }, commands: { enabled: false }, walkthrough: { enabled: false },
     contextBudget: { enabled: false }, activation: { reviewExistingOpenPrsOnActivation: true } });
   const pull: PullRequestSummary = { number: 1, title: "Fixture", draft: false, state: "open", authorAssociation: "OWNER",
     head: { sha: h1, ref: "pr" }, base: { sha: base, ref: "main", repo: { full_name: "org/repo", visibility: "private" } },
@@ -462,6 +462,7 @@ it.each(["scheduler", "retry"].flatMap((kind) =>
 
 it.each(["missing", "failed", "cooldown", "capacity"])("dedicated skip writer admits only retryable truth: %s", (kind) => {
   const f = fixture();
+  f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: "anchor", status: "posted", reviewUrl: "https://github.com/org/repo/pull/1#review-1", diffFingerprint: "fixture" });
   if (kind !== "missing") f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.h1,
     status: kind === "failed" ? "failed" : "skipped", error: kind === "cooldown"
       ? "provider_rate_limit_cooldown_until=2020-01-01T00:00:00.000Z; reason=fixture" : "repo_queue_capacity_full" });
@@ -485,4 +486,20 @@ it("manual dry-run can supersede a base-merge skip without posting", async () =>
   expect(await f.run({ dryRun: true })).toBe("reviewed_command");
   expect(f.post).not.toHaveBeenCalled();
   expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)?.status).toBe("dry_run");
+});
+
+it("refuses a changed posted anchor inside the skip transaction and reviews normally", async () => {
+  const f = fixture(); await f.anchor(); f.mergeBase();
+  const record = f.state.recordBaseMergeOnlySkip.bind(f.state);
+  vi.spyOn(f.state, "recordBaseMergeOnlySkip").mockImplementation((row, refused) => {
+    f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: "newer-anchor", status: "posted",
+      reviewUrl: "https://github.com/org/repo/pull/1#pullrequestreview-2", diffFingerprint: "newer", event: "REQUEST_CHANGES" });
+    const reason = vi.fn();
+    const ok = record(row, reason);
+    expect(ok).toBe(false); expect(reason).toHaveBeenCalledWith("anchor_changed");
+    expect(f.state.getProcessedReview("org/repo", 1, f.pull.head.sha)).toBeUndefined();
+    refused?.("anchor_changed"); return ok;
+  });
+  expect(await f.run()).toBe("reviewed");
+  expect(mocks.provider).toHaveBeenCalledOnce();
 });

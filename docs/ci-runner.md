@@ -142,3 +142,7 @@ neondiff review-pr \
 
 Use CI for one-shot checks. Use [docs/systemd.md](systemd.md) or
 [docs/docker.md](docker.md) for a supervised long-running Linux worker.
+
+Private and internal repository workflows require `contents: read` in addition to
+review posting permissions. CI clone and fetch authentication uses `GITHUB_TOKEN`
+only in the Git child environment; it is never written to the mirror config.

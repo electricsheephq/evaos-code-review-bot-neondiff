@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, realpathSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1799,6 +1799,10 @@ describe("worker context budget preflight", () => {
     const configPath = join(root, "config.json");
     writeFileSync(configPath, JSON.stringify({ ...minimalConfig(root), codexRuntime: { enabled: true } }));
     const config = loadConfig(configPath);
+    const trusted = join(root, "trusted"); mkdirSync(trusted);
+    writeFileSync(join(trusted, "codex"), "#!/bin/sh\nexit 0\n"); chmodSync(join(trusted, "codex"), 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = [join(config.workRoot, "mock-worktree"), trusted, oldPath].join(":");
     expect(config.codexRuntime?.checkoutReads).toBe(true);
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(437, "a".repeat(40)); pull.authorAssociation = "OWNER";
@@ -1812,7 +1816,9 @@ describe("worker context budget preflight", () => {
       expect(spy).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true,
         prompt: expect.stringContaining("The working directory is a read-only checkout") }));
       expect(spy.mock.calls[0]![0].prompt).not.toContain("Do not call Bash");
-    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
+      expect(spy.mock.calls[0]![0].cliPath).toBe(realpathSync(join(trusted, "codex")));
+      expect(available).toHaveBeenCalledWith(expect.objectContaining({ sensitivePaths: expect.objectContaining({ config: configPath, "state DB": config.statePath, evidence: config.evidenceDir }) }));
+    } finally { process.env.PATH = oldPath; spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
   it("merges evidence drops across Codex context chunks separately from schema drops", async () => {
@@ -1883,7 +1889,7 @@ describe("worker context budget preflight", () => {
     } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
-  it("saves checkout-read prompts and audits while evidence-only drops preserve the LCM assessment", async () => {
+  it("saves checkout-read prompts and audits while evidence-only drops suppress the LCM assessment", async () => {
     const codex = await import("../src/codex-runtime.js");
     const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
     const runReview = codex.runCodexReview;
@@ -1915,7 +1921,7 @@ describe("worker context budget preflight", () => {
       expect(JSON.parse(readFileSync(join(evidenceDir, "codex-commands.json"), "utf8"))).toMatchObject({ counts: { total: 1, flagged: 0 } });
       const plan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
       expect(plan.deterministicGate.dropReasonCounts.evidence_unverified).toBe(1);
-      expect(createdReviews[0]?.body).toContain("<!-- lcm-x-ai-review:v2");
+      expect(createdReviews[0]?.body).not.toContain("<!-- lcm-x-ai-review:v2");
     } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 

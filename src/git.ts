@@ -37,6 +37,7 @@ export interface PullWorktreePathPlan {
 }
 
 export interface PullWorktreeInput {
+  gitAuthToken?: string;
   repo: string;
   pullNumber: number;
   expectedHeadSha: string;
@@ -189,6 +190,7 @@ export function planPullWorktreePaths(input: PullWorktreeInput): PullWorktreePat
 }
 
 export async function preparePullWorktree(input: PullWorktreeInput): Promise<PreparedWorktree> {
+  const gitAuthToken = input.gitAuthToken;
   const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   const { mirrorPath, worktreePath, repoUrl } = planPullWorktreePaths(input);
 
@@ -197,7 +199,7 @@ export async function preparePullWorktree(input: PullWorktreeInput): Promise<Pre
   mkdirSync(join(input.workRoot, "worktrees"), { recursive: true });
 
   if (!await existsAsGitMirror(mirrorPath, timeoutMs)) {
-    await run(["clone", "--mirror", repoUrl, mirrorPath], timeoutMs);
+    await run(["clone", "--mirror", repoUrl, mirrorPath], timeoutMs, gitAuthToken);
   } else {
     await run(["--git-dir", mirrorPath, "remote", "set-url", "origin", repoUrl], timeoutMs);
   }
@@ -210,7 +212,7 @@ export async function preparePullWorktree(input: PullWorktreeInput): Promise<Pre
     "origin",
     `+refs/pull/${input.pullNumber}/head:refs/pull/${input.pullNumber}/head`,
     "+refs/heads/*:refs/heads/*"
-  ], timeoutMs);
+  ], timeoutMs, gitAuthToken);
 
   await repairExistingReviewWorktreePathForCheckout({
     worktreePath,
@@ -227,7 +229,7 @@ export async function preparePullWorktree(input: PullWorktreeInput): Promise<Pre
     "--detach",
     worktreePath,
     `refs/pull/${input.pullNumber}/head`
-  ], timeoutMs);
+  ], timeoutMs, gitAuthToken); // Git LFS smudge downloads during checkout read the same auth header.
 
   const actualHeadSha = (await run(["-C", worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
   if (actualHeadSha !== input.expectedHeadSha) {
@@ -460,9 +462,12 @@ async function probe(args: string[], timeoutMs: number): Promise<{ stdout: strin
   }
 }
 
-function run(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+function run(args: string[], timeoutMs: number, gitAuthToken?: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    execFile("git", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs }, (error, stdout, stderr) => {
+    execFile("git", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs,
+      ...(gitAuthToken ? { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+        GIT_CONFIG_VALUE_0: "AUTHORIZATION: basic " + Buffer.from("x-access-token:" + gitAuthToken).toString("base64") } } : {}) }, (error, stdout, stderr) => {
       if (!error) {
         resolve({ stdout, stderr });
         return;
@@ -476,7 +481,8 @@ function run(args: string[], timeoutMs: number): Promise<{ stdout: string; stder
       reject(new GitCommandError({
         failureKind,
         timeoutMs,
-        detail: stderr || stdout || error.message
+        detail: gitAuthToken ? (stderr || stdout || error.message).split(gitAuthToken).join("[redacted]")
+          .split(Buffer.from("x-access-token:" + gitAuthToken).toString("base64")).join("[redacted]") : stderr || stdout || error.message
       }));
     });
   });

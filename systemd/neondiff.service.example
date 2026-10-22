@@ -11,6 +11,8 @@ Group=neondiff
 EnvironmentFile=/etc/neondiff/neondiff.env
 WorkingDirectory=/var/lib/neondiff
 StateDirectory=neondiff
+# The config and App key live here; keep it private to the service account.
+StateDirectoryMode=0700
 CacheDirectory=neondiff
 LogsDirectory=neondiff
 ExecStart=/usr/bin/env neondiff daemon --config ${NEONDIFF_CONFIG}

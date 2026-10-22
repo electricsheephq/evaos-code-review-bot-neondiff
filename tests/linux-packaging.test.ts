@@ -19,6 +19,10 @@ describe("Linux daemon packaging", () => {
     expect(systemdDocs).toContain("EnvironmentFile");
     expect(systemdDocs).toContain("journalctl --user -u neondiff");
     expect(systemdDocs).toContain("sudo apt-get install -y lsof");
+    // The system service keeps its config and App key outside the checkout-read sandbox's system roots.
+    expect(systemdDocs).toContain("NEONDIFF_CONFIG=/var/lib/neondiff/config.local.json");
+    expect(systemdDocs).toContain("NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/var/lib/neondiff/neondiff.private-key.pem");
+    expect(systemdDocs).toContain("sudo chmod 700 /var/lib/neondiff");
     expect(dockerDocs).toContain("docker compose");
     expect(dockerDocs).toContain("ollama");
     expect(dockerDocs).toContain("includes `lsof`");
@@ -30,6 +34,7 @@ describe("Linux daemon packaging", () => {
     expect(userUnit).toContain("Restart=on-failure");
     expect(systemUnit).toContain("User=neondiff");
     expect(systemUnit).toContain("EnvironmentFile=/etc/neondiff/neondiff.env");
+    expect(systemUnit).toContain("StateDirectoryMode=0700");
     expect(systemUnit).toContain("Restart=on-failure");
 
     expect(dockerfile).toContain("FROM node:26");
