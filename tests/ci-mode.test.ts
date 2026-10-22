@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCiConfig, ciGitAuthToken, ciLicenseMachineId, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
-import { buildReviewProviderMetadata, runOnce } from "../src/worker.js";
+import { buildReviewProviderMetadata, codexRuntimeCredentialNote, runOnce } from "../src/worker.js";
 import { loadConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
@@ -187,6 +187,10 @@ describe("CI review", () => {
     expect(buildReviewProviderMetadata(config, { OPENAI_API_KEY: "fixture" })).toMatchObject({ providerId: "codex-cli-oauth", displayName: "Codex CLI (API key)" });
     expect(buildReviewProviderMetadata(config, { CODEX_API_KEY: "fixture" }).displayName).toBe("Codex CLI (API key)");
     expect(buildReviewProviderMetadata(config, {})).toMatchObject({ providerId: "codex-cli-oauth", displayName: "Codex CLI (existing OAuth session)" });
+    // The runtime evidence note names the same credential as the display name.
+    expect(codexRuntimeCredentialNote({ OPENAI_API_KEY: "fixture" })).toMatch(/API key/);
+    expect(codexRuntimeCredentialNote({ CODEX_API_KEY: "fixture" })).toMatch(/API key/);
+    expect(codexRuntimeCredentialNote({})).toMatch(/existing authenticated session/);
   });
 
 });
