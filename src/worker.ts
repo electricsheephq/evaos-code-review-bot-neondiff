@@ -137,7 +137,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -1980,11 +1980,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           evidenceDir
         });
 
+    // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
+    // schema, sandbox and citation checks all agree on the fallback.
+    const checkoutReads = config.codexRuntime?.enabled
+      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: config.codexRuntime.cliPath })
+      : { status: "disabled" as const };
+    const reviewConfig: BotConfig = config.codexRuntime && config.codexRuntime.checkoutReads === true && checkoutReads.status !== "enabled"
+      ? { ...config, codexRuntime: { ...config.codexRuntime, checkoutReads: false } }
+      : config;
+    if (checkoutReads.status !== "disabled") writeRedactedJson(join(evidenceDir, "checkout-reads.json"), checkoutReads);
+    if (checkoutReads.status.startsWith("unavailable:")) {
+      console.warn(
+        `[checkout-reads] ${checkoutReads.status} repo=${repo} pr=${pull.number}: ${checkoutReads.detail ?? "unavailable"}; running a diff-only review`
+      );
+    }
     const promptForFiles = (filesForPrompt: PullFilePatch[]) => buildReviewPrompt({
       repo,
       pull,
       files: filesForPrompt,
-      ...(config.codexRuntime?.enabled && config.codexRuntime.checkoutReads === true ? { checkoutAccess: "shell_read_only" as const } : {}),
+      ...(checkoutReads.status === "enabled" ? { checkoutAccess: "shell_read_only" as const } : {}),
       repoProfile: repoPolicy.profile,
       ...(skillPackContext.packet ? { skillPackContextPacket: skillPackContext.packet } : {}),
       ...(reviewLensContext.packet ? { reviewLensPacket: reviewLensContext.packet } : {}),
@@ -2050,7 +2064,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     };
     assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
-      config,
+      config: reviewConfig,
       github,
       state,
       repo,
@@ -2116,6 +2130,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
     const zcodeResult = zcodeExecution.result;
+    if (checkoutReads.status.startsWith("unavailable:") && Array.isArray(zcodeResult.runtime.notes)) {
+      zcodeResult.runtime.notes.push(`Checkout reads ${checkoutReads.status}; this was a diff-only review.`);
+    }
 
     await assertGitClean(worktree.path);
 

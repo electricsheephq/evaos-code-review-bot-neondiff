@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, parseCodexCommands, resolveCodexReadConfinement, runCodexReview } from "../src/codex-runtime.js";
+import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, codexCliVersionAtLeast, parseCodexCliVersion, parseCodexCommands, resolveCheckoutReadsStatus, resolveCodexReadConfinement, runCodexReview } from "../src/codex-runtime.js";
 import { buildSkillPackContextPacket } from "../src/skill-packs.js";
 import { createSourceRefReadBudget, verifySourceRef } from "../src/issue-analysis.js";
 import { loadConfigFromObject } from "../src/config.js";
@@ -191,6 +191,45 @@ describe("checkout reads", () => {
     });
     expect(resolved).toBe(checkoutReads ? 1 : 0);
     expect(args.includes("--sandbox")).toBe(!checkoutReads);
+  });
+  it("parses and compares Codex CLI versions", () => {
+    expect(parseCodexCliVersion("codex-cli 0.163.0\n")).toEqual([0, 163, 0]);
+    expect(parseCodexCliVersion("codex-cli 1.2.3-alpha.4")).toEqual([1, 2, 3]);
+    expect(parseCodexCliVersion("codex-cli dev")).toBeUndefined();
+    expect(codexCliVersionAtLeast([0, 163, 0], "0.163.0")).toBe(true);
+    expect(codexCliVersionAtLeast([0, 164, 0], "0.163.0")).toBe(true);
+    expect(codexCliVersionAtLeast([1, 0, 0], "0.163.0")).toBe(true);
+    expect(codexCliVersionAtLeast([0, 162, 9], "0.163.0")).toBe(false);
+  });
+  it("decides checkout-read availability from config, CLI version and confinement", () => {
+    const base = { cwd: "/work/tree", cliPath: "/fixture/codex" };
+    const confine = () => ({ command: "/fixture/codex", readableRoots: ["/work/tree"] });
+    const unread = () => { throw new Error("must not read the version"); };
+    expect(resolveCheckoutReadsStatus({ ...base, checkoutReads: false }, { readVersion: unread })).toEqual({ status: "disabled" });
+    expect(resolveCheckoutReadsStatus({ ...base, checkoutReads: true }, { readVersion: () => "codex-cli 0.163.0", resolveReadConfinement: confine }))
+      .toEqual({ status: "enabled" });
+    expect(resolveCheckoutReadsStatus({ ...base, checkoutReads: true }, { readVersion: () => "codex-cli 0.150.2", resolveReadConfinement: confine }))
+      .toMatchObject({ status: "unavailable:codex_version", detail: expect.stringContaining("0.150.2") });
+    expect(resolveCheckoutReadsStatus({ ...base, checkoutReads: true }, { readVersion: () => undefined, resolveReadConfinement: confine }).status)
+      .toBe("unavailable:codex_version");
+    expect(resolveCheckoutReadsStatus({ ...base, checkoutReads: true }, { readVersion: () => "codex-cli 0.163.0",
+      resolveReadConfinement: () => { throw new Error("codex_runtime_read_confinement_unavailable: a readable root would expose CODEX_HOME"); } }))
+      .toMatchObject({ status: "unavailable:confinement", detail: expect.stringContaining("CODEX_HOME") });
+  });
+  it("reads `codex --version` from the CLI and caches it per CLI path", () => {
+    const dir = root();
+    const cli = join(dir, "codex");
+    const counter = join(dir, "calls");
+    writeFileSync(cli, `#!/bin/sh\necho x >> "${counter}"\necho "codex-cli 0.150.0"\n`);
+    chmodSync(cli, 0o755);
+    const confine = () => ({ command: cli, readableRoots: [dir] });
+    for (let index = 0; index < 2; index += 1) {
+      expect(resolveCheckoutReadsStatus({ checkoutReads: true, cwd: dir, cliPath: cli }, { resolveReadConfinement: confine }).status)
+        .toBe("unavailable:codex_version");
+    }
+    expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(resolveCheckoutReadsStatus({ checkoutReads: true, cwd: dir, cliPath: join(dir, "missing") }, { resolveReadConfinement: confine }).status)
+      .toBe("unavailable:codex_version");
   });
   it("withholds the model summary when a citation fails verification", async () => {
     const cwd = root();
