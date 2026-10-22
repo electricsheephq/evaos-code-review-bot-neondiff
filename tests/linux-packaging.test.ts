@@ -34,6 +34,7 @@ describe("Linux daemon packaging", () => {
     expect(userUnit).toContain("Restart=on-failure");
     expect(systemUnit).toContain("User=neondiff");
     expect(systemUnit).toContain("EnvironmentFile=/etc/neondiff/neondiff.env");
+    expect(systemUnit).toContain("StateDirectoryMode=0700");
     expect(systemUnit).toContain("Restart=on-failure");
 
     expect(dockerfile).toContain("FROM node:26");

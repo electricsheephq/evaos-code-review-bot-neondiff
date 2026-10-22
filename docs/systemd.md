@@ -99,7 +99,8 @@ NEONDIFF_GITHUB_APP_ID=123456
 NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH=/var/lib/neondiff/neondiff.private-key.pem
 ```
 
-The configuration and App key live in the service-owned `0700` directory, outside the
+The configuration and App key live in the service-owned `0700` directory (the unit sets
+`StateDirectoryMode=0700`, so systemd keeps that mode on every start), outside the
 Codex sandbox's readable roots, so checkout reads stay available (see
 [Checkout-read confinement](#checkout-read-confinement)). Set `statePath` in
 `/var/lib/neondiff/config.local.json` so the hardened system
