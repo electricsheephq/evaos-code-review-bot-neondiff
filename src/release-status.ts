@@ -1,3 +1,4 @@
+import { isLeanReleaseVersion } from "./release-version.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -995,6 +996,15 @@ function readNpmPublicationStatus(input: {
       state: "legacy",
       packageArtifact: legacyArtifact,
       detail: "typed npm publication proof is not required for the legacy release"
+    };
+  }
+  if (isLeanReleaseVersion(expectedVersion)) {
+    return {
+      ok: true,
+      requiredForThisRelease: false,
+      state: "lean_workflow",
+      packageArtifact: legacyArtifact,
+      detail: "candidate-ledger proof does not apply; verify release-npm.yml and the npm registry for publication evidence"
     };
   }
   const candidatePath = `docs/release-candidates/${expectedVersion}.json`;

@@ -14,9 +14,9 @@ describe("current stable package release plumbing", () => {
     const builder = read("scripts/build-desktop-sealed-worker.mjs");
     const desktopBuild = read("apps/neondiff-desktop/script/build_and_run.sh");
 
-    expect(pkg.version).toBe("1.0.6");
-    expect(lock.version).toBe("1.0.6");
-    expect(lock.packages?.[""]?.version).toBe("1.0.6");
+    expect(pkg.version).toBe("1.1.0");
+    expect(lock.version).toBe("1.1.0");
+    expect(lock.packages?.[""]?.version).toBe("1.1.0");
     expect(builder).toContain("reportedVersion !== sealedPackageVersion");
     expect(builder).not.toContain('reportedVersion !== "1.0.4"');
     expect(desktopBuild).toContain("EXPECTED_WORKER_VERSION");
@@ -55,10 +55,10 @@ describe("current stable package release plumbing", () => {
     };
 
     expect(workflow.on?.workflow_dispatch?.inputs).toHaveProperty("predecessor_rollback");
-    expect(workflow.concurrency).toEqual({
-      group: "publish-npm-neondiff",
-      "cancel-in-progress": false
-    });
+    // Rollback dispatches and 1.0.x releases share the serialized group; 1.1.0+ release events route elsewhere.
+    expect(workflow.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency?.group).toMatch(/\|\| 'publish-npm-neondiff' \}\}$/);
+    expect(workflow.concurrency?.group).toContain("github.event_name == 'release'");
     expect(workflow.jobs).toHaveProperty("rollback_predecessor");
     const rollback = workflow.jobs?.rollback_predecessor;
     const stepNames = rollback?.steps?.map((step) => (step as { name?: string }).name ?? "") ?? [];
