@@ -23,7 +23,7 @@ for the semver/GA-line and npm dist-tag policy.
   no config file or GitHub App.
 - Free review of public repositories with no license key, through
   `review-pr --ci` and the self-hosted worker. Private and internal
-  repositories need a Solo or Team license; a repository of unknown visibility
+  repositories need a Solo or Team license (or an existing legacy license); a repository of unknown visibility
   is skipped. A worker with no key reviews the public repositories and skips
   the rest. The Mac app follows in the Desktop beta.
 - Restricted review for outside contributors on public repositories: a
@@ -47,8 +47,8 @@ for the semver/GA-line and npm dist-tag policy.
 - Public-repo author gate for ChatGPT-login auth.
 - Recall-oriented review prompt; a near-duplicate of a finding a human already
   answered is not re-posted (P0 always is); an automatic review after a
-  base-merge-only push reuses the previous review; secret-like model output is
-  redacted.
+  base-merge-only push reuses the previous review; secret-like text in Codex
+  review output is redacted.
 - Issue analysis confines Codex reads to the repository source snapshot.
 - Related context for a public repository cites only public repositories.
 - Use the lean npm release path with exact-commit CI, provenance verification,
