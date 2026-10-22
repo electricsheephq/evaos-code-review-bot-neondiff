@@ -1,5 +1,7 @@
 # Maintainer Commands
 
+`re-review` always runs a fresh review, including on a base-merge-only head.
+
 Maintainer commands are a narrow PR-comment control surface for trusted humans
 and agents. They do not grant repair, merge, approval, branch-push, test-run, or
 repo-mutation capabilities. Commands only steer the existing read-only review

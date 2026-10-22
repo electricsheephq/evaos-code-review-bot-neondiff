@@ -63,6 +63,10 @@ export interface ProcessedReviewRecord {
   headSha: string;
   status: ProcessedStatus;
   configRevision?: string;
+  baseRef?: string;
+  baseSha?: string;
+  diffFingerprint?: string;
+  carriedFromHead?: string;
   event?: ReviewEvent;
   reviewUrl?: string;
   error?: string;
@@ -168,6 +172,7 @@ export interface ReviewHeadClaimInput {
   allowProcessedOwnerSupersession?: boolean;
   requiredProcessedStatusForSupersession?: ProcessedStatus;
   requiredProcessedConfigRevisionForSupersession?: string;
+  requiredProcessedErrorForSupersession?: string;
   consumeProcessedApprovalOnAcquire?: boolean;
 }
 
@@ -419,7 +424,7 @@ export interface ReviewEventAuthorizationConsumptionRecord {
   incidentAt?: string;
 }
 
-export interface RecordAuthorizedReviewPostedInput {
+export interface RecordAuthorizedReviewPostedInput extends Pick<ProcessedReviewRecord, "baseRef" | "baseSha" | "diffFingerprint"> {
   repo: string;
   pullNumber: number;
   headSha: string;
@@ -951,7 +956,7 @@ export class ReviewStateStore {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined {
     const row = this.db
       .prepare(
-        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at
+        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at, base_ref, base_sha, diff_fingerprint, carried_from_head
          from processed_reviews
          where repo = ? and pull_number = ? and head_sha = ?
          limit 1`
@@ -974,7 +979,7 @@ export class ReviewStateStore {
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[] {
     const rows = this.db
       .prepare(
-        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at
+        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at, base_ref, base_sha, diff_fingerprint, carried_from_head
          from processed_reviews
          where repo = ? and pull_number = ?
          order by datetime(created_at) desc`
@@ -983,15 +988,35 @@ export class ReviewStateStore {
     return rows.map(mapProcessedReviewRow);
   }
 
+  /** The latest posted review anchors a skip only if it carries valid fingerprint evidence; older rows never do. */
+  getBaseMergeOnlyAnchor(repo: string, pullNumber: number): StoredProcessedReviewRecord | undefined {
+    const row = this.db.prepare(`select * from processed_reviews where repo = ? and pull_number = ?
+      and status = 'posted' order by created_at desc, rowid desc limit 1`).get(repo, pullNumber) as ProcessedReviewRow | undefined;
+    if (!row || row.review_url == null || row.diff_fingerprint == null
+      || (row.error != null && row.error !== "review_posted_head_changed")) return undefined;
+    return mapProcessedReviewRow(row);
+  }
+
+  // UPSERT keeps rowid and the original timestamp for receipt/uncertainty rewrites of the same post.
+  // A genuinely new review URL gets a new post timestamp, so anchor ordering remains chronological.
+  // The gate job-vs-processed comparison may briefly show in-progress on same-URL rewrites; this fails closed.
   recordProcessed(record: ProcessedReviewRecord): void {
     const recordedAt = new Date().toISOString();
     this.db.exec("begin immediate");
     try {
       this.db
         .prepare(
-          `insert or replace into processed_reviews
-            (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `insert into processed_reviews
+            (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at,
+             base_ref, base_sha, diff_fingerprint, carried_from_head)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           on conflict(repo, pull_number, head_sha) do update set
+             status=excluded.status, config_revision=excluded.config_revision, event=excluded.event,
+             review_url=excluded.review_url, error=excluded.error, base_ref=excluded.base_ref,
+             base_sha=excluded.base_sha, diff_fingerprint=excluded.diff_fingerprint, carried_from_head=excluded.carried_from_head,
+             created_at=case when processed_reviews.status='posted' and processed_reviews.review_url is excluded.review_url
+               then processed_reviews.created_at else excluded.created_at end
+           where not (excluded.error is 'base_merge_only' and processed_reviews.status='posted')`
         )
         .run(
           record.repo,
@@ -1002,7 +1027,7 @@ export class ReviewStateStore {
           record.event ?? null,
           record.reviewUrl ?? null,
           record.error ?? null,
-          recordedAt
+          recordedAt, record.baseRef ?? null, record.baseSha ?? null, record.diffFingerprint ?? null, record.carriedFromHead ?? null
         );
       // Completion and claim retirement are one transaction. A later ordinary claimant must see
       // either the live claim or the durable processed row, never a gap between the two.
@@ -1016,9 +1041,44 @@ export class ReviewStateStore {
     }
   }
 
+  /** A skip is a non-owner write: preserve every claim and any non-retryable processed truth. */
+  recordBaseMergeOnlySkip(record: Omit<ProcessedReviewRecord, "status" | "error">,
+    onRefused?: (reason: "active_claim" | "existing_row") => void): boolean {
+    this.db.exec("begin immediate");
+    try {
+      const recordedAt = new Date().toISOString();
+      const activeClaim = this.db.prepare(`select 1 from review_head_claims
+        where repo = ? and pull_number = ? and head_sha = ? and expires_at > ? limit 1`)
+        .get(record.repo, record.pullNumber, record.headSha, recordedAt);
+      const processed = this.getProcessedReview(record.repo, record.pullNumber, record.headSha);
+      const retryable = processed?.status === "failed" || (processed?.status === "skipped" &&
+        (Boolean(parseProviderCooldownError(processed.error)) || processed.error === "repo_queue_capacity_full"));
+      if (activeClaim || (processed && !retryable)) {
+        this.db.exec("commit");
+        onRefused?.(activeClaim ? "active_claim" : "existing_row");
+        return false;
+      }
+      this.db.prepare(`insert into processed_reviews
+        (repo, pull_number, head_sha, status, error, created_at, base_ref, base_sha, diff_fingerprint, carried_from_head)
+        values (?, ?, ?, 'skipped', 'base_merge_only', ?, ?, ?, ?, ?)
+        on conflict(repo, pull_number, head_sha) do update set status=excluded.status, error=excluded.error,
+          created_at=excluded.created_at, base_ref=excluded.base_ref, base_sha=excluded.base_sha,
+          diff_fingerprint=excluded.diff_fingerprint, carried_from_head=excluded.carried_from_head,
+          config_revision=null, event=null, review_url=null`)
+        .run(record.repo, record.pullNumber, record.headSha, recordedAt, record.baseRef ?? null,
+          record.baseSha ?? null, record.diffFingerprint ?? null, record.carriedFromHead ?? null);
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   tryRecordDryRun(
     record: Omit<ProcessedReviewRecord, "status" | "reviewUrl" | "error"> & {
       allowActivationBaselineSupersession?: boolean;
+      allowBaseMergeOnlySupersession?: boolean;
     },
     now: Date = new Date()
   ): boolean {
@@ -1051,7 +1111,8 @@ export class ReviewStateStore {
         (processed &&
           processed.status !== "dry_run" &&
           !isRetryableApprovedDryRunPrePostFailure(processed) &&
-          !activationBaselineSupersession)
+          !activationBaselineSupersession &&
+          !(record.allowBaseMergeOnlySupersession && processed.status === "skipped" && processed.error === "base_merge_only"))
       ) {
         this.db.exec("commit");
         return false;
@@ -1733,11 +1794,12 @@ export class ReviewStateStore {
       }
       const processed = this.db
         .prepare(
-          "select status, config_revision from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+          "select status, config_revision, error from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
         )
         .get(input.repo, input.pullNumber, input.headSha) as {
           status: ProcessedStatus;
           config_revision: string | null;
+          error: string | null;
         } | undefined;
       if (processed) {
         const allowed = input.allowProcessedOwnerSupersession &&
@@ -1748,6 +1810,10 @@ export class ReviewStateStore {
           (
             input.requiredProcessedConfigRevisionForSupersession === undefined ||
             processed.config_revision === input.requiredProcessedConfigRevisionForSupersession
+          ) &&
+          (
+            input.requiredProcessedErrorForSupersession === undefined ||
+            processed.error === input.requiredProcessedErrorForSupersession
           );
         if (!allowed) {
           this.db.exec("commit");
@@ -1965,11 +2031,18 @@ export class ReviewStateStore {
       if (!preserveExistingBlocking) {
         this.db
           .prepare(
-            `insert or replace into processed_reviews
-              (repo, pull_number, head_sha, status, event, review_url, error, created_at)
-             values (?, ?, ?, 'posted', ?, ?, null, ?)`
+            `insert into processed_reviews
+              (repo, pull_number, head_sha, status, event, review_url, error, created_at, base_ref, base_sha, diff_fingerprint)
+             values (?, ?, ?, 'posted', ?, ?, null, ?, ?, ?, ?)
+             on conflict(repo, pull_number, head_sha) do update set status='posted', event=excluded.event,
+               config_revision=null, carried_from_head=null,
+               review_url=excluded.review_url, error=null, base_ref=excluded.base_ref, base_sha=excluded.base_sha,
+               diff_fingerprint=excluded.diff_fingerprint,
+               created_at=case when processed_reviews.status='posted' and processed_reviews.review_url is excluded.review_url
+                 then processed_reviews.created_at else excluded.created_at end`
           )
-          .run(input.repo, input.pullNumber, input.headSha, input.event, input.reviewUrl, postedAt);
+          .run(input.repo, input.pullNumber, input.headSha, input.event, input.reviewUrl, postedAt,
+            input.baseRef ?? null, input.baseSha ?? null, input.diffFingerprint ?? null);
       }
       const readinessEvent = preserveExistingBlocking ? "REQUEST_CHANGES" : input.event;
       const readinessUrl = preserveExistingBlocking ? existingProcessed?.reviewUrl : input.reviewUrl;
@@ -3746,11 +3819,21 @@ export class ReviewStateStore {
   }
 
   private ensureProcessedReviewColumns(): void {
-    const columns = this.db
-      .prepare("pragma table_info(processed_reviews)")
-      .all() as unknown as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "config_revision")) {
-      this.db.exec("alter table processed_reviews add column config_revision text");
+    this.db.exec("begin immediate");
+    try {
+      // Re-read under the write lock: another opener may have migrated before we acquired it.
+      const columns = this.db.prepare("pragma table_info(processed_reviews)").all() as unknown as Array<{ name: string }>;
+      for (const name of ["config_revision", "base_ref", "base_sha", "diff_fingerprint", "carried_from_head"]) {
+        if (columns.some((column) => column.name === name)) continue;
+        try { this.db.exec(`alter table processed_reviews add column ${name} text`); }
+        catch (error) {
+          if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error;
+        }
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* migration transaction did not start or was rolled back */ }
+      throw error;
     }
   }
 
@@ -4406,6 +4489,10 @@ interface ProcessedReviewRow {
   head_sha: string;
   status: ProcessedStatus;
   config_revision?: string | null;
+  base_ref?: string | null;
+  base_sha?: string | null;
+  diff_fingerprint?: string | null;
+  carried_from_head?: string | null;
   event: ReviewEvent | null;
   review_url: string | null;
   error: string | null;
@@ -4629,6 +4716,10 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     headSha: row.head_sha,
     status: row.status,
     ...(row.config_revision ? { configRevision: row.config_revision } : {}),
+    ...(row.base_ref ? { baseRef: row.base_ref } : {}),
+    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
+    ...(row.diff_fingerprint ? { diffFingerprint: row.diff_fingerprint } : {}),
+    ...(row.carried_from_head ? { carriedFromHead: row.carried_from_head } : {}),
     ...(row.event ? { event: row.event } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),
