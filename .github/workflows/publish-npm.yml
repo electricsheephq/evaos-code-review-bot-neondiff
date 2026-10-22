@@ -27,7 +27,9 @@ on:
         default: false
 
 concurrency:
-  group: publish-npm-neondiff
+  # A 1.1.0+ release event only runs the routing job here. Keep it out of the shared group so it can never
+  # replace the pending release-npm.yml run (a group holds one pending run). Dispatches and 1.0.x stay serialized.
+  group: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'v0.') && !startsWith(github.event.release.tag_name, 'v1.0.') && !contains(github.event.release.tag_name, '-') && !contains(github.event.release.tag_name, '+') && format('publish-npm-route-{0}', github.run_id) || 'publish-npm-neondiff' }}
   cancel-in-progress: false
 
 permissions:

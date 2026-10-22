@@ -55,10 +55,10 @@ describe("current stable package release plumbing", () => {
     };
 
     expect(workflow.on?.workflow_dispatch?.inputs).toHaveProperty("predecessor_rollback");
-    expect(workflow.concurrency).toEqual({
-      group: "publish-npm-neondiff",
-      "cancel-in-progress": false
-    });
+    // Rollback dispatches and 1.0.x releases share the serialized group; 1.1.0+ release events route elsewhere.
+    expect(workflow.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency?.group).toMatch(/\|\| 'publish-npm-neondiff' \}\}$/);
+    expect(workflow.concurrency?.group).toContain("github.event_name == 'release'");
     expect(workflow.jobs).toHaveProperty("rollback_predecessor");
     const rollback = workflow.jobs?.rollback_predecessor;
     const stepNames = rollback?.steps?.map((step) => (step as { name?: string }).name ?? "") ?? [];

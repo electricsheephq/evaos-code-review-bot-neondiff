@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isLeanReleaseVersion } from "../src/release-version.ts";
-import { hasDesktopOnlyTagAnnotation } from "./lib/desktop-only-release-policy.mjs";
+import { DESKTOP_ONLY_TAG_ANNOTATION } from "./lib/desktop-only-release-policy.mjs";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -31,10 +31,15 @@ export function isNewerStableVersion(candidate, version) {
   return false;
 }
 
+// Every lean stable tag honours the marker, not only the tags the frozen 1.0.x policy names.
+export function hasDesktopOnlyMarker(annotation) {
+  return typeof annotation === "string" && annotation.split("\n").some((line) => line.trim() === DESKTOP_ONLY_TAG_ANNOTATION);
+}
+
 export function classifyLeanRelease(tag, release, annotation) {
   return /^v\d+\.\d+\.\d+$/.test(tag) && isLeanReleaseVersion(tag) &&
     release.tag_name === tag && release.draft === false && release.prerelease === false &&
-    !hasDesktopOnlyTagAnnotation(tag, annotation);
+    !hasDesktopOnlyMarker(annotation);
 }
 
 function npm(args, options = {}) {
@@ -47,7 +52,7 @@ function npm(args, options = {}) {
 }
 
 // The dry-run supplies a registry fixture to this same sequence; it never invokes npm.
-export async function publishLeanRelease(pack, tarball, run = npm, wait = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now) {
+export async function publishLeanRelease(pack, tarball, run = npm, wait = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, options = {}) {
   const scalar = (result) => {
     if (result.status !== 0) return undefined;
     try { return JSON.parse(result.stdout); } catch { return result.stdout.trim(); }
@@ -75,6 +80,8 @@ export async function publishLeanRelease(pack, tarball, run = npm, wait = (ms) =
     ensure(scalar(existing) === pack.shasum, "existing npm shasum differs from packed shasum");
   } else {
     ensure(/E404/.test(`${existing.stdout}\n${existing.stderr}`), "npm existence lookup failed; refusing to publish");
+    // npm provenance records the workflow's ref and commit, so a first publish must run from the tag itself.
+    ensure(options.allowFirstPublish !== false, "first publication must run from the release tag ref; dispatch the workflow from the tag");
     required(["publish", resolve(tarball), "--provenance", "--access", "public", "--tag", "next"]);
   }
   await poll(["view", identity, "dist.shasum", "--json", "--prefer-online"], pack.shasum);
@@ -95,8 +102,14 @@ export async function publishLeanRelease(pack, tarball, run = npm, wait = (ms) =
     required(["dist-tag", "add", identity, "latest"]);
     await poll(["view", "neondiff", "dist-tags.latest", "--json", "--prefer-online"], pack.version);
   }
-  const cleanup = run(["dist-tag", "rm", "neondiff", "next"]);
-  if (cleanup.status !== 0) console.error("next cleanup failed; latest was verified (best effort)");
+  // `next` is package-wide: remove it only while it still points at this release.
+  const staged = JSON.parse(required(["view", "neondiff", "dist-tags", "--json", "--prefer-online"]).stdout);
+  if (staged.next === pack.version) {
+    const cleanup = run(["dist-tag", "rm", "neondiff", "next"]);
+    if (cleanup.status !== 0) console.error("next cleanup failed; latest was verified (best effort)");
+  } else if (staged.next !== undefined) {
+    console.log(`::notice::npm next points at ${staged.next}, not ${pack.version}; left unchanged`);
+  }
   const tags = JSON.parse(required(["view", "neondiff", "dist-tags", "--json", "--prefer-online"]).stdout);
   const summary = `Version: ${pack.version}\nShasum: ${pack.shasum}\nIntegrity: ${pack.integrity}\nProvenance: ${provenanceUrl}\nDist-tags: ${JSON.stringify(tags)}\n`;
   console.log(summary);
@@ -142,7 +155,7 @@ async function main() {
     await publishLeanRelease(pack, tarball, fixture, async (ms) => { clock += ms; }, () => clock);
   } else {
     ensure(mode === "publish", "expected classify, ci, dry-run or publish mode");
-    await publishLeanRelease(pack, tarball);
+    await publishLeanRelease(pack, tarball, npm, undefined, undefined, { allowFirstPublish: process.env.GITHUB_REF === `refs/tags/${tag}` });
   }
 }
 
