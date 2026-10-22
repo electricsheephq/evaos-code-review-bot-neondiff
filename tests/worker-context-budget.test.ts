@@ -918,11 +918,12 @@ describe("worker context budget preflight", () => {
     } finally { state.close(); }
   });
 
-  it.each([undefined, 60_000])("passes the verifier timeout %s to Codex and ZCode without changing the main timeout", async (timeoutMs) => {
+  it.each([[undefined, false], [60_000, false], [60_000, true]] as const)("passes verifier timeout %s with restrictions=%s", async (timeoutMs, restricted) => {
     const codex = await import("../src/codex-runtime.js");
     const zcode = await import("../src/zcode.js");
     const main = vi.spyOn(codex, "runCodexReview");
     const verifier = vi.spyOn(codex, "runCodexStructuredOutput").mockResolvedValue({ value: {}, rawResponse: "{}" });
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled", confinement: { command: "/unused/codex", readableRoots: [process.cwd()] } });
     try {
       for (const useCodex of [true, false]) {
         const root = mkdtempSync(join(tmpdir(), "neondiff-verifier-timeout-")); roots.push(root);
@@ -938,13 +939,18 @@ describe("worker context budget preflight", () => {
         zcodeFindingsByPath.set(file.filename, [candidate]);
         const state = new ReviewStateStore(config.statePath);
         const pull = pullSummary(433, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
-        pull.authorAssociation = "OWNER";
+        pull.authorAssociation = restricted && useCodex ? "NONE" : "OWNER";
+        if (restricted) {
+          pull.base.repo.private = false;
+          config.reviewGate.publicRepoAuthorGate = { mode: "off", allowedAssociations: ["OWNER"], allowedLogins: [] };
+        }
         try {
           expect(await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
           if (useCodex) {
             expect(main).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }));
             expect(verifier).toHaveBeenCalledTimes(1);
-            expect(verifier).toHaveBeenCalledWith(expect.objectContaining({ artifactPrefix: "severe-verifier", timeoutMs: timeoutMs ?? 300_000 }));
+            expect(verifier).toHaveBeenCalledWith(expect.objectContaining({ artifactPrefix: "severe-verifier", timeoutMs: timeoutMs ?? 300_000,
+              ...(restricted ? { restrictTools: true, readConfinement: expect.objectContaining({ command: "/unused/codex" }) } : {}) }));
           } else {
             expect(zcode.runZCodeRawJson).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: timeoutMs ?? 180_000 }));
           }
@@ -956,7 +962,7 @@ describe("worker context budget preflight", () => {
           expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).onUnsupported).toBe(useCodex ? "suppress" : "demote");
         } finally { state.close(); }
       }
-    } finally { main.mockRestore(); verifier.mockRestore(); }
+    } finally { main.mockRestore(); verifier.mockRestore(); available.mockRestore(); }
   });
 
   it("rechecks the approved provider revision before an ensemble retry", async () => {
@@ -1843,6 +1849,88 @@ describe("worker context budget preflight", () => {
       const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
       const plan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
       expect(plan.deterministicGate.dropReasonCounts.evidence_unverified).toBe(2);
+    } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
+  });
+
+  it.each(["explicit verifier", "disabled Codex main", "absent Codex main"])("restricted backend preflight: %s skips before any model call", async (backend) => {
+    const codex = await import("../src/codex-runtime.js");
+    const zcode = await import("../src/zcode.js");
+    const root = mkdtempSync(join(tmpdir(), "neondiff-backend-preflight-")); roots.push(root);
+    const config = minimalConfig(root);
+    if (backend !== "absent Codex main") config.codexRuntime = { enabled: backend === "explicit verifier", checkoutReads: true,
+      cliPath: "/unused/codex", model: "gpt-6.1-sol", reasoningEffort: "high", contextWindowTokens: 500_000,
+      timeoutMs: 1000, maxOutputBytes: 100000 };
+    config.reviewGate = { publicRepoAuthorGate: { mode: backend === "explicit verifier" ? "off" : "auto", allowedAssociations: ["OWNER"], allowedLogins: [] },
+      selfConsistency: { enabled: true, ...(backend === "explicit verifier" ? { provider: "fixture-provider" } : {}) } };
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const pull = pullSummary(1190, "a".repeat(40)); pull.authorAssociation = "NONE";
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled",
+      confinement: { command: "/unused/codex", readableRoots: [join(config.workRoot, "mock-worktree")] } });
+    const main = vi.spyOn(codex, "runCodexReview").mockResolvedValue({ findings: [], droppedFromSchema: [],
+      rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false });
+    const structured = vi.spyOn(codex, "runCodexStructuredOutput");
+    const raw = vi.mocked(zcode.runZCodeRawJson); const review = vi.mocked(zcode.runZCodeReview);
+    raw.mockClear(); review.mockClear();
+    const state = new ReviewStateStore(config.statePath);
+    try {
+      expect.soft(await reviewPull({ config, github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+        state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("untrusted_author_restricted_unavailable");
+      expect.soft(raw).not.toHaveBeenCalled(); expect.soft(review).not.toHaveBeenCalled();
+      expect.soft(main).not.toHaveBeenCalled(); expect.soft(structured).not.toHaveBeenCalled();
+      const path = join(config.evidenceDir, localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha, "author-trust.json");
+      expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ restricted: true,
+        detail: expect.stringContaining(backend === "explicit verifier" ? "reviewGate.selfConsistency.provider=fixture-provider" : "main review") });
+    } finally { main.mockRestore(); structured.mockRestore(); available.mockRestore(); state.close(); }
+  });
+
+  it.each([false, true])("PR wiki packet: restricted=%s excludes PR project docs only when untrusted", async (restricted) => {
+    const codex = await import("../src/codex-runtime.js");
+    const wiki = await import("../src/repo-wiki-context.js");
+    const packet = vi.spyOn(wiki, "buildRepoWikiContextPacket");
+    const root = mkdtempSync(join(tmpdir(), "neondiff-restricted-wiki-")); roots.push(root);
+    const config = minimalConfig(root);
+    config.codexRuntime = { enabled: true, checkoutReads: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
+      reasoningEffort: "high", contextWindowTokens: 500_000, timeoutMs: 1000, maxOutputBytes: 100000 };
+    config.reviewGate = { publicRepoAuthorGate: { mode: "off", allowedAssociations: ["OWNER"], allowedLogins: [] } };
+    config.repoWikiContext = { enabled: true, packetPath: "wiki.json", maxPacketBytes: 5000, includeStaleContext: true };
+    const checkout = join(config.workRoot, "mock-worktree"); mkdirSync(checkout, { recursive: true });
+    writeFileSync(join(checkout, "wiki.json"), JSON.stringify({ markdown: "PR_CONTROLLED_WIKI_MARKER" }));
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled",
+      confinement: { command: "/unused/codex", readableRoots: [checkout] } });
+    const main = vi.spyOn(codex, "runCodexReview").mockResolvedValue({ findings: [], droppedFromSchema: [],
+      rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false });
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1190, "a".repeat(40)); pull.authorAssociation = restricted ? "NONE" : "OWNER";
+    try {
+      expect(await reviewPull({ config, github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+        state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
+      expect.soft(packet).toHaveBeenCalledTimes(restricted ? 0 : 1);
+      expect(main).toHaveBeenCalledTimes(1);
+      expect(main.mock.calls[0]![0].prompt.includes("PR_CONTROLLED_WIKI_MARKER")).toBe(!restricted);
+    } finally { main.mockRestore(); available.mockRestore(); packet.mockRestore(); state.close(); }
+  });
+
+  it("keeps every ensemble leaf restricted for an untrusted public author", async () => {
+    const codex = await import("../src/codex-runtime.js");
+    const confinement = { command: "/unused/codex", readableRoots: ["/fixture/checkout"] };
+    const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled", confinement });
+    const root = mkdtempSync(join(tmpdir(), "neondiff-restricted-ensemble-")); roots.push(root);
+    const config = minimalConfig(root); config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.codexRuntime = { enabled: true, checkoutReads: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
+      reasoningEffort: "high", contextWindowTokens: 500_000, timeoutMs: 1000, maxOutputBytes: 100000 };
+    config.reviewGate = { publicRepoAuthorGate: { mode: "off", allowedAssociations: ["OWNER"], allowedLogins: [] } };
+    const pull = pullSummary(1190, "a".repeat(40)); pull.base.repo.private = false; pull.authorAssociation = "NONE";
+    const spy = vi.spyOn(codex, "runCodexReview").mockResolvedValue({ findings: [], droppedFromSchema: [],
+      rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false });
+    const state = new ReviewStateStore(config.statePath);
+    try {
+      expect(await reviewPull({ config, github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+        state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
+      expect(spy).toHaveBeenCalledTimes(4);
+      for (const [input] of spy.mock.calls) {
+        expect(input).toMatchObject({ restrictTools: true, checkoutReads: false, readConfinement: confinement });
+        expect(input.prompt).not.toContain("The working directory is a read-only checkout");
+      }
     } finally { spy.mockRestore(); available.mockRestore(); state.close(); }
   });
 
@@ -3576,6 +3664,7 @@ function pullSummary(number: number, headSha: string): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
+    authorAssociation: "OWNER",
     draft: false,
     head: {
       sha: headSha,
