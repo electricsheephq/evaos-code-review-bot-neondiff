@@ -41,7 +41,7 @@ export interface Finding {
 
 export interface DroppedFinding extends Partial<Finding> {
   reason: string;
-  evidenceFailure?: "malformed" | "path_missing" | "path_escapes" | "non_canonical" | "range_out_of_bounds" | "excerpt_mismatch";
+  evidenceFailure?: "malformed" | "path_missing" | "path_escapes" | "non_canonical" | "range_out_of_bounds" | "excerpt_mismatch" | "citation_budget_exceeded";
   fingerprint?: string;
   threadId?: number;
 }
