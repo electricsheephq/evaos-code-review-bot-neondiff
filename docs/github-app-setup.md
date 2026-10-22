@@ -366,6 +366,8 @@ and fix App credentials before continuing.
 
 ## License Boundary
 
+For private `review-pr --ci`, follow the [CI license key-file setup](ci-runner.md#private-repositories); local `license activate` does not supply the CI key file.
+
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
 free with no license key through the GitHub Action and `neondiff review-pr --ci`.
 The self-hosted worker this guide sets up (`providers verify`, `daemon`,

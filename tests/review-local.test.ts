@@ -153,3 +153,28 @@ it("requests the LCM review assessment schema for the repository whose prompt as
   vi.mocked(runCodexReview).mockClear(); await runReviewLocal(args());
   expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ lcmReviewAssessment: false }), expect.any(Object));
 });
+
+it("parses a header-only binary path containing an embedded b/", () => {
+  expect(parseLocalDiff("diff --git a/foo b/bin b/foo b/bin\nBinary files a/foo b/bin and b/foo b/bin differ\n")[0])
+    .toMatchObject({ filename: "foo b/bin", status: "modified", patch: "" });
+});
+it.each(["rename", "copy"])("uses %s metadata for header-only paths containing b/", (kind) => {
+  const diff = `diff --git a/old b/bin b/foo b/bin\nsimilarity index 100%\n${kind} from old b/bin\n${kind} to foo b/bin\n`;
+  expect(parseLocalDiff(diff)[0]).toMatchObject({ filename: "foo b/bin", previous_filename: "old b/bin", status: "renamed", patch: "" });
+  expect(parseLocalDiff(`diff --git "a/old\\tname" "b/foo\\tname"\n${kind} from "old\\tname"\n${kind} to "foo\\tname"\n`)[0])
+    .toMatchObject({ filename: "foo\tname", previous_filename: "old\tname" });
+});
+it.each(["tracked", "untracked"])("rejects %s dirt before checkout reads or output", async (kind) => {
+  fs.writeFileSync(join(repo, kind === "tracked" ? "file.ts" : "extra.ts"), "dirty\n");
+  await expect(runReviewLocal({ ...args(), "checkout-reads": "true" })).rejects.toThrow(/requires a clean checkout.*commit.*stash.*detached worktree/);
+  expect(runCodexReview).not.toHaveBeenCalled(); expect(fs.existsSync(args().out)).toBe(false);
+});
+it("permits ignored files with reads and dirty files with diff-only review", async () => {
+  fs.writeFileSync(join(repo, ".gitignore"), "ignored\n"); git("add", ".gitignore"); git("commit", "-qm", "ignore");
+  fs.writeFileSync(join(repo, "ignored"), "build output");
+  await runReviewLocal({ ...args(), "checkout-reads": "true" });
+  expect(runCodexReview).toHaveBeenCalledTimes(1);
+  vi.mocked(runCodexReview).mockClear(); fs.writeFileSync(join(repo, "extra.ts"), "dirty");
+  await runReviewLocal({ ...args(), "checkout-reads": "false" });
+  expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: false }), expect.any(Object));
+});
