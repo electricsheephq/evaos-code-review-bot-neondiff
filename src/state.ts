@@ -1043,7 +1043,7 @@ export class ReviewStateStore {
 
   /** A skip is a non-owner write: preserve every claim and any non-retryable processed truth. */
   recordBaseMergeOnlySkip(record: Omit<ProcessedReviewRecord, "status" | "error">,
-    onRefused?: (reason: "active_claim" | "existing_row") => void): boolean {
+    onRefused?: (reason: "active_claim" | "existing_row" | "anchor_changed") => void): boolean {
     this.db.exec("begin immediate");
     try {
       const recordedAt = new Date().toISOString();
@@ -1056,6 +1056,12 @@ export class ReviewStateStore {
       if (activeClaim || (processed && !retryable)) {
         this.db.exec("commit");
         onRefused?.(activeClaim ? "active_claim" : "existing_row");
+        return false;
+      }
+      const anchor = this.getBaseMergeOnlyAnchor(record.repo, record.pullNumber);
+      if (!anchor || anchor.headSha !== record.carriedFromHead || (record.reviewUrl !== undefined && anchor.reviewUrl !== record.reviewUrl)) {
+        this.db.exec("commit");
+        onRefused?.("anchor_changed");
         return false;
       }
       this.db.prepare(`insert into processed_reviews

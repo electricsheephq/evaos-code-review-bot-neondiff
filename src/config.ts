@@ -634,12 +634,14 @@ const DEFAULT_CONFIG: BotConfig = {
   github: {}
 };
 
+export const configFilePaths = new WeakMap<BotConfig, string>();
+
 export function loadConfig(configPath?: string): BotConfig {
   const fromFile = configPath && existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
-  return loadConfigFromObject(fromFile);
+  return loadConfigFromObject(fromFile, configPath);
 }
 
-export function loadConfigFromObject(fromFile: unknown): BotConfig {
+export function loadConfigFromObject(fromFile: unknown, configPath?: string): BotConfig {
   if (isRecord(fromFile)
     && isRecord(fromFile.github)
     && Object.prototype.hasOwnProperty.call(fromFile.github, "privateKey")) {
@@ -665,6 +667,7 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     if (skip.excludeRepos !== undefined) validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  if (configPath) configFilePaths.set(merged, configPath);
   merged.github = { ...merged.github };
   merged.worktreeCleanup = { ...merged.worktreeCleanup! };
   const configuredCleanup = isRecord(fromFile) && isRecord(fromFile.worktreeCleanup)

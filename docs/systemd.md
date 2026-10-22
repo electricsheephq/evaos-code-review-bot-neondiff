@@ -162,3 +162,12 @@ Common failures:
 - GitHub read failure: verify App ID, private key path, and selected repo install.
 - Provider failure: verify local provider config and use redacted provider output
   from `providers doctor`.
+
+### Checkout-read confinement
+
+Checkout reads cannot safely expose service credentials under system directories.
+Keep the App key, configuration, state DB, license key and evidence outside the
+sandbox's readable roots (including `/etc`, `/usr`, `/opt`, the checkout and the
+Codex installation). For example, use a service-owned `/var/lib/neondiff` directory
+with mode `0700`. Existing `/etc/neondiff` layouts can still run reviews, but
+checkout reads fall back to diff-only with a confinement warning until moved.

@@ -336,7 +336,8 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     input.budget?.providerDeferred.readyToRetry ??
     (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0);
   const retryableDeferredQueueJobsOk = actionableProviderDeferredQueueJobs === 0;
-  const heartbeatOk = input.heartbeat.status === "fresh" || input.heartbeat.status === "active";
+  const heartbeatOk = input.heartbeat.status === "active" ||
+    (input.heartbeat.status === "fresh" && input.heartbeat.event !== "daemon_cycle_failed");
   const reviewLane = input.heartbeat.reviewLane ?? "unknown";
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
@@ -1723,10 +1724,9 @@ export function validateMandatoryActivationProofPath(input: {
   const unexpectedMatrixKeys = collectUnexpectedKeys(matrix, new Set(["bypassAllowedCases", "scenarios"]));
   if (unexpectedMatrixKeys.length) failures.push(`unexpected matrix fields: ${unexpectedMatrixKeys.join(", ")}`);
   requireZero(matrix.bypassAllowedCases, "matrix.bypassAllowedCases");
-  const requiredAllowedScenarioIds = new Set(["public_active", "private_active"]);
+  const requiredAllowedScenarioIds = new Set(["public_active", "public_free_allowed", "private_active"]);
   const requiredDeniedScenarioIds = new Set([
     "unknown_repo",
-    "public_denied",
     "private_denied",
     "missing_key",
     "missing_api_url",
@@ -1746,6 +1746,7 @@ export function validateMandatoryActivationProofPath(input: {
   const scenarios = Array.isArray(matrix.scenarios) ? matrix.scenarios : [];
   const scenarioIds = new Set<string>();
   const zeroLicenseApiCallScenarioIds = new Set([
+    "public_active", "public_free_allowed",
     "missing_key", "forged_cache", "disabled_policy_attempt", "dashboard_provider_pre_activation"
   ]);
   for (const rawScenario of scenarios) {
@@ -1765,9 +1766,9 @@ export function validateMandatoryActivationProofPath(input: {
     }
     if (scenario.expected !== expectedOutcome) failures.push(`matrix.${id}.expected must be ${expectedOutcome}`);
     if (scenario.actual !== expectedOutcome) failures.push(`matrix.${id}.actual must be ${expectedOutcome}`);
-    const expectedVisibility = id === "public_active" || id === "public_denied" || id === "disabled_policy_attempt"
+    const expectedVisibility = id === "public_active" || id === "public_free_allowed"
       ? "public"
-      : id === "private_active" || id === "private_denied"
+      : id === "private_active" || id === "private_denied" || id === "disabled_policy_attempt"
         ? "private"
         : id === "unknown_repo"
           ? "unknown"

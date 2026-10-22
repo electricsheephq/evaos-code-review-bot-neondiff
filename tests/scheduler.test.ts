@@ -3152,6 +3152,26 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("baselines author-gated existing heads before activation so lifting the gate cannot enqueue them", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-gated-baseline-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    config.codexRuntime = { ...config.codexRuntime!, enabled: true };
+    config.reviewGate = { ...config.reviewGate!, publicRepoAuthorGate: { mode: "on", allowedAssociations: ["OWNER"], allowedLogins: [] } };
+    const state = new ReviewStateStore(config.statePath);
+    const existing = { ...pull("org/repo-a", 1, HEAD_A), authorAssociation: "NONE" };
+    const review = vi.fn(async () => "reviewed" as const);
+    const input = { config, state, github: githubFromMap(new Map([["org/repo-a", [existing]]])), options: { dryRun: false }, reviewPullImpl: review };
+    try {
+      expect((await runScheduledCycleWithDeps(input)).baselinedExisting).toBe(1);
+      config.reviewGate!.publicRepoAuthorGate.mode = "off";
+      const result = await runScheduledCycleWithDeps(input);
+      expect(result.skippedProcessed).toBe(1); expect(result.queue.enqueued).toBe(0);
+      expect(review).not.toHaveBeenCalled();
+      expect(state.getProcessedReview("org/repo-a", 1, HEAD_A)?.error).toBe("activation_baseline_existing_head");
+    } finally { state.close(); }
+  });
+
   it("does not fetch commands for activation-baselined existing heads", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-baseline-skip-"));
     roots.push(root);

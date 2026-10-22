@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
@@ -226,6 +226,31 @@ export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
   return env;
 }
 
+function canonicalPath(path: string): string {
+  const absolute = resolve(path);
+  try { return realpathSync(absolute); } catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "") || dirname(absolute) === absolute) throw error;
+    return join(canonicalPath(dirname(absolute)), basename(absolute));
+  }
+}
+function under(path: string, root: string): boolean { return path === root || path.startsWith(root.endsWith("/") ? root : root + "/"); }
+
+/** Pin PATH resolution before checkout creation, excluding every work-root alias. */
+export function resolveTrustedCodexPath(cliPath: string, workRoot: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (isAbsolute(cliPath)) return cliPath;
+  const work = canonicalPath(workRoot);
+  for (const entry of (env.PATH ?? "").split(delimiter)) {
+    if (!entry || !isAbsolute(entry) || under(canonicalPath(entry), work)) continue;
+    try {
+      const candidate = realpathSync(join(entry, cliPath));
+      if (under(candidate, work)) continue;
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch { /* Try the next trusted entry. */ }
+  }
+  throw new Error("Codex CLI not found on a trusted PATH outside workRoot");
+}
+
 /** OS-enforced read roots for a checkout-read review: the shell tool can read only these plus system files. */
 export interface CodexReadConfinement {
   /** Real path of the Codex CLI: its sandbox helper re-executes itself and must be readable. */
@@ -283,7 +308,7 @@ export function codexCliVersionAtLeast(version: [number, number, number], minimu
   return true;
 }
 
-// Only successful reads are cached, so a CLI installed after startup is picked up on the next review.
+// Cache supported versions only, so installation or upgrade is picked up on the next review.
 const codexCliVersionCache = new Map<string, string>();
 
 function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -291,7 +316,7 @@ function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | 
   if (cached !== undefined) return cached;
   const result = spawnSync(cliPath, ["--version"], { env, encoding: "utf8", timeout: 30_000 });
   if (result.error || result.status !== 0 || !parseCodexCliVersion(result.stdout)) return undefined;
-  codexCliVersionCache.set(cliPath, result.stdout);
+  if (codexCliVersionAtLeast(parseCodexCliVersion(result.stdout)!, CODEX_CHECKOUT_READS_MIN_VERSION)) codexCliVersionCache.set(cliPath, result.stdout);
   return result.stdout;
 }
 
@@ -300,7 +325,8 @@ function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | 
  * Codex CLI without permission profiles, or no safe read roots), the review falls back to the
  * diff-only invocation instead of failing under `--strict-config`.
  */
-export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd: string; cliPath: string }, dependencies: {
+export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd: string; cliPath: string; sensitivePaths?: Record<string, string | undefined> }, dependencies: {
+  platform?: NodeJS.Platform;
   readVersion?: (cliPath: string, env: NodeJS.ProcessEnv) => string | undefined;
   resolveReadConfinement?: typeof resolveCodexReadConfinement;
 } = {}): { status: CheckoutReadsStatus; detail?: string } {
@@ -313,7 +339,18 @@ export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd
     return { status: "unavailable:codex_version", detail: `Codex CLI ${version.join(".")} is older than ${CODEX_CHECKOUT_READS_MIN_VERSION}` };
   }
   try {
-    (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env);
+    const confinement = (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env);
+    const platform = dependencies.platform ?? process.platform;
+    const systemRoots = platform === "darwin" ? ["/etc", "/private/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/dev"]
+      : platform === "linux" ? ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/opt", "/dev", "/proc", "/sys", "/run", "/snap"] : [];
+    const roots = [...systemRoots, input.cwd, dirname(confinement.command), ...confinement.readableRoots].map(canonicalPath);
+    for (const [kind, path] of Object.entries(input.sensitivePaths ?? {})) {
+      if (!path) continue;
+      const real = canonicalPath(path);
+      if (roots.some(root => under(real, root)) || (!systemRoots.length && !under(real, canonicalPath(env.HOME ?? homedir())))) {
+        return { status: "unavailable:confinement", detail: `${kind} path [redacted] is readable inside the Codex sandbox; move it outside system directories to enable checkout reads` };
+      }
+    }
   } catch (error) {
     return { status: "unavailable:confinement", detail: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }

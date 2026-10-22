@@ -490,7 +490,7 @@ export function loadConfigAtRevision(
 ): { config: BotConfig; revision: string } {
   const snapshot = readStableConfigSnapshot(resolve(configPath), fileOps);
   return {
-    config: loadConfigFromObject(snapshot.value),
+    config: loadConfigFromObject(snapshot.value, resolve(configPath)),
     revision: snapshot.revision
   };
 }

@@ -1,9 +1,9 @@
-import { accessSync, constants, readFileSync, statSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
-import type { BotConfig } from "./config.js";
-import type { CodexReasoningEffort } from "./codex-runtime.js";
+import { join } from "node:path";
+import { configFilePaths, type BotConfig } from "./config.js";
+import { resolveTrustedCodexPath, type CodexReasoningEffort } from "./codex-runtime.js";
 import { isAuthoredBy, type GitHubApi } from "./github.js";
 import { REVIEW_ATTRIBUTION_PREFIX } from "./walkthrough-post.js";
 import { callLicenseApi } from "./license.js";
@@ -12,6 +12,16 @@ import { readProductionFileLicenseSecret } from "./license-secret-store.js";
 
 // CI-only metadata: only buildCiConfig can set it; never loaded from user config.
 const ciMachineIds = new WeakMap<BotConfig, string | undefined>();
+const ciReadKeyPaths = new WeakMap<BotConfig, string>();
+export function ciGitAuthToken(config: BotConfig): string | undefined { return ciMachineIds.has(config) ? config.github.token : undefined; }
+
+/** Called after admission validation has finished reading the key and before any review runtime. */
+export function unlinkConsumedCiLicenseKey(config: BotConfig): void {
+  const path = ciReadKeyPaths.get(config);
+  if (!path) return;
+  ciReadKeyPaths.delete(config);
+  try { unlinkSync(path); } catch { console.warn("CI license key cleanup failed; remove the runner key file after this job"); }
+}
 
 export function ciLicenseMachineId(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const ownerId = env.GITHUB_REPOSITORY_OWNER_ID;
@@ -36,6 +46,7 @@ export async function activateCiLicenseForReview(
   if (!machineId) throw new Error("CI license activation requires a positive integer GITHUB_REPOSITORY_OWNER_ID");
   const licenseKey = readProductionFileLicenseSecret(license.keyPath);
   if (!licenseKey) throw new Error(missingKey);
+  ciReadKeyPaths.set(config, license.keyPath);
   const activated = await callLicenseApi({ config: license, path: "/v1/license/activate", licenseKey, machineId, fetchImpl });
   if (!activated.ok) {
     if (activated.status === "scope_mismatch") {
@@ -72,13 +83,10 @@ export function readCiPullContext(env: NodeJS.ProcessEnv = process.env): CiPullC
 export function buildCiConfig(base: BotConfig, ctx: CiPullContext, env: NodeJS.ProcessEnv = process.env): BotConfig {
   const effort = env.NEONDIFF_REASONING_EFFORT ?? "high";
   if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error("NEONDIFF_REASONING_EFFORT must be a valid Codex reasoning effort");
-  // Empty or relative PATH entries resolve against the cwd, which in CI is the PR-controlled checkout.
-  const cliPath = (env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0 && isAbsolute(dir))
-    .map((dir) => join(dir, "codex")).find((path) => {
-      try { accessSync(path, constants.X_OK); return statSync(path).isFile(); } catch { return false; }
-    });
-  if (!cliPath) throw new Error("--ci requires codex on PATH");
   const root = join(env.RUNNER_TEMP || tmpdir(), "neondiff-ci");
+  let cliPath: string;
+  try { cliPath = resolveTrustedCodexPath("codex", join(root, "work"), env); }
+  catch { throw new Error("--ci requires codex on PATH outside the NeonDiff work root"); }
   const config: BotConfig = {
     ...base,
     pilotRepos: [ctx.repo],
@@ -94,6 +102,8 @@ export function buildCiConfig(base: BotConfig, ctx: CiPullContext, env: NodeJS.P
     codexRuntime: { ...base.codexRuntime!, enabled: true, cliPath, model: env.NEONDIFF_MODEL || "gpt-6.1-sol", reasoningEffort: effort as CodexReasoningEffort }
   };
   ciMachineIds.set(config, ciLicenseMachineId(env));
+  const source = configFilePaths.get(base);
+  if (source) configFilePaths.set(config, source);
   return config;
 }
 

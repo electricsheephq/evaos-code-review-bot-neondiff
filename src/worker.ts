@@ -13,7 +13,7 @@ import {
   isFinishingTouchCommandAction,
   type CommandDecision
 } from "./commands.js";
-import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
+import { configFilePaths, loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
@@ -37,7 +37,7 @@ import {
 import { DEFAULT_BOT_LOGIN, GitHubApi, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
-import { activateCiLicenseForReview } from "./ci-mode.js";
+import { activateCiLicenseForReview, ciGitAuthToken, unlinkConsumedCiLicenseKey } from "./ci-mode.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -139,7 +139,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -1932,12 +1932,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       profile: repoPolicy.profile
     });
     const proof = evaluateProofRequirements({ pull, validation });
+    const reviewCliPath = config.codexRuntime?.enabled
+      ? resolveTrustedCodexPath(config.codexRuntime.cliPath, config.workRoot) : config.codexRuntime?.cliPath;
     const worktree = await preparePullWorktree({
       repo,
       pullNumber: pull.number,
       expectedHeadSha: pull.head.sha,
       workRoot: config.workRoot,
-      protectedCheckoutRoots: getProtectedCheckoutRoots()
+      protectedCheckoutRoots: getProtectedCheckoutRoots(),
+      ...(ciGitAuthToken(config) ? { gitAuthToken: ciGitAuthToken(config) } : {})
     });
     const ownDiff = await computeOwnDiffFingerprint(worktree.path, pull.base.sha, pull.head.sha);
     const reviewDiff = { baseRef: pull.base.ref, baseSha: pull.base.sha,
@@ -1957,18 +1960,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         newHead: pull.head.sha, ...reviewDiff, ...ownDiff
       };
       if (!reason && anchor) {
-        let refusalReason: "active_claim" | "existing_row" = "existing_row";
+        let refusalReason: string = "existing_row";
         const recorded = state.recordBaseMergeOnlySkip({ repo, pullNumber: pull.number, headSha: pull.head.sha,
-          carriedFromHead: anchor.headSha, ...reviewDiff }, (reason) => { refusalReason = reason; });
+          carriedFromHead: anchor.headSha, reviewUrl: anchor.reviewUrl, ...reviewDiff }, (reason) => { refusalReason = reason; });
         writeRedactedJson(join(evidenceDir, "base-merge-only.json"), {
           ...evidence, decision: recorded ? "skipped" : "refused", ...(!recorded ? { reason: refusalReason } : {})
         });
-        if (!recorded) return "skipped_processed";
-        state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha,
-          state: "skipped", reason: "base_merge_only" });
-        return "skipped_base_merge_only";
+        if (!recorded && refusalReason !== "anchor_changed") return "skipped_processed";
+        if (recorded) {
+          state.recordReviewReadiness({ repo, pullNumber: pull.number, headSha: pull.head.sha,
+            state: "skipped", reason: "base_merge_only" });
+          return "skipped_base_merge_only";
+        }
       }
-      writeRedactedJson(join(evidenceDir, "base-merge-only.json"), { ...evidence, decision: "reviewed", reason });
+      else writeRedactedJson(join(evidenceDir, "base-merge-only.json"), { ...evidence, decision: "reviewed", reason });
     }
     await input.onReviewStarted?.();
     if (isLcmReviewRepository(repo)) {
@@ -2048,10 +2053,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
     // schema, sandbox and citation checks all agree on the fallback.
     const checkoutReads = config.codexRuntime?.enabled
-      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: config.codexRuntime.cliPath })
+      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: reviewCliPath!,
+          sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
+            "private key": config.github.privateKeyPath, "state DB": config.statePath,
+            "license key": process.env.NEONDIFF_LICENSE_KEY_FILE || config.license?.keyPath, evidence: config.evidenceDir } })
       : { status: "disabled" as const };
-    const reviewConfig: BotConfig = config.codexRuntime && config.codexRuntime.checkoutReads === true && checkoutReads.status !== "enabled"
-      ? { ...config, codexRuntime: { ...config.codexRuntime, checkoutReads: false } }
+    const reviewConfig: BotConfig = config.codexRuntime?.enabled
+      ? { ...config, codexRuntime: { ...config.codexRuntime, cliPath: reviewCliPath!, checkoutReads: checkoutReads.status === "enabled" } }
       : config;
     if (checkoutReads.status !== "disabled") writeRedactedJson(join(evidenceDir, "checkout-reads.json"), checkoutReads);
     if (checkoutReads.status.startsWith("unavailable:")) {
@@ -2260,7 +2268,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     let selfConsistency: Awaited<ReturnType<typeof applySelfConsistencyRecheck>>;
     try {
       selfConsistency = await applySelfConsistencyRecheck({
-        config,
+        config: reviewConfig,
         github,
         repo,
         pull,
@@ -2382,7 +2390,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
         reviewFiles.length === files.length && lcmReviewFileInventoryIsComplete(files.length) &&
         lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
-      droppedFindingCount: zcodeResult.droppedFromSchema.length
+      droppedFindingCount: zcodeResult.droppedFromSchema.length + (zcodeResult.droppedFromEvidence?.length ?? 0)
     });
     if (assessmentBody) {
       try {
@@ -2822,10 +2830,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
 async function resolveScopedReviewAdmission(config: BotConfig, github: GitHubApi, repo: string): Promise<ProductionLicenseAdmission> {
   const visibility = visibilityFromRepositorySummary(await github.getRepo(repo));
-  const machineId = await activateCiLicenseForReview(config, visibility);
-  const result = await requireActiveProductionLicense({ operation: "review_cycle", config: config.license!, repo, visibility, machineId });
-  if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
-  return result.admission;
+  try {
+    const machineId = await activateCiLicenseForReview(config, visibility);
+    const result = await requireActiveProductionLicense({ operation: "review_cycle", config: config.license!, repo, visibility, machineId });
+    if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
+    return result.admission;
+  } finally { unlinkConsumedCiLicenseKey(config); }
 }
 
 async function resolveReviewDiscoveryAdmission(

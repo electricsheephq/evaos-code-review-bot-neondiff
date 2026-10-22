@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, codexCliVersionAtLeast, parseCodexCliVersion, parseCodexCommands, resolveCheckoutReadsStatus, resolveCodexReadConfinement, runCodexReview } from "../src/codex-runtime.js";
+import { buildCodexExecInvocation, CODEX_REVIEW_FINDINGS_JSON_SCHEMA, CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA, codexCliVersionAtLeast, parseCodexCliVersion, parseCodexCommands, resolveCheckoutReadsStatus, resolveCodexReadConfinement, resolveTrustedCodexPath, runCodexReview } from "../src/codex-runtime.js";
 import { buildSkillPackContextPacket } from "../src/skill-packs.js";
 import { createSourceRefReadBudget, verifySourceRef } from "../src/issue-analysis.js";
 import { loadConfigFromObject } from "../src/config.js";
@@ -238,7 +238,7 @@ describe("checkout reads", () => {
       resolveReadConfinement: () => { throw new Error("codex_runtime_read_confinement_unavailable: a readable root would expose CODEX_HOME"); } }))
       .toMatchObject({ status: "unavailable:confinement", detail: expect.stringContaining("CODEX_HOME") });
   });
-  it("reads `codex --version` from the CLI and caches it per CLI path", () => {
+  it("rechecks unsupported Codex versions after an in-place upgrade and caches supported versions", () => {
     const dir = root();
     const cli = join(dir, "codex");
     const counter = join(dir, "calls");
@@ -249,7 +249,11 @@ describe("checkout reads", () => {
       expect(resolveCheckoutReadsStatus({ checkoutReads: true, cwd: dir, cliPath: cli }, { resolveReadConfinement: confine }).status)
         .toBe("unavailable:codex_version");
     }
-    expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(2);
+    writeFileSync(cli, `#!/bin/sh\necho x >> "${counter}"\necho "codex-cli 0.163.0"\n`);
+    for (let index = 0; index < 2; index += 1) expect(resolveCheckoutReadsStatus(
+      { checkoutReads: true, cwd: dir, cliPath: cli }, { resolveReadConfinement: confine }).status).toBe("enabled");
+    expect(readFileSync(counter, "utf8").trim().split("\n")).toHaveLength(3);
     expect(resolveCheckoutReadsStatus({ checkoutReads: true, cwd: dir, cliPath: join(dir, "missing") }, { resolveReadConfinement: confine }).status)
       .toBe("unavailable:codex_version");
   });
@@ -360,4 +364,37 @@ describe("checkout reads", () => {
     expect(parseCodexCommands(`exec\n/bin/zsh -lc '${command}' in /repo\n succeeded in 1ms:\n`).commands[0]?.flagged).toBe(false);
   });
 
+});
+
+it.each(["darwin", "linux"] as const)("refuses sensitive paths under every %s sandbox root", platform => {
+  const system = platform === "darwin" ? ["/etc", "/private/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/dev"]
+    : ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/opt", "/dev", "/proc", "/sys", "/run", "/snap"];
+  const dependencies = { platform, readVersion: () => "codex-cli 0.163.0", resolveReadConfinement: () => ({ command: "/tool/codex", readableRoots: ["/checkout", "/tool", "/mirror"] }) };
+  for (const kind of ["config", "private key", "state DB", "license key", "evidence"]) {
+    for (const dir of [...system, "/checkout", "/tool", "/mirror"]) {
+      const result = resolveCheckoutReadsStatus({ checkoutReads: true, cwd: "/checkout", cliPath: "/tool/codex", sensitivePaths: { [kind]: dir + "/neondiff-secret" } }, dependencies);
+      expect(result.status).toBe("unavailable:confinement");
+      expect(result.detail).toContain("move it outside system directories");
+      expect(result.detail).not.toContain(dir + "/neondiff-secret");
+    }
+  }
+  expect(resolveCheckoutReadsStatus({ checkoutReads: true, cwd: "/checkout", cliPath: "/tool/codex", sensitivePaths: { config: "/var/lib/neondiff/config.json" } }, dependencies).status).toBe("enabled");
+});
+it("resolves sensitive symlinks and missing descendants, and fails closed on unknown platforms", () => {
+  const dir = root(), safe = root();
+  symlinkSync("/etc", join(dir, "linked"));
+  const input = { checkoutReads: true, cwd: safe, cliPath: "/fixture/codex", sensitivePaths: { config: join(dir, "linked/neondiff/missing.json") } };
+  const deps = { platform: "linux" as const, readVersion: () => "codex-cli 0.163.0", resolveReadConfinement: () => ({ command: "/fixture/codex", readableRoots: [safe] }) };
+  expect(resolveCheckoutReadsStatus(input, deps).status).toBe("unavailable:confinement");
+  expect(resolveCheckoutReadsStatus({ ...input, sensitivePaths: { config: "/elsewhere/config" } }, { ...deps, platform: "freebsd" }).status).toBe("unavailable:confinement");
+  expect(resolveCheckoutReadsStatus({ ...input, sensitivePaths: { config: join(process.env.HOME!, "config") } }, { ...deps, platform: "freebsd" }).status).toBe("enabled");
+});
+it("pins a trusted real Codex executable while rejecting absolute and symlinked work-root PATH entries", () => {
+  const dir = root(), work = join(dir, "work"), trusted = join(dir, "trusted");
+  mkdirSync(work); mkdirSync(trusted);
+  for (const base of [work, trusted]) { writeFileSync(join(base, "codex"), "#!/bin/sh\nexit 0\n"); chmodSync(join(base, "codex"), 0o755); }
+  symlinkSync(work, join(dir, "alias"));
+  const path = ["", ".", work, join(dir, "alias"), trusted].join(":");
+  expect(resolveTrustedCodexPath("codex", work, { PATH: path })).toBe(realpathSync(join(trusted, "codex")));
+  expect(() => resolveTrustedCodexPath("codex", work, { PATH: [work, join(dir, "alias")].join(":") })).toThrow(/trusted/);
 });
