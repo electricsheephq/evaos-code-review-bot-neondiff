@@ -178,8 +178,18 @@ export async function buildGitHubRelatedContextPacket(input: {
     });
     return false;
   });
-  const boundedRefs = scopedRefs.slice(0, input.config.maxRelatedItems);
-  for (const ref of scopedRefs.slice(input.config.maxRelatedItems)) {
+  // A repository the caller does not cover is dropped before the item limit, so it takes no slot and
+  // is never listed, not even as an omitted reference. A failed coverage check counts as not covered.
+  const coveredRefs: typeof scopedRefs = [];
+  for (const ref of scopedRefs) {
+    let covered = !input.repositoryCovered;
+    if (input.repositoryCovered) {
+      try { covered = await input.repositoryCovered(ref.repo); } catch { covered = false; }
+    }
+    if (covered) coveredRefs.push(ref);
+  }
+  const boundedRefs = coveredRefs.slice(0, input.config.maxRelatedItems);
+  for (const ref of coveredRefs.slice(input.config.maxRelatedItems)) {
     omittedReferences.push({
       id: `${ref.repo}#${ref.number}`,
       reason: "reference_limit",
@@ -195,7 +205,6 @@ export async function buildGitHubRelatedContextPacket(input: {
     const ref = boundedRefs[index]!;
     const id = `${ref.repo}#${ref.number}`;
     try {
-      if (input.repositoryCovered && !await input.repositoryCovered(ref.repo)) continue;
       const item = await withTimeout(
         input.reader.getIssueOrPull(ref.repo, ref.number),
         input.config.requestTimeoutMs,

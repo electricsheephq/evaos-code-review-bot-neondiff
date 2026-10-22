@@ -33,6 +33,29 @@ describe("GitHub related context packets", () => {
     expect(reads).toEqual(["owner/repo"]);
   });
 
+  it("drops uncovered repositories before the item limit and from omitted references", async () => {
+    const reads: string[] = [];
+    let failRead = false;
+    const reader = { getIssueOrPull: async (repo: string, number: number) => {
+      if (failRead) throw new Error("API rate limit exceeded");
+      reads.push(`${repo}#${number}`); return { number, title: "Fixture" };
+    } };
+    const input = { repo: "owner/repo", pull: pull({ body: "Refs owner/private#1, owner/public#2, owner/hidden#3, owner/public#4 and owner/private#5" }),
+      config: config({ includeCrossRepoRefs: true, maxRelatedItems: 1 }),
+      repositoryCovered: async (repo: string) => { if (repo === "owner/hidden") throw new Error("lookup failed"); return repo !== "owner/private"; } };
+    const limited = await buildGitHubRelatedContextPacket({ ...input, reader });
+    expect(limited.ok).toBe(true);
+    expect(reads).toEqual(["owner/public#2"]);
+    if (!limited.ok) throw new Error("expected packet");
+    expect(limited.packet.omittedReferences.map((omitted) => omitted.id)).toEqual(["owner/public#4"]);
+    failRead = true;
+    const rateLimited = await buildGitHubRelatedContextPacket({ ...input, config: config({ includeCrossRepoRefs: true, maxRelatedItems: 4 }), reader });
+    if (!rateLimited.ok) throw new Error("expected packet");
+    const ids = rateLimited.packet.omittedReferences.map((omitted) => omitted.id);
+    expect(ids.sort()).toEqual(["owner/public#2", "owner/public#4"]);
+    expect(rateLimited.packet.markdown).not.toMatch(/owner\/(?:private|hidden)/);
+  });
+
   it("extracts explicit issue and PR references from title/body deterministically", () => {
     const refs = extractGitHubReferences({
       repo: "owner/repo",
