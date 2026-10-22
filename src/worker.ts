@@ -2071,7 +2071,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
     // schema, sandbox and citation checks all agree on the fallback.
-    const checkoutReads = config.codexRuntime?.enabled
+    // Only a review that spawns Codex probes it: the probe runs the pinned binary, never a PATH lookup.
+    const checkoutReads = config.codexRuntime?.enabled && input.useZCode
       ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: reviewCliPath!,
           sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
             "private key": config.github.privateKeyPath, "state DB": config.statePath,
