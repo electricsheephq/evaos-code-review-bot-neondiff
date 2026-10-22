@@ -109,6 +109,23 @@ export interface GitHubApiOptions {
   requestTimeoutMs?: number;
 }
 
+export interface GitHubAuthorIdentity {
+  login: string;
+  type: "Bot" | "User";
+}
+
+export interface PullReviewSummary {
+  id: number;
+  commit_id?: string | null;
+  body?: string | null;
+  html_url?: string;
+  user?: { login: string; type?: string } | null;
+}
+
+export function isAuthoredBy(user: { login: string; type?: string } | null | undefined, identity: GitHubAuthorIdentity): boolean {
+  return user?.type === identity.type && user.login === identity.login;
+}
+
 export type GitHubRepositoryVisibility = "public" | "private" | "internal" | "unknown";
 export type GitHubRepositoryVisibilitySource = "repository_api" | "private_flag" | "unavailable";
 export type GitHubRepositoryAccessErrorClass =
@@ -217,6 +234,7 @@ export class GitHubApi {
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
   private repositoryIds = new Map<string, Promise<number>>();
+  private tokenAuthorIdentity?: Promise<GitHubAuthorIdentity>;
 
   constructor(options: GitHubApiOptions) {
     if (options.privateKey && options.privateKeyPath) {
@@ -236,6 +254,38 @@ export class GitHubApi {
 
   canPost(): boolean {
     return this.canPostAsApp() || Boolean(this.token);
+  }
+
+  /**
+   * The author GitHub records on comments and reviews this client posts. App posts use the
+   * configured bot login. A token is resolved once through GET /user, so a personal access token
+   * matches its own User-authored comments; the Actions GITHUB_TOKEN cannot read /user and keeps
+   * the configured bot login.
+   */
+  async postingIdentity(): Promise<GitHubAuthorIdentity> {
+    const fallback: GitHubAuthorIdentity = { login: this.botLogin, type: "Bot" };
+    if (this.canPostAsApp() || !this.token) return fallback;
+    const identity = this.tokenAuthorIdentity ?? this.request<{ login?: unknown; type?: unknown }>("/user", { token: this.token })
+      .then((user): GitHubAuthorIdentity => typeof user?.login === "string" && user.login.length > 0
+        ? { login: user.login, type: user.type === "Bot" ? "Bot" : "User" }
+        : fallback)
+      .catch(() => fallback);
+    this.tokenAuthorIdentity = identity;
+    return identity;
+  }
+
+  /** Read-only, bounded list of submitted reviews on a PR (same page cap as review comments). */
+  async listPullReviews(repo: string, pullNumber: number): Promise<PullReviewSummary[]> {
+    const reviews: PullReviewSummary[] = [];
+    for (let page = 1; page <= MAX_REVIEW_COMMENT_PAGES; page += 1) {
+      const chunk = await this.request<PullReviewSummary[]>(
+        `/repos/${repo}/pulls/${pullNumber}/reviews?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      reviews.push(...chunk);
+      if (chunk.length < 100) break;
+    }
+    return reviews;
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
@@ -629,19 +679,16 @@ export class GitHubApi {
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
       );
+      const identity = await this.postingIdentity();
       const issueMarker = marker.includes(" issue=");
       const normalizedMarker = issueMarker ? marker.toLowerCase() : marker;
       const existing = comments.find((comment) => {
         const body = issueMarker ? comment.body?.toLowerCase() : comment.body;
-        return body?.includes(normalizedMarker) && this.isBotAuthoredComment(comment);
+        return body?.includes(normalizedMarker) && isAuthoredBy(comment.user, identity);
       });
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
-  }
-
-  private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
-    return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
   }
 
   private async getInstallationToken(repo: string): Promise<string> {

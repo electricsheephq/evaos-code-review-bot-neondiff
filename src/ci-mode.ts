@@ -1,9 +1,11 @@
-import { accessSync, constants, readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import type { BotConfig } from "./config.js";
 import type { CodexReasoningEffort } from "./codex-runtime.js";
+import { isAuthoredBy, type GitHubApi } from "./github.js";
+import { REVIEW_ATTRIBUTION_PREFIX } from "./walkthrough-post.js";
 import { callLicenseApi } from "./license.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { readProductionFileLicenseSecret } from "./license-secret-store.js";
@@ -70,9 +72,11 @@ export function readCiPullContext(env: NodeJS.ProcessEnv = process.env): CiPullC
 export function buildCiConfig(base: BotConfig, ctx: CiPullContext, env: NodeJS.ProcessEnv = process.env): BotConfig {
   const effort = env.NEONDIFF_REASONING_EFFORT ?? "high";
   if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error("NEONDIFF_REASONING_EFFORT must be a valid Codex reasoning effort");
-  const cliPath = (env.PATH ?? "").split(delimiter).map((dir) => resolve(dir, "codex")).find((path) => {
-    try { accessSync(path, constants.X_OK); return true; } catch { return false; }
-  });
+  // Empty or relative PATH entries resolve against the cwd, which in CI is the PR-controlled checkout.
+  const cliPath = (env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0 && isAbsolute(dir))
+    .map((dir) => join(dir, "codex")).find((path) => {
+      try { accessSync(path, constants.X_OK); return statSync(path).isFile(); } catch { return false; }
+    });
   if (!cliPath) throw new Error("--ci requires codex on PATH");
   const root = join(env.RUNNER_TEMP || tmpdir(), "neondiff-ci");
   const config: BotConfig = {
@@ -91,4 +95,25 @@ export function buildCiConfig(base: BotConfig, ctx: CiPullContext, env: NodeJS.P
   };
   ciMachineIds.set(config, ciLicenseMachineId(env));
   return config;
+}
+
+/**
+ * The CI state database lives under RUNNER_TEMP and is fresh on every workflow run, so a rerun or a
+ * later issue_comment run cannot see the processed head. GitHub is the durable receipt: a NeonDiff
+ * review already submitted by this token's identity on this exact head means the head is done.
+ */
+export async function findPostedCiReview(
+  github: Pick<GitHubApi, "listPullReviews" | "postingIdentity">,
+  repo: string,
+  pullNumber: number,
+  headSha: string
+): Promise<{ id: number; html_url?: string } | undefined> {
+  const identity = await github.postingIdentity();
+  const head = headSha.toLowerCase();
+  const review = (await github.listPullReviews(repo, pullNumber)).find((candidate) =>
+    candidate.commit_id?.toLowerCase() === head &&
+    isAuthoredBy(candidate.user, identity) &&
+    (candidate.body?.includes(REVIEW_ATTRIBUTION_PREFIX) || candidate.body?.includes("<!-- lcm-x-ai-review:v2"))
+  );
+  return review ? { id: review.id, ...(review.html_url ? { html_url: review.html_url } : {}) } : undefined;
 }
