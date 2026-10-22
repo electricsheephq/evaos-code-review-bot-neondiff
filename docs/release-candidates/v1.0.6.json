@@ -47,8 +47,8 @@
     "requiredForThisRelease": true,
     "state": "candidate",
     "previousReleasedPackageVersion": "1.0.5",
-    "shasum": "c67bb48fb5b00e72f76a88ddb84b01817c537df0",
-    "integrity": "sha512-du/XDbdPZ7bZchWUc7ftyCgl+FUisL9IZOpJnvT/4jqvPmeYsMeh8Mq+/77Q3S5MNgOJBQeKSxlAPYE3Ui4/Dw=="
+    "shasum": "9ce0fdf6421dedeedfe0f7f6852ae5ff9f495caa",
+    "integrity": "sha512-lJmw5I7w9UVB0nTCMhqLl6AmHD8GubMc0nge12KSbUx+0BkARXmQgcfl3a70mFP0ngj/OLYlVBBnHrUe1YIkaQ=="
   },
   "registry": {
     "state": "pending_publication",
