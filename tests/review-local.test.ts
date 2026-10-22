@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runReviewLocal, reviewBenchMessage, parseLocalDiff } from "../src/review-local.js";
-import { runCodexReview } from "../src/codex-runtime.js";
+import { resolveCheckoutReadsStatus, runCodexReview } from "../src/codex-runtime.js";
 import { GitHubApi } from "../src/github.js";
 import { requireActiveProductionLicense } from "../src/license-admission.js";
 import { ReviewStateStore } from "../src/state.js";
@@ -18,8 +18,12 @@ vi.mock("../src/state.js", async (original) => ({ ...await original<object>(), R
 vi.mock("../src/license-admission.js", async (original) => ({ ...await original<object>(), requireActiveProductionLicense: vi.fn(() => { throw Error("license forbidden"); }) }));
 vi.mock("../src/codex-runtime.js", async (original) => {
   const actual = await original<typeof import("../src/codex-runtime.js")>();
-  return { ...actual, runCodexReview: vi.fn(async (input, dependencies) => actual.runCodexReview(input, {
+  // CI has no Codex CLI: stub its availability check and read confinement.
+  return { ...actual,
+    resolveCheckoutReadsStatus: vi.fn((input: { checkoutReads?: boolean }) => ({ status: input.checkoutReads === true ? "enabled" : "disabled" })),
+    runCodexReview: vi.fn(async (input, dependencies) => actual.runCodexReview(input, {
     ...dependencies,
+    resolveReadConfinement: (cwd: string) => ({ command: "/fixture/codex", readableRoots: [cwd] }),
     runProcess: async (invocation) => {
       fs.writeFileSync(invocation.outputPath, JSON.stringify({ findings, summary: {
         changedBehavior: [], invariants: [], evidence: [], limitations: ["fixture"], noFindingRationale: "fixture"
@@ -76,6 +80,16 @@ it("reads every RB input and prints applied settings", async () => {
   expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true, reasoningEffort: "medium", prompt: expect.stringContaining("RB title") }), expect.any(Object));
   expect(JSON.parse(fs.readFileSync(args().out, "utf8")).agent).toBe("rb");
 });
+it("falls back to a diff-only review when checkout reads are unavailable", async () => {
+  vi.mocked(resolveCheckoutReadsStatus).mockReturnValueOnce({ status: "unavailable:codex_version", detail: "Codex CLI 0.162.0 is older than 0.163.0" });
+  const config = join(root, "config.json"); fs.writeFileSync(config, JSON.stringify({ codexRuntime: { checkoutReads: true } }));
+  const log = vi.spyOn(console, "log").mockImplementation(() => {}), warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await runReviewLocal({ ...args(), config });
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("unavailable:codex_version"));
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("checkout_reads=false"));
+  const input = vi.mocked(runCodexReview).mock.calls[0]![0];
+  expect(input.checkoutReads).toBe(false); expect(input.prompt).not.toContain("read-only checkout of");
+});
 it("fails head mismatch before runtime or output and returns a nonzero CLI exit", async () => {
   await expect(runReviewLocal({ ...args(), head: base })).rejects.toThrow(/head.*mismatch/i);
   expect(runCodexReview).not.toHaveBeenCalled(); expect(fs.existsSync(args().out)).toBe(false);
@@ -89,6 +103,10 @@ it("removes markdown severity, collapses whitespace, includes why and caps messa
 it("parses renamed, added, deleted, binary and quoted paths", () => {
   const diff = 'diff --git a/old b/new\nrename from old\nrename to new\n--- a/old\n+++ b/new\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/gone b/gone\n--- a/gone\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\ndiff --git "a/sp\\tace" "b/sp\\tace"\n--- /dev/null\n+++ "b/sp\\tace"\n@@ -0,0 +1 @@\n+hi\ndiff --git a/image b/image\nBinary files a/image and b/image differ\n';
   expect(parseLocalDiff(diff).map(x => [x.filename, x.status])).toEqual([["new", "renamed"], ["gone", "removed"], ["sp\tace", "added"], ["image", "modified"]]);
+});
+it("drops the tab Git appends to unquoted ---/+++ paths that contain a space", () => {
+  const diff = 'diff --git a/foo bar b/foo bar\n--- a/foo bar\t\n+++ b/foo bar\t\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/new file b/new file\nnew file mode 100644\n--- /dev/null\n+++ b/new file\t\n@@ -0,0 +1 @@\n+hi\n';
+  expect(parseLocalDiff(diff).map(x => [x.filename, x.status])).toEqual([["foo bar", "modified"], ["new file", "added"]]);
 });
 it("honors chunk budgeting locally and preserves only findings from each chunk", async () => {
   fs.writeFileSync(join(repo, "two.ts"), "hi\n"); git("add", "."); git("commit", "-qm", "two");
@@ -122,6 +140,9 @@ it("rejects an evidence directory inside the reviewed checkout before running", 
     await expect(runReviewLocal({ ...args(), "evidence-dir": dir })).rejects.toThrow(/outside the reviewed checkout/);
   }
   expect(runCodexReview).not.toHaveBeenCalled(); expect(fs.existsSync(join(repo, ".neondiff"))).toBe(false);
+  fs.mkdirSync(join(repo, "inside")); fs.symlinkSync(join(repo, "inside"), join(root, "link"));
+  await expect(runReviewLocal({ ...args(), "evidence-dir": join(root, "link") })).rejects.toThrow(/outside the reviewed checkout/);
+  expect(runCodexReview).not.toHaveBeenCalled(); expect(fs.readdirSync(join(repo, "inside"))).toEqual([]);
   await runReviewLocal({ ...args(), "evidence-dir": join(root, "evidence") });
   expect(runCodexReview).toHaveBeenCalledTimes(1);
 });

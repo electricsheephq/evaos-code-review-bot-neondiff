@@ -102,7 +102,9 @@ async function main(argv) {
         writeFileSync(join(checkout, "diff.patch"), diff, { flag: "wx" });
         const prompt = nativePrompt(task); writeFileSync(join(dir, "prompt.txt"), prompt);
         const result = await runtime.runCodexStructuredOutput({ cwd: checkout, prompt, cliPath: "codex", model, reasoningEffort: effort, evidenceDir: dir,
-          timeoutMs: 600000, maxOutputBytes: 20 * 1024 * 1024, artifactPrefix: "codex-native", schema: nativeSchema, parse: value => value }, {
+          timeoutMs: 600000, maxOutputBytes: 20 * 1024 * 1024, artifactPrefix: "codex-native", schema: nativeSchema, parse: value => value,
+          // Corpus PRs are untrusted input: confine the native arm's reads to the checkout, as NeonDiff's are.
+          confineReadsToCheckout: true }, {
           captureWorktreeState: () => git(checkout, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
         });
         const { readdirSync } = await import("node:fs");

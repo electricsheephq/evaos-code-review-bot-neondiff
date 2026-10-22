@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadConfigFromObject } from "./config.js";
-import { runCodexReview } from "./codex-runtime.js";
+import { resolveCheckoutReadsStatus, runCodexReview } from "./codex-runtime.js";
 import { planContextBudget } from "./context-budget.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import { filterPullFilesForProfile, resolveRepoProfile } from "./repo-policy.js";
@@ -36,8 +36,10 @@ export function parseLocalDiff(diff: string): PullFilePatch[] {
     if (!header) throw new Error("Unsupported git diff header");
     const hunk = lines.findIndex(line => line.startsWith("@@ "));
     const metadata = hunk < 0 ? lines : lines.slice(0, hunk);
-    const old = gitPath(metadata.find(x => x.startsWith("--- "))?.slice(4) ?? header[1]!);
-    const next = gitPath(metadata.find(x => x.startsWith("+++ "))?.slice(4) ?? header[2]!);
+    // Git ends an unquoted ---/+++ name that contains a space with a tab.
+    const headerPath = (prefix: string) => metadata.find(x => x.startsWith(prefix))?.slice(4).replace(/^([^"].*)\t$/, "$1");
+    const old = gitPath(headerPath("--- ") ?? header[1]!);
+    const next = gitPath(headerPath("+++ ") ?? header[2]!);
     const filename = (next === "/dev/null" ? old : next).slice(2);
     const patch = hunk < 0 ? "" : lines.slice(hunk).join("\n");
     return { filename, patch, patchComplete: true,
@@ -108,7 +110,11 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   if (!config.codexRuntime?.enabled) throw new Error("review-local requires codexRuntime.enabled=true");
   const runtime = config.codexRuntime;
   const agent = arg("agent") ?? env.RB_AGENT ?? "neondiff";
-  console.log(`model=${runtime.model} effort=${runtime.reasoningEffort} checkout_reads=${runtime.checkoutReads === true}`);
+  // Decided once, as in the worker: without a supported Codex CLI or confinement the review falls back to diff-only.
+  const readsStatus = resolveCheckoutReadsStatus({ checkoutReads: runtime.checkoutReads, cwd: repoPath, cliPath: runtime.cliPath });
+  const checkoutReads = readsStatus.status === "enabled";
+  if (readsStatus.status.startsWith("unavailable:")) console.warn(`[checkout-reads] ${readsStatus.status}: ${readsStatus.detail ?? "unavailable"}; running a diff-only review`);
+  console.log(`model=${runtime.model} effort=${runtime.reasoningEffort} checkout_reads=${checkoutReads}`);
   const diffPath = input("diff-file", "RB_DIFF");
   const diffFiles = parseLocalDiff(diffPath ? readFileSync(diffPath, "utf8") : git("diff", "--no-ext-diff", "--no-textconv", "--no-color", `${base}...${head}`));
   // Use the configured profile when there is one; a repo missing from (or disabled in) the registry reviews under the default.
@@ -119,7 +125,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   const pull: PullRequestSummary = { number, title, body: metadata.body ?? "", draft: false, html_url: `https://github.com/${repo}/pull/${number}`,
     head: { sha: head, ref: head }, base: { sha: base, ref: base, repo: { full_name: repo } } };
   const promptForFiles = (files: PullFilePatch[]) => buildReviewPrompt({ repo, pull, files, repoProfile: profile.profile,
-    maxPatchBytes: config.zcode.maxPatchBytes, ...(runtime.checkoutReads ? { checkoutAccess: "shell_read_only" as const } : {}) });
+    maxPatchBytes: config.zcode.maxPatchBytes, ...(checkoutReads ? { checkoutAccess: "shell_read_only" as const } : {}) });
   const prompt = promptForFiles(files);
   const budget = planContextBudget({ prompt, files, contextWindowTokens: runtime.contextWindowTokens, config: config.contextBudget, buildPrompt: promptForFiles });
   if (budget.mode === "skip") throw new Error(`review-local ${budget.reason}`);
@@ -129,6 +135,9 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   // Runtime artifacts inside the checkout would trip the runtime's own worktree write check.
   if (fromRepo !== ".." && !fromRepo.startsWith(`..${sep}`) && !isAbsolute(fromRepo)) throw new Error("--evidence-dir must be outside the reviewed checkout");
   mkdirSync(evidenceRoot, { recursive: true });
+  // Repeat the check on resolved paths so a symlinked --evidence-dir cannot point back into the checkout.
+  const fromRealRepo = relative(realpathSync(repoPath), realpathSync(evidenceRoot));
+  if (fromRealRepo !== ".." && !fromRealRepo.startsWith(`..${sep}`) && !isAbsolute(fromRealRepo)) throw new Error("--evidence-dir must be outside the reviewed checkout");
   const evidenceDir = mkdtempSync(join(evidenceRoot, "neondiff-review-local-"));
   try {
     const findings: Finding[] = [];
@@ -138,7 +147,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
       if (git("rev-parse", "HEAD").trim() !== head) throw new Error("review-local head changed during review");
       const chunkDir = join(evidenceDir, `chunk-${index}`);
       const result = await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
-        cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort, checkoutReads: runtime.checkoutReads === true,
+        cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort, checkoutReads,
         timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes, lcmReviewAssessment: isLcmReviewRepository(repo) }, {
         captureWorktreeState: () => git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
       });
