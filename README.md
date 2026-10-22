@@ -265,8 +265,10 @@ Keychain, arguments, logs, or UI. Overview can then run `review-pr` for one
 selected repository and pull request through the configured provider. Live
 posting remains disabled until that exact target and config revision return a
 successful dry-run head and the user confirms the pinned head. A transport
-failure revokes that approval instead of permitting a blind retry. For that
-multi-repository worker, daemon-wide start remains blocked. The selection and
+failure revokes that approval instead of permitting a blind retry. For a
+customer multi-repository worker, daemon-wide start remains blocked; a verified
+internal-admin worker may start it and then reviews its whole allowlist, with
+license admission checked for every pull request. The selection and
 dry-run approval fail closed if the config, target, pull request, workspace, or
 head changes.
 The same **Verify existing access** action then runs credential-free

@@ -433,7 +433,9 @@ the same Mac. In that exact case it opens a reconciliation path:
   40-character head SHA, and requires explicit confirmation (see
   [Run A Dry-Run Review](#5-run-a-dry-run-review)); a transport failure revokes
   the approval and requires a new dry review;
-  daemon-wide start stays blocked for multi-repository workers;
+  daemon-wide start stays blocked for customer multi-repository workers; a
+  verified internal-admin worker may start and then reviews its whole
+  allowlist, with license admission checked for every pull request;
 - it keeps new work blocked until the exact current GitHub/repository and
   entitlement checks required by the release path pass.
 
@@ -590,8 +592,8 @@ repositories. Current-access verification uses `doctor github --repo` for that
 one selected target, while the default CLI command without `--repo` continues
 to inspect the complete configured allowlist. The native app can run one scoped
 dry review through the exact matched local agent, then offer a confirmed live
-post pinned to that dry-run head. It still does not start the multi-repository
-daemon or rewrite its allowlist. The managed B1 broker remains a separate path.
+post pinned to that dry-run head. It does not rewrite the allowlist, and it
+starts the multi-repository daemon only for a verified internal-admin worker. The managed B1 broker remains a separate path.
 The dashboard shows license status, GitHub App status, daemon status, and
 provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
