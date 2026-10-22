@@ -64,6 +64,9 @@ jobs:
           install -m 600 /dev/null "$RUNNER_TEMP/neondiff-license-key"
           printf '%s' "$ACTION_LICENSE_KEY" > "$RUNNER_TEMP/neondiff-license-key"
           printf 'NEONDIFF_LICENSE_KEY_FILE=%s\n' "$RUNNER_TEMP/neondiff-license-key" >> "$GITHUB_ENV"
+      # Codex needs unprivileged user namespaces for confined checkout reads.
+      - name: Allow the Codex sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Review current PR head
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

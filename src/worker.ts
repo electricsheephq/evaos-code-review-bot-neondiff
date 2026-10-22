@@ -2126,7 +2126,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // schema, sandbox and citation checks all agree on the fallback.
     // Only a review that spawns Codex probes it: the probe runs the pinned binary, never a PATH lookup.
     const checkoutReads = config.codexRuntime?.enabled && input.useZCode
-      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, restrictTools, cwd: worktree.path, cliPath: reviewCliPath!,
+      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, restrictTools, probeSandbox: true, cwd: worktree.path, cliPath: reviewCliPath!,
           sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
             "private key": config.github.privateKeyPath, "state DB": config.statePath,
             // Both license paths: an inherited env file must not hide the configured key.
