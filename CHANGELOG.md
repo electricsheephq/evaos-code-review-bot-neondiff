@@ -14,6 +14,15 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+## [1.1.1] - docs/releases/v1.1.1.md
+
+### Fixed
+
+- `review-pr --ci` exits 0 with a GitHub Actions notice on a normal skip
+  (draft, head moved, restricted review unavailable); license-gate skips and
+  failures still exit 1.
+- The secret-rule differential test allows a cold Swift compile (240 s).
+
 ## [1.1.0] - docs/releases/v1.1.0.md
 
 ### Added
