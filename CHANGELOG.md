@@ -16,10 +16,46 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [1.1.0] - docs/releases/v1.1.0.md
 
+### Added
+
+- GitHub Actions mode: `neondiff review-pr --ci` reviews the pull request from
+  the Actions event with `GITHUB_TOKEN` and an OpenAI key, with no config file
+  or GitHub App.
+- Free review of public repositories with no license key, in the GitHub
+  Action, `review-pr --ci` and the self-hosted worker. Private repositories
+  need a Solo or Team license; a worker without one reviews the public
+  repositories and skips the rest. The Mac app follows in the Desktop beta.
+- Restricted review for outside contributors on public repositories: no shell,
+  skills, hooks, web search or image tools, no project docs, and checkout-only
+  reads. If confinement cannot be guaranteed, the review is skipped with a
+  visible reason.
+- Private repositories in CI, with the license key read from a runner-owned
+  file.
+- Checkout reads on by default, confined to the PR checkout by a Codex
+  permission profile and failing closed to a diff-only review.
+- `review-local` for local diffs, with a native ReviewBench runner.
+
 ### Changed
 
+- Default model `gpt-6.1-sol` at high effort with a 500k context window;
+  per-review Codex usage is recorded.
+- Public-repo author gate for ChatGPT-login auth.
+- Recall-oriented review prompt; unconfirmed P0/P1 findings are lowered to P2
+  instead of dropped; answered findings are not re-posted; a base-merge-only
+  push reuses the previous review; secret-like model output is redacted.
+- Issue analysis reads only the repository source snapshot.
+- Related context for a public repository cites only public repositories.
 - Use the lean npm release path with exact-commit CI, provenance verification,
   registry read-back and owner-driven channel rollback.
+
+### Fixed
+
+- The daemon reviews pull requests automatically again, and one failing
+  repository no longer stops discovery for the rest.
+- Private-repository CI checkouts (including Git LFS) are authenticated with
+  the workflow token.
+- On Linux, checkout reads first check that the Codex sandbox can start;
+  where user namespaces are blocked the review runs diff-only with a hint.
 
 ## [1.0.6] - docs/releases/v1.0.6.md
 
