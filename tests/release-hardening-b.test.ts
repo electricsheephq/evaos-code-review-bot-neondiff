@@ -22,6 +22,10 @@ it("item 2: documents an actionable CI workflow without checking out PR code", (
   expect(job.if).toContain("startsWith(github.event.comment.body, '/neondiff review')");
   expect(job.if).toContain("github.event.issue.pull_request");
   expect(job.if).toContain('"OWNER","MEMBER","COLLABORATOR"');
+  // Per-PR serialization lives on the job, so non-command comments never join (or displace) the group.
+  expect(workflow.concurrency).toBeUndefined();
+  expect(job.concurrency).toEqual({ group: "neondiff-review-${{ github.event.pull_request.number || github.event.issue.number }}",
+    "cancel-in-progress": false });
   expect(yaml).not.toMatch(/actions\/checkout|neondiff-action/);
   for (const step of job.steps.filter((s: { uses?: string }) => s.uses)) expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
   expect(job.steps.find((s: { with?: object }) => s.with)?.with["node-version"]).toBe(26);
@@ -38,6 +42,9 @@ it("item 3: links private CI license setup from all three repository setup surfa
   for (const path of ["README.md", "docs/SETUP.md", "docs/github-app-setup.md"]) {
     expect(read(path)).toContain("ci-runner.md#private-repositories");
   }
+});
+it("vision carves review-local out of the entitlement invariant", () => {
+  expect(read("docs/vision.md")).toMatch(/`review-local`[^.]*posts nothing, is the documented exemption/);
 });
 it("item 4: scopes contributor and design activation policy to non-public work", () => {
   for (const path of ["AGENTS.md", "CONTRIBUTING.md", "docs/vision.md"]) {
