@@ -146,12 +146,17 @@ export type GitHubRelatedContextBuildResult =
       omittedReferences: GitHubRelatedOmittedReference[];
     };
 
+const MAX_COVERAGE_CHECKED_REPOSITORIES = 10;
+
 export async function buildGitHubRelatedContextPacket(input: {
   repo: string;
   pull: PullRequestSummary;
   config: GitHubRelatedContextConfig;
   reader: GitHubRelatedContextReader;
   repositoryCovered?: (repo: string) => Promise<boolean>;
+  /** A public review's packet: a reference to another repository that was not checked as covered is
+   * never listed, not even as an omitted reference. Other packets list it as omitted, as before. */
+  concealUncheckedRepositories?: boolean;
   /** Changed files (already fetched for the review). Feeds pathOverlap/lexical when relevanceScoring
    * is enabled; ignored (and the ordering byte-identical) when disabled. */
   files?: PullFilePatch[];
@@ -171,20 +176,50 @@ export async function buildGitHubRelatedContextPacket(input: {
   const scopedRefs = refs.filter((ref) => {
     const sameRepo = ref.repo.toLowerCase() === input.repo.toLowerCase();
     if (sameRepo || input.config.includeCrossRepoRefs) return true;
-    omittedReferences.push({
+    if (!input.concealUncheckedRepositories) omittedReferences.push({
       id: `${ref.repo}#${ref.number}`,
       reason: "cross_repo_disabled",
       detail: "Cross-repo GitHub related context is disabled for this packet."
     });
     return false;
   });
-  const boundedRefs = scopedRefs.slice(0, input.config.maxRelatedItems);
-  for (const ref of scopedRefs.slice(input.config.maxRelatedItems)) {
-    omittedReferences.push({
-      id: `${ref.repo}#${ref.number}`,
-      reason: "reference_limit",
-      detail: `Dropped GitHub reference after maxRelatedItems=${input.config.maxRelatedItems}.`
-    });
+  // A repository the caller does not cover is dropped before the item limit, so it takes no slot and
+  // is never listed, not even as an omitted reference. A failed coverage check counts as not covered.
+  // Each repository is checked at most once per packet. Checks of other repositories stop once the limit
+  // is filled or MAX_COVERAGE_CHECKED_REPOSITORIES are checked, so a body naming many repositories
+  // cannot fan out lookups; an unchecked reference is omitted like one past the limit, or unlisted when
+  // concealUncheckedRepositories is set.
+  const coveredRefs: typeof scopedRefs = [];
+  const uncheckedRefs = new Map<(typeof scopedRefs)[number], string>();
+  const coverage = new Map<string, boolean>();
+  let checkedOtherRepos = 0;
+  for (const ref of scopedRefs) {
+    if (!input.repositoryCovered) { coveredRefs.push(ref); continue; }
+    const repoKey = ref.repo.toLowerCase();
+    let covered = coverage.get(repoKey);
+    if (covered === undefined) {
+      const otherRepo = repoKey !== input.repo.toLowerCase();
+      if (otherRepo && coveredRefs.length >= input.config.maxRelatedItems) {
+        uncheckedRefs.set(ref, `Dropped GitHub reference after maxRelatedItems=${input.config.maxRelatedItems}.`);
+        continue;
+      }
+      if (otherRepo && checkedOtherRepos >= MAX_COVERAGE_CHECKED_REPOSITORIES) {
+        uncheckedRefs.set(ref, `Dropped GitHub reference after checking ${MAX_COVERAGE_CHECKED_REPOSITORIES} other repositories.`);
+        continue;
+      }
+      if (otherRepo) checkedOtherRepos += 1;
+      try { covered = await input.repositoryCovered(ref.repo); } catch { covered = false; }
+      coverage.set(repoKey, covered);
+    }
+    if (covered) coveredRefs.push(ref);
+  }
+  const boundedRefs = coveredRefs.slice(0, input.config.maxRelatedItems);
+  const limitedRefs = new Map<(typeof scopedRefs)[number], string>(coveredRefs.slice(input.config.maxRelatedItems)
+    .map((ref) => [ref, `Dropped GitHub reference after maxRelatedItems=${input.config.maxRelatedItems}.`]));
+  if (!input.concealUncheckedRepositories) for (const [ref, detail] of uncheckedRefs) limitedRefs.set(ref, detail);
+  for (const ref of scopedRefs) {
+    const detail = limitedRefs.get(ref);
+    if (detail) omittedReferences.push({ id: `${ref.repo}#${ref.number}`, reason: "reference_limit", detail });
   }
 
   const fetched: GitHubRelatedReference[] = [];
@@ -195,7 +230,6 @@ export async function buildGitHubRelatedContextPacket(input: {
     const ref = boundedRefs[index]!;
     const id = `${ref.repo}#${ref.number}`;
     try {
-      if (input.repositoryCovered && !await input.repositoryCovered(ref.repo)) continue;
       const item = await withTimeout(
         input.reader.getIssueOrPull(ref.repo, ref.number),
         input.config.requestTimeoutMs,
