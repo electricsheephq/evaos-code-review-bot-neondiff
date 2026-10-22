@@ -174,7 +174,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set)
         var isKeychainWorkerLaunchAgentOperationInProgress = false
     @Published package private(set) var keychainWorkerLaunchAgentStatus =
-        "Install and start the background worker when setup is ready. Its PR review lane remains held."
+        "Install and start the background worker when setup is ready. The background worker reviews new pull requests on the repositories you enrolled and posts its reviews; in dry-run mode it writes them to local evidence instead."
     package var localWorkerExecutionContextProvider:
         (@MainActor () -> [DesktopLocalBotExecutionContext])?
     @Published package var logText = "No logs loaded."
@@ -2634,7 +2634,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let manager = dependencies.keychainWorkerLaunchAgentManager
         isKeychainWorkerLaunchAgentOperationInProgress = true
         keychainWorkerLaunchAgentStatus =
-            "Installing the secret-free background worker with its PR review lane held…"
+            "Installing the secret-free background worker… The background worker reviews new pull requests on the repositories you enrolled and posts its reviews; in dry-run mode it writes them to local evidence instead."
         Task { [weak self] in
             do {
                 let status = try await manager.installAndStart(
