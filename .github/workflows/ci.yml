@@ -126,4 +126,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm i -g @openai/codex@0.163.0
+      # Ubuntu 24.04 runners restrict unprivileged user namespaces through AppArmor, so Codex's
+      # bubblewrap sandbox cannot set up its network namespace ("bwrap: loopback: Failed
+      # RTM_NEWADDR"). Lift it on this ephemeral runner so the probe runs the real permission profile.
+      - name: Allow unprivileged user namespaces for the Codex sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: NEONDIFF_REAL_CODEX=1 npx vitest run tests/codex-tool-surface.test.ts
