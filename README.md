@@ -11,20 +11,24 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-The current npm CLI (v1.0.x) requires API-backed activation for every repository
-(public, private, internal, and unknown); unknown visibility fails closed, and
-provider verification is required for all tiers.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
+free, with no license key, through the GitHub Action and `neondiff review-pr --ci`.
+The Mac app and the self-hosted worker (`daemon`, `run-once`, and local
+`review-pr`) still ask for a license key for every repository for now; extending
+free public review to them is tracked in
+[#1191](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191).
+Private, internal, and unknown-visibility repositories need an active NeonDiff
+license; unknown visibility fails closed.
+The npm CLI 1.0.x requires API-backed activation for every repository.
 
-Coming with the native app: public open-source repositories will be free with no
-NeonDiff Activation Key, while private, internal, and commercial repositories
-will require an active entitlement. This managed public-free/private-paid model
-ships with the native NeonDiff app and the managed GitHub App broker (#614) and
-is not enforced by the current CLI. NeonDiff
-support licenses cost $1/month or $10/year for individuals,
-or $100/year for organizations. Individual plans include a 7-day trial,
-organization plans include a 30-day trial, and legacy lifetime licenses remain
-honored but are no longer sold. NeonDiff is source-available commercial
-software, not open-source software.
+Paid licenses are flat, with no per-seat pricing: **Solo** $9/mo or $90/yr for
+one developer, **Team** $290/yr per GitHub organization. Solo comes with a
+7-day trial and Team with a 30-day trial. Existing subscribers keep their
+current price, and legacy lifetime licenses remain honored but are no longer
+sold. You bring
+your own model provider key or local model; NeonDiff does not include hosted
+model credits. NeonDiff is source-available commercial software, not
+open-source software.
 
 [Website](https://www.neondiff.com) · [Setup](docs/SETUP.md) ·
 [GitHub App Install](docs/github-app-setup.md) · [Contributing](CONTRIBUTING.md) ·
