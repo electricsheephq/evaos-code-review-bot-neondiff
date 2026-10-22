@@ -1,6 +1,8 @@
 # Local checkout review
 
-`review-local` posts nothing, needs no license, and makes no GitHub calls. It
+`review-local` posts nothing, needs no license activation, and makes no GitHub
+calls. Reviewing private or internal code with it outside evaluation still needs
+a paid license under [LICENSE.md](../LICENSE.md). It
 uses the configured Codex CLI session, NeonDiff prompt, context budget and
 deterministic findings gate. It opens no state database and runs no
 self-consistency verifier. Model providers receive the review context.
