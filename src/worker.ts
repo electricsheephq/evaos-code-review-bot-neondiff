@@ -16,7 +16,7 @@ import {
 import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { computeOwnDiffFingerprint, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -1943,7 +1943,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       const reason = excluded ? "excluded" : "error" in ownDiff ? "fingerprint_error" : !anchor ? "no_anchor"
         : anchor.baseRef !== pull.base.ref ? "base_ref_changed"
         : !await isGitAncestor(worktree.path, anchor.headSha, pull.head.sha) ? "not_ancestor"
-        : anchor.diffFingerprint !== ownDiff.fingerprint ? "fingerprint_differs" : undefined;
+        : anchor.diffFingerprint !== ownDiff.fingerprint ? "fingerprint_differs"
+        : !await isBaseMergeOnlyTree(worktree.path, anchor.headSha, ownDiff.mergeBase, pull.head.sha) ? "merge_tree_differs"
+        : undefined;
       const evidence = {
         previousHead: anchor?.headSha, previousReviewUrl: anchor?.reviewUrl, previousEvent: anchor?.event,
         newHead: pull.head.sha, ...reviewDiff, ...ownDiff

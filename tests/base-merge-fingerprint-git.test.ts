@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { computeOwnDiffFingerprint } from "../src/git.js";
+import { computeOwnDiffFingerprint, isBaseMergeOnlyTree } from "../src/git.js";
 
 const roots: string[] = [];
 const hasGit = spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
@@ -60,6 +60,26 @@ describe.skipIf(!hasGit)("real-git own-diff fingerprints", () => {
     f.git("checkout", "main"); f.write("later.txt", "later base advance\n"); const laterBase = f.commit();
     // A skip computed against a base snapshot that moved on since is the decision the newer base gives.
     expect(await f.fingerprint(laterBase, head)).toBe(await f.fingerprint(mergedBase, head));
+  });
+
+  it.each(["pure_merge", "moved_edit", "conflict", "missing_base"])("re-merges the anchor to verify a base merge: %s", async (kind) => {
+    const f = fixture();
+    const block = "a\nb\nc\ntarget\nd\ne\nf\n";
+    const file = (first: string, second: string) =>
+      block.replace("target", first) + "one\ntwo\nthree\nfour\n" + block.replace("target", second);
+    f.write("review.txt", file("target", "target")); f.commit();
+    f.git("checkout", "-b", "pr"); f.write("review.txt", file("changed", "target")); const h1 = f.commit();
+    f.git("checkout", "main");
+    if (kind === "conflict") f.write("review.txt", file("base", "target")); else f.write("base.txt", "base advance\n");
+    const nextBase = f.commit(); f.git("checkout", "pr");
+    if (kind === "conflict") {
+      expect(() => f.git("merge", "--no-edit", "main")).toThrow();
+      f.write("review.txt", file("changed", "target")); f.commit();
+    } else f.git("merge", "--no-edit", "main");
+    if (kind === "moved_edit") { f.write("review.txt", file("target", "changed")); f.commit(); }
+    const h2 = f.git("rev-parse", "HEAD");
+    if (kind === "moved_edit") expect(await f.fingerprint(nextBase, h2)).toBe(await f.fingerprint(nextBase + "~1", h1));
+    expect(await isBaseMergeOnlyTree(f.root, h1, kind === "missing_base" ? "f".repeat(40) : nextBase, h2)).toBe(kind === "pure_merge");
   });
 
   it.each(["log", "diff", "ignore_all"])("detects a last-sorting gitlink bump under %s", async (kind) => {

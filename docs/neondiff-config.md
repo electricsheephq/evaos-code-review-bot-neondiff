@@ -418,15 +418,18 @@ Safety invariants:
 `excludeRepos` accepts `owner/name` slugs (matched case-insensitively).
 Automatic discovery, queue jobs and failed-head/provider-cooldown retries skip when
 the last posted review has the same base ref and whitespace-sensitive own-diff
-fingerprint, and its head is an ancestor of the new head. Legacy rows without a
-fingerprint cannot anchor a skip. Ambiguous/missing git evidence reviews normally.
+fingerprint, its head is an ancestor of the new head, and re-merging the merged
+base into that head (`git merge-tree --write-tree`, git 2.38+) reproduces the new
+head's tree exactly. Only the latest posted review can anchor; if it lacks a
+fingerprint (including legacy rows) the head is reviewed. Ambiguous/missing git
+evidence or a conflicting re-merge reviews normally.
 
 Skips record local `base_merge_only` state, the original reviewed head and
 `base-merge-only.json`; they call no provider and post nothing new; an existing
 status comment for that head is settled as completed.
 Manual commands, operator `review-pr` (dry and live), and all `--ci` runs always
-review. Config/model changes and semantic merge conflicts do not invalidate the
-fingerprint; use `re-review` to request a fresh review, or exclude the repository.
+review. Config/model changes and conflict-free semantic merge breakage do not
+invalidate the skip; use `re-review` to request a fresh review, or exclude the repository.
 No lcm-x v2 assessment is carried forward.
 
 ### Public repository author gate

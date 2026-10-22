@@ -98,6 +98,19 @@ export async function computeOwnDiffFingerprint(path: string, baseSha: string, h
   } catch { return { error: "own_diff_fingerprint_failed" }; }
 }
 
+/**
+ * True only when re-merging the merged base into the anchor head reproduces the new head's tree exactly.
+ * The patch-id fingerprint ignores hunk coordinates; this rejects edits moved between identical blocks.
+ * Conflicts, unsupported git, or any other failure return false so the head is reviewed normally.
+ */
+export async function isBaseMergeOnlyTree(path: string, anchorHead: string, mergedBase: string, head: string): Promise<boolean> {
+  try {
+    const merged = (await run(["-C", path, "merge-tree", "--write-tree", "--no-messages", anchorHead, mergedBase], 60_000)).stdout.trim();
+    const headTree = (await run(["-C", path, "rev-parse", "--verify", `${head}^{tree}`], 60_000)).stdout.trim();
+    return /^[a-f0-9]{40}$/i.test(merged) && merged === headTree;
+  } catch { return false; }
+}
+
 export async function isGitAncestor(path: string, ancestor: string, head: string): Promise<boolean> {
   try { await run(["-C", path, "merge-base", "--is-ancestor", ancestor, head], 60_000); return true; }
   catch { return false; }

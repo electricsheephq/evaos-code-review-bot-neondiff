@@ -988,12 +988,13 @@ export class ReviewStateStore {
     return rows.map(mapProcessedReviewRow);
   }
 
+  /** The latest posted review anchors a skip only if it carries valid fingerprint evidence; older rows never do. */
   getBaseMergeOnlyAnchor(repo: string, pullNumber: number): StoredProcessedReviewRecord | undefined {
     const row = this.db.prepare(`select * from processed_reviews where repo = ? and pull_number = ?
-      and status = 'posted' and review_url is not null and diff_fingerprint is not null
-      and (error is null or error = 'review_posted_head_changed')
-      order by created_at desc, rowid desc limit 1`).get(repo, pullNumber) as ProcessedReviewRow | undefined;
-    return row ? mapProcessedReviewRow(row) : undefined;
+      and status = 'posted' order by created_at desc, rowid desc limit 1`).get(repo, pullNumber) as ProcessedReviewRow | undefined;
+    if (!row || row.review_url == null || row.diff_fingerprint == null
+      || (row.error != null && row.error !== "review_posted_head_changed")) return undefined;
+    return mapProcessedReviewRow(row);
   }
 
   // UPSERT keeps rowid and the original timestamp for receipt/uncertainty rewrites of the same post.

@@ -115,6 +115,33 @@ it.each(["new_commit", "indentation", "conflict"])("reviews a real change: %s", 
   expect(await f.run()).toBe("reviewed"); expect(mocks.provider).toHaveBeenCalledOnce();
   expect(f.evidence()).toMatchObject({ decision: "reviewed", reason: "fingerprint_differs" });
 });
+it("reviews an edit moved between identical blocks despite a matching fingerprint", async () => {
+  const f = fixture();
+  const block = "def g():\n    a()\n    b()\n    target()\n    c()\n    d()\n    e()\n";
+  const file = (first: string, second: string) =>
+    block.replace("target", first) + "\n# one\n# two\n# three\n# four\n\n" + block.replace("target", second);
+  f.git("checkout", "main"); f.pull.base.sha = f.commit("review.py", file("target", "target"));
+  f.git("checkout", "pr"); f.git("merge", "--no-edit", "-X", "theirs", "main");
+  const h1 = f.pull.head.sha = f.commit("review.py", file("changed", "target"));
+  const fp = await computeOwnDiffFingerprint(f.root, f.pull.base.sha, h1);
+  if ("error" in fp) throw new Error(fp.error);
+  f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: h1, status: "posted", event: "COMMENT",
+    reviewUrl: "https://github.com/org/repo/pull/1#pullrequestreview-1", baseRef: "main", baseSha: f.pull.base.sha,
+    diffFingerprint: fp.fingerprint });
+  f.mergeBase(); f.pull.head.sha = f.commit("review.py", file("target", "changed"));
+  // The own-diff fingerprint ignores hunk coordinates, so it cannot tell the two blocks apart.
+  expect(await computeOwnDiffFingerprint(f.root, f.pull.base.sha, f.pull.head.sha))
+    .toMatchObject({ fingerprint: fp.fingerprint });
+  expect(await f.run()).toBe("reviewed"); expect(mocks.provider).toHaveBeenCalledOnce();
+  expect(f.evidence()).toMatchObject({ decision: "reviewed", reason: "merge_tree_differs" });
+});
+it("does not bypass a newer fingerprint-less posted review for an older eligible anchor", async () => {
+  const f = fixture(); await f.anchor(); const h2 = f.mergeBase();
+  f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: h2, status: "posted", event: "REQUEST_CHANGES",
+    reviewUrl: "https://github.com/org/repo/pull/1#pullrequestreview-2", baseRef: "main", baseSha: f.pull.base.sha });
+  f.mergeBase();
+  expect(await f.run()).toBe("reviewed"); expect(f.evidence()).toMatchObject({ decision: "reviewed", reason: "no_anchor" });
+});
 it("reviews a rebased identical own diff because the anchor is no longer an ancestor", async () => {
   const f = fixture(); const old = await f.anchor();
   f.git("checkout", "main"); f.pull.base.sha = f.commit("base.txt", "base\n");
@@ -349,14 +376,16 @@ it("re-checks the carried skip inside the claim transaction", async () => {
 });
 it.each(["dry_run", "posted", "claim"])("a racing %s prevents the skip and readiness write", async (kind) => {
   const f = fixture(); await f.anchor(); f.mergeBase();
-  const prepare = mocks.prepare.getMockImplementation()!;
+  const selectAnchor = f.state.getBaseMergeOnlyAnchor.bind(f.state);
   let claimId: string | undefined;
-  mocks.prepare.mockImplementationOnce((...args) => {
+  // The winner lands after anchor selection, so only the skip writer can refuse it.
+  vi.spyOn(f.state, "getBaseMergeOnlyAnchor").mockImplementationOnce((...args) => {
+    const anchor = selectAnchor(...args);
     if (kind === "claim") claimId = f.state.tryClaimReviewHead({ repo: "org/repo", pullNumber: 1,
       headSha: f.pull.head.sha, claimTtlMs: 60_000 })?.claimId;
     else f.state.recordProcessed({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, status: kind });
     f.state.recordReviewReadiness({ repo: "org/repo", pullNumber: 1, headSha: f.pull.head.sha, state: "reviewing", reason: "winner" });
-    return prepare(...args);
+    return anchor;
   });
   expect(await f.run({ dryRun: false })).toBe("skipped_processed");
   expect(f.evidence()).toMatchObject({ decision: "refused", reason: kind === "claim" ? "active_claim" : "existing_row" });
