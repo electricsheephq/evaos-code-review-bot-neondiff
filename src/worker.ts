@@ -3231,9 +3231,13 @@ export function activateRepoForNewOnlyReview(input: {
   if (state.hasRepoActivation(repo)) return { activated: false, baselined: 0 };
   // A worker whose admission does not cover this repository (a keyless worker on a private
   // repository) is not watching it yet. Activation waits for the first covered discovery, so the
-  // repository starts new-only review from the moment a license covers it.
+  // repository starts new-only review from the moment a license covers it. Unknown visibility fails
+  // closed under every license, so it does not delay activation.
   const admission = input.licenseAdmission;
-  if (admission && pulls.some((pull) => !authorizeAdmissionForVisibility(admission, visibilityFromPullSummary(pull)).ok)) {
+  if (admission && pulls.some((pull) => {
+    const visibility = visibilityFromPullSummary(pull);
+    return visibility !== "unknown" && !authorizeAdmissionForVisibility(admission, visibility).ok;
+  })) {
     return { activated: false, baselined: 0 };
   }
 

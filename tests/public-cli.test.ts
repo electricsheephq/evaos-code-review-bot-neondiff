@@ -89,8 +89,8 @@ describe("public NeonDiff CLI surface", () => {
       expect(requests).toEqual(["/repos/fixture/repo"]);
       expect(existsSync(join(root, "state.sqlite"))).toBe(false);
       visibility = "public";
-      const allowed = await runCli(args).catch((error) => error);
-      expect(allowed.stderr ?? "").not.toMatch(/Solo or Team license/);
+      const allowed = await runCli(args);
+      expect(JSON.parse(allowed.stdout)).toMatchObject({ ok: true });
     } finally { await closeServer(server); }
   });
 

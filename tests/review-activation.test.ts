@@ -130,6 +130,11 @@ describe("new-only repo activation", () => {
       licenseAdmission: await createTestLicenseAdmission({ scope: "all", privateRepoAllowed: true }) });
     expect(licensed).toEqual({ activated: true, baselined: 1 });
     expect(store.hasProcessed(repo, 7, "private-head")).toBe(true);
+
+    // Unknown visibility fails closed under every license, so it activates on the same schedule as before.
+    const unknown = activateRepoForNewOnlyReview({ config: newOnlyConfig(), state: store, repo: "org/unknown",
+      pulls: [pull(9, "unknown-head")], licenseAdmission: await createTestLicenseAdmission({ scope: "all", privateRepoAllowed: true }) });
+    expect(unknown).toEqual({ activated: true, baselined: 1 });
     store.close();
   });
 
