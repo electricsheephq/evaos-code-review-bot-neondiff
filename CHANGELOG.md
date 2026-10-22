@@ -19,31 +19,37 @@ for the semver/GA-line and npm dist-tag policy.
 ### Added
 
 - GitHub Actions mode: `neondiff review-pr --ci` reviews the pull request from
-  the Actions event with `GITHUB_TOKEN` and an OpenAI key, with no config file
-  or GitHub App.
-- Free review of public repositories with no license key, in the GitHub
-  Action, `review-pr --ci` and the self-hosted worker. Private repositories
-  need a Solo or Team license; a worker without one reviews the public
-  repositories and skips the rest. The Mac app follows in the Desktop beta.
-- Restricted review for outside contributors on public repositories: no shell,
-  skills, hooks, web search or image tools, no project docs, and checkout-only
-  reads. If confinement cannot be guaranteed, the review is skipped with a
-  visible reason.
+  the Actions event with `GITHUB_TOKEN`, an OpenAI key and the Codex CLI, with
+  no config file or GitHub App.
+- Free review of public repositories with no license key, through
+  `review-pr --ci` and the self-hosted worker. Private and internal
+  repositories need a Solo or Team license; a repository of unknown visibility
+  is skipped. A worker with no key reviews the public repositories and skips
+  the rest. The Mac app follows in the Desktop beta.
+- Restricted review for outside contributors on public repositories: a
+  diff-only review with no shell, skills, hooks, web search or image tools and
+  no project docs. If confinement cannot be guaranteed, the review is skipped
+  and the reason is recorded.
 - Private repositories in CI, with the license key read from a runner-owned
   file.
-- Checkout reads on by default, confined to the PR checkout by a Codex
-  permission profile and failing closed to a diff-only review.
-- `review-local` for local diffs, with a native ReviewBench runner.
+- Checkout reads on by default, confined by a Codex permission profile and
+  failing closed to a diff-only review.
+- `review-local` for local diffs.
+- Opt-in demotion of unconfirmed P0/P1 findings to P2
+  (`reviewGate.selfConsistency.onUnsupported: "demote"`).
 
 ### Changed
 
-- Default model `gpt-6.1-sol` at high effort with a 500k context window;
-  per-review Codex usage is recorded.
+- Default Codex model `gpt-6.1-sol` at high effort with a 500k context window
+  (Codex is always used by `review-pr --ci` and `review-local`, and by the
+  worker when `codexRuntime.enabled` is set); per-review Codex usage is
+  recorded.
 - Public-repo author gate for ChatGPT-login auth.
-- Recall-oriented review prompt; unconfirmed P0/P1 findings are lowered to P2
-  instead of dropped; answered findings are not re-posted; a base-merge-only
-  push reuses the previous review; secret-like model output is redacted.
-- Issue analysis reads only the repository source snapshot.
+- Recall-oriented review prompt; a near-duplicate of a finding a human already
+  answered is not re-posted (P0 always is); an automatic review after a
+  base-merge-only push reuses the previous review; secret-like model output is
+  redacted.
+- Issue analysis confines Codex reads to the repository source snapshot.
 - Related context for a public repository cites only public repositories.
 - Use the lean npm release path with exact-commit CI, provenance verification,
   registry read-back and owner-driven channel rollback.
