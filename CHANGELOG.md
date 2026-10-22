@@ -16,10 +16,52 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [1.1.0] - docs/releases/v1.1.0.md
 
+### Added
+
+- GitHub Actions mode: `neondiff review-pr --ci` reviews the pull request from
+  the Actions event with `GITHUB_TOKEN`, an OpenAI key and the Codex CLI, with
+  no config file or GitHub App.
+- Free review of public repositories with no license key, through
+  `review-pr --ci` and the self-hosted worker. Private and internal
+  repositories need a Solo or Team license (or an existing legacy license); a repository of unknown visibility
+  is skipped. A worker with no key reviews the public repositories and skips
+  the rest. The Mac app follows in the Desktop beta.
+- Restricted review for outside contributors on public repositories: no
+  checkout reads, shell, skills, hooks, web search or image tools, and no
+  project docs or repository wiki. If confinement cannot be guaranteed, the review is skipped
+  and the reason is recorded.
+- Private repositories in CI, with the license key read from a runner-owned
+  file.
+- Checkout reads on by default, confined by a Codex permission profile and
+  failing closed to a diff-only review.
+- `review-local` for local diffs.
+- Opt-in demotion of unconfirmed P0/P1 findings to P2
+  (`reviewGate.selfConsistency.onUnsupported: "demote"`).
+
 ### Changed
 
+- Default Codex model `gpt-6.1-sol` at high effort with a 500k context window
+  (Codex is always used by `review-pr --ci` and `review-local`, and by the
+  worker when `codexRuntime.enabled` is set); per-review Codex usage is
+  recorded.
+- Public-repo author gate for ChatGPT-login auth.
+- Recall-oriented review prompt; a near-duplicate of a finding a human already
+  answered is not re-posted (P0 always is); an automatic review after a
+  base-merge-only push reuses the previous review; secret-like text in Codex
+  review output is redacted.
+- Issue analysis confines Codex reads to the repository source snapshot.
+- Related context for a public repository cites only public repositories.
 - Use the lean npm release path with exact-commit CI, provenance verification,
   registry read-back and owner-driven channel rollback.
+
+### Fixed
+
+- The daemon reviews pull requests automatically again, and one failing
+  repository no longer stops discovery for the rest.
+- Private-repository CI checkouts (including Git LFS) are authenticated with
+  the workflow token.
+- On Linux, checkout reads first check that the Codex sandbox can start;
+  where user namespaces are blocked the review runs diff-only with a hint.
 
 ## [1.0.6] - docs/releases/v1.0.6.md
 
