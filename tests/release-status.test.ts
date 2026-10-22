@@ -376,8 +376,12 @@ describe("beta release status", () => {
   });
 
   it("uses the v1.0.6 candidate ledger for first-publication readiness", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-historical-release-"));
+    roots.push(root);
+    symlinkSync(join(repoRoot, "docs"), join(root, "docs"), "dir");
+    writeChangelogHead(root, "1.0.6");
     const candidate = readPublicReleaseManifestStatus({
-      cwd: repoRoot,
+      cwd: root,
       manifestPath: "docs/release-candidates/v1.0.6.json",
       expectedVersion: "v1.0.6"
     });
@@ -654,8 +658,8 @@ describe("beta release status", () => {
         setupPath: "docs/SETUP.md",
         releaseNotesPath: "docs/releases/v1.0.4.md",
         changelogPath: "CHANGELOG.md",
-        changelogHeadVersion: "1.0.6",
-        changelogReleaseNotesPath: "docs/releases/v1.0.6.md"
+        changelogHeadVersion: "1.1.0",
+        changelogReleaseNotesPath: "docs/releases/v1.1.0.md"
       },
       licenseApi: {
         ok: true,

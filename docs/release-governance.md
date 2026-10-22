@@ -1,5 +1,38 @@
 # Release Governance Runbook
 
+## Lean release path (1.1.0 and later)
+
+Stable npm releases from 1.1.0 use **Release npm** (`release-npm.yml`).
+The checklist is:
+
+1. Both **Build, test, and package** and **Swift desktop gate** succeeded on
+   the exact tag commit; the tag version matches `package.json` and is on `main`.
+2. Build and pack, publish with provenance under `next` (or verify the existing
+   version has the identical shasum), then read back that shasum from npm.
+3. Verify npm signatures and the package's attestation, promote `latest`, and
+   read back `latest`. Each registry read-back retries for up to 15 minutes,
+   with failed attempts visible. Removing `next` is best effort.
+4. Publish release notes and retain the job summary with version, shasum,
+   integrity, provenance URL and observed dist-tags.
+
+Owner steps: create the non-prerelease GitHub release `v1.1.0` from `main`
+using [its release notes](releases/v1.1.0.md) → watch `release-npm.yml` →
+verify `npm view neondiff dist-tags`. Use the same sequence for later stable
+versions. A retry uses `workflow_dispatch` on `release-npm.yml` with the same
+published release tag. Prereleases and annotated Desktop-only releases skip
+npm publication.
+
+Rollback: an owner runs `npm dist-tag add neondiff@<previous> latest`, then
+verifies `npm view neondiff dist-tags.latest --prefer-online`. This moves the
+install channel without unpublishing immutable versions. The old workflow's
+`rollback_predecessor` job supports only its existing approved 1.0.x pairs;
+it does not support a 1.1.0 rollback. No new rollback machinery is required.
+
+The 1.0.x candidate-ledger sections below are frozen and apply only to 1.0.x
+rollback and historical recovery. They do not gate 1.1.0 or later releases.
+This npm path does not promote a running worker or a Desktop build.
+
+
 This bot is a live beta agent. A live promotion is not complete until the
 source SHA is tied to an immutable Git tag, a GitHub Release, runtime evidence,
 and a rollback path.

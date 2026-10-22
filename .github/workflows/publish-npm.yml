@@ -36,6 +36,22 @@ permissions:
   attestations: read
 
 jobs:
+  release_route:
+    runs-on: ubuntu-latest
+    outputs:
+      legacy: ${{ steps.route.outputs.legacy }}
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        id: route
+        with:
+          script: |
+            const tag = context.payload.release?.tag_name ?? '';
+            const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+            const lean = context.eventName === 'release' && match &&
+              (BigInt(match[1]) > 1n || (BigInt(match[1]) === 1n && BigInt(match[2]) >= 1n));
+            if (lean) core.notice('handled by release-npm.yml');
+            core.setOutput('legacy', !lean);
+
   rollback_predecessor:
     name: Roll back npm latest to immutable predecessor
     runs-on: ubuntu-latest
@@ -208,10 +224,11 @@ jobs:
           exit 1
 
   publish:
+    needs: release_route
     name: Publish neondiff
     runs-on: ubuntu-latest
     environment: npm-publish
-    if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'release') && inputs.predecessor_rollback != true }}
+    if: ${{ needs.release_route.outputs.legacy == 'true' && (github.event_name == 'workflow_dispatch' || github.event_name == 'release') && inputs.predecessor_rollback != true }}
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.event.release.tag_name }}
       RELEASE_EVENT_NAME: ${{ github.event_name }}

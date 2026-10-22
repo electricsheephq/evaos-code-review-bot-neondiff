@@ -1,0 +1,104 @@
+# Lean stable npm releases (1.1.0+). Rollback: an owner runs
+# npm dist-tag add neondiff@<previous> latest, then verifies dist-tags.latest.
+# publish-npm.yml's rollback_predecessor remains available only for its approved pairs.
+name: Release npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable GitHub Release tag to retry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  checks: read
+
+concurrency:
+  group: publish-npm-neondiff
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.classify.outputs.publish }}
+      sha: ${{ steps.classify.outputs.sha }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check stable tag syntax
+        id: syntax
+        env:
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease || false }}
+        run: |
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$RELEASE_PRERELEASE" = false ]; then
+            echo 'eligible=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::notice::Not a stable npm tag; skipping'
+          fi
+      - name: Checkout and verify tag
+        if: steps.syntax.outputs.eligible == 'true'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout workflow policy
+        if: steps.syntax.outputs.eligible == 'true'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-policy
+          persist-credentials: false
+      - name: Setup gate Node.js
+        if: steps.syntax.outputs.eligible == 'true'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+      - name: Classify npm package release
+        if: steps.syntax.outputs.eligible == 'true'
+        id: classify
+        run: node .release-policy/scripts/release-npm.mjs classify
+      - name: Require green CI on the tag commit
+        if: steps.classify.outputs.publish == 'true'
+        run: node .release-policy/scripts/release-npm.mjs ci
+
+  publish:
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+      - name: Pin npm
+        run: |
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+      - name: Build and pack
+        run: |
+          npm ci
+          npm run build
+          npm pack --json --pack-destination "$RUNNER_TEMP" > pack.json
+          node scripts/check-packlist.mjs pack.json
+      - name: Publish, verify provenance and promote
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          TARBALL="$(node -p 'JSON.parse(require("node:fs").readFileSync("pack.json", "utf8"))[0].filename')"
+          node scripts/release-npm.mjs publish pack.json "$RUNNER_TEMP/$TARBALL"

@@ -14,9 +14,9 @@ describe("current stable package release plumbing", () => {
     const builder = read("scripts/build-desktop-sealed-worker.mjs");
     const desktopBuild = read("apps/neondiff-desktop/script/build_and_run.sh");
 
-    expect(pkg.version).toBe("1.0.6");
-    expect(lock.version).toBe("1.0.6");
-    expect(lock.packages?.[""]?.version).toBe("1.0.6");
+    expect(pkg.version).toBe("1.1.0");
+    expect(lock.version).toBe("1.1.0");
+    expect(lock.packages?.[""]?.version).toBe("1.1.0");
     expect(builder).toContain("reportedVersion !== sealedPackageVersion");
     expect(builder).not.toContain('reportedVersion !== "1.0.4"');
     expect(desktopBuild).toContain("EXPECTED_WORKER_VERSION");
