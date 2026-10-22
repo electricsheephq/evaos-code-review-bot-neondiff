@@ -222,7 +222,8 @@ config; it does not read, copy, print, or store the key. Overview runs one
 provider-backed repository/PR-scoped dry review, records the config revision and
 returned head SHA, and requires explicit confirmation before a live post pinned
 to both. Any transport failure revokes approval and requires a new dry review.
-Daemon-wide start stays blocked for a multi-repository worker.
+Daemon-wide start stays blocked for a customer multi-repository worker; a verified
+internal-admin worker can start the daemon for its whole allowlist.
 
 The background worker reviews new pull requests on the repositories you
 enrolled and posts its reviews; in dry-run mode it writes them to local
