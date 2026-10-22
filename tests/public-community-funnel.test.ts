@@ -215,7 +215,7 @@ describe("NeonDiff public community funnel", () => {
     expect(readmePolicy).toMatch(/repositories that GitHub reports as public is\s+free/i);
     expect(readmePolicy).toMatch(/npm CLI 1\.0\.x requires API-backed activation for every repository/i);
     expect(contributingPolicy).toMatch(/repositories that GitHub reports as public is free/i);
-    expect(contributingPolicy).toMatch(/API-backed activation for private, internal, and commercial/i);
+    expect(contributingPolicy).toMatch(/API-backed activation for private, internal, and unknown-visibility/i);
   });
 
   it("pricing doc records support tiers, BYOK costs, and no hosted model credit bundle", () => {

@@ -85,8 +85,8 @@ them:
   They never promote a finding or escalate the review verdict.
 - **Fail-closed configuration.** Unknown keys, out-of-range values, and
   malformed shapes are rejected at load, not silently ignored.
-- **Entitlement-gated private review.** Private or commercial review requests
-  stop before checkout, file listing, provider calls, or GitHub review posting
+- **Entitlement-gated private review.** Review requests for private, internal, and unknown-visibility
+  repositories (including commercial non-public code) stop before checkout, file listing, provider calls, or GitHub review posting
   when entitlement proof is missing.
 - **Additive and default-off.** New gate behavior ships disabled and opt-in,
   with dry-run evidence, before anyone depends on it.

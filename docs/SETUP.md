@@ -162,6 +162,8 @@ self-hosted worker still requires one, #1191). The supported distribution pins
 grants no offline cache authority. Legacy v1.0.3 fields still load for upgrade recovery but cannot
 weaken this effective policy.
 
+For private `review-pr --ci`, follow the [CI license key-file setup](ci-runner.md#private-repositories); local `license activate` does not supply the CI key file.
+
 Use the `file` storage backend and pipe one `nd_live_...` key through bounded
 stdin. Do not place license keys in environment variables, argv, tracked config,
 shell history, logs, screenshots, or evidence. The file backend writes the key

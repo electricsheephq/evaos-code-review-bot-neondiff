@@ -73,34 +73,34 @@ for (const pattern of required) {
   }
 }
 
+// Sentence boundaries preserve wrapped prose and dotted version numbers.
+function sentenceAt(text, index) {
+  const boundaries = /[.!?](?=\s|$)|\n\s*\n|\n(?=\s*(?:[-*] |#{1,6} ))/g;
+  let start = 0;
+  for (const boundary of text.matchAll(boundaries)) {
+    if (boundary.index >= index) return text.slice(start, boundary.index);
+    start = boundary.index + boundary[0].length;
+  }
+  return text.slice(start);
+}
+const boundaryLanguage = /\b(?:not|avoid|unless|forbidden|never)\b/i;
+const publicFreeClaim = /reports\s+as\s+public\s+is\s+free|public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
+const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
-  const lines = text.split("\n");
   for (const pattern of forbiddenClaims) {
     for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
-      // Judge each occurrence by its own line, not the first identical substring.
-      const index = text.slice(0, match.index).split("\n").length - 1;
-      const context = lines.slice(Math.max(0, index - 12), index + 2).join("\n");
-      const boundaryLanguage = /not |does not|do not|avoid|unless|not claimed|must not|forbidden|never/i.test(context);
-      if (!boundaryLanguage) {
+      if (!boundaryLanguage.test(sentenceAt(text, match.index))) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match[0]}`);
         failed = true;
       }
     }
   }
-}
-
-// Each "reports as public is free" claim must name its delivery scope within the
-// same sentence-sized window, so an unscoped broad promise cannot reappear.
-const publicFreeClaim = /reports\s+as\s+public\s+is\s+free/gi;
-const scopedPublicFree = /GitHub\s+Action[\s\S]{0,40}review-pr\s+--ci/i;
-for (const path of paths) {
-  const text = readFileSync(path, "utf8");
   for (const match of text.matchAll(publicFreeClaim)) {
-    const window = text.slice(match.index, match.index + 200);
-    if (!scopedPublicFree.test(window)) {
+    const sentence = sentenceAt(text, match.index);
+    if (!boundaryLanguage.test(sentence) && !scopedPublicFree.test(sentence)) {
       const line = text.slice(0, match.index).split("\n").length;
-      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action and review-pr --ci)`);
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action or review-pr --ci)`);
       failed = true;
     }
   }

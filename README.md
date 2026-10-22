@@ -154,6 +154,8 @@ checksum-bound prerelease bundle.
 
 ## Set Up
 
+For private `review-pr --ci`, follow the [CI license key-file setup](docs/ci-runner.md#private-repositories); local `license activate` does not supply the CI key file.
+
 Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
 first-run path on non-Mac platforms and the operator/advanced path on Mac). The
 short version is:
@@ -429,7 +431,7 @@ Default behavior:
 
 Not claimed:
 
-- public launch is complete
+- not claimed: public launch is complete
 - final legal/license adequacy
 - hosted review service
 - auto-merge or branch repair
