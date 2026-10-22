@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,9 +10,10 @@ import type { PullRequestSummary } from "../src/types.js";
 import { retryFailedHeadWithDeps, reviewPull, type ReviewPullInput } from "../src/worker.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
-const mocks = vi.hoisted(() => ({ provider: vi.fn(), prepare: vi.fn() }));
+const mocks = vi.hoisted(() => ({ provider: vi.fn(), prepare: vi.fn(), reads: vi.fn() }));
 vi.mock("../src/codex-runtime.js", async (original) => ({
-  ...await original<typeof import("../src/codex-runtime.js")>(), runCodexReview: mocks.provider
+  ...await original<typeof import("../src/codex-runtime.js")>(), runCodexReview: mocks.provider,
+  resolveCheckoutReadsStatus: (...args: unknown[]) => { mocks.reads(...args); return { status: "disabled" }; }
 }));
 vi.mock("../src/git.js", async (original) => ({
   ...await original<typeof import("../src/git.js")>(), preparePullWorktree: mocks.prepare,
@@ -52,6 +53,40 @@ describe("trusted Codex path pinning", () => {
       // Without a provider the review reaches checkout preparation; with one, the missing codex stops it first.
       await expect(outcome).rejects.toThrow(useZCode ? /Codex CLI not found on a trusted PATH/ : /fixture stops after checkout preparation/);
       expect(mocks.prepare).toHaveBeenCalledTimes(useZCode ? 0 : 1);
+    } finally { f.state.close(); }
+  });
+
+  it("never runs a PATH codex for a review that spawns no provider", async () => {
+    const f = fixture();
+    const bin = mkdtempSync(join(f.root, "path-")); const marker = join(f.root, "path-codex-ran");
+    writeFileSync(join(bin, "codex"), `#!/bin/sh\ntouch "${marker}"\necho codex-cli 0.163.0\n`); chmodSync(join(bin, "codex"), 0o755);
+    vi.stubEnv("PATH", `${bin}:/usr/bin:/bin`);
+    const checkout = mkdtempSync(join(f.root, "checkout-"));
+    mocks.prepare.mockImplementation(async () => ({ path: checkout }));
+    try {
+      const outcome = await reviewPull({ config: f.config, github: f.github, state: f.state, repo: "org/repo", pull: f.pull,
+        dryRun: true, useZCode: false, licenseAdmission: testLicenseAdmission }).then((status) => ({ status }), (error: Error) => ({ error: error.message }));
+      // The no-provider dry run completes; the PATH binary never ran (not even for `--version`).
+      expect(outcome).toEqual({ status: "reviewed" });
+      expect(mocks.prepare).toHaveBeenCalledOnce();
+      expect(existsSync(marker)).toBe(false);
+    } finally { f.state.close(); }
+  });
+
+  it("checks both the inherited and the configured license key paths", async () => {
+    const f = fixture();
+    const bin = mkdtempSync(join(f.root, "trusted-bin-"));
+    writeFileSync(join(bin, "codex"), "#!/bin/sh\necho codex-cli 0.163.0\n"); chmodSync(join(bin, "codex"), 0o755);
+    vi.stubEnv("PATH", `${bin}:/usr/bin:/bin`);
+    vi.stubEnv("NEONDIFF_LICENSE_KEY_FILE", "/fixture/inherited.key");
+    f.config.license = { ...f.config.license!, keyPath: "/etc/neondiff/license.key" };
+    mocks.prepare.mockImplementation(async () => ({ path: mkdtempSync(join(f.root, "checkout-")) }));
+    try {
+      await reviewPull({ config: f.config, github: f.github, state: f.state, repo: "org/repo", pull: f.pull,
+        dryRun: true, useZCode: true, licenseAdmission: testLicenseAdmission }).catch(() => undefined);
+      expect(mocks.reads).toHaveBeenCalledOnce();
+      const sensitive = Object.values((mocks.reads.mock.calls[0]![0] as { sensitivePaths: Record<string, string | undefined> }).sensitivePaths);
+      expect(sensitive).toEqual(expect.arrayContaining(["/fixture/inherited.key", "/etc/neondiff/license.key"]));
     } finally { f.state.close(); }
   });
 

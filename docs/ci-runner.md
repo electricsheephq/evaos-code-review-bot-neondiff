@@ -45,6 +45,11 @@ jobs:
        github.event.issue.pull_request &&
        startsWith(github.event.comment.body, '/neondiff review') &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    # One review run per pull request at a time; a second trigger waits, then skips the head already reviewed.
+    # Job-level, so comments that are not `/neondiff review` never join the group.
+    concurrency:
+      group: neondiff-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
