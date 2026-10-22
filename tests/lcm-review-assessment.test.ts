@@ -103,6 +103,10 @@ describe("original LCM reviewer assessment", () => {
     } });
     expect(buildLcmReviewAssessmentBody({ ...input, rawResponse })).toBeUndefined();
   });
+  it("omits an assessment whose provider output was redacted upstream", () => {
+    expect(buildLcmReviewAssessmentBody(input)).toBeDefined();
+    expect(buildLcmReviewAssessmentBody({ ...input, secretRedacted: true })).toBeUndefined();
+  });
   it.each([
     { findings: [{ title: "Leaked value", body: secretLike }], review_assessment: {
       ...assessment, verdict: "BLOCKED", unresolved_findings: ["Leaked value"]

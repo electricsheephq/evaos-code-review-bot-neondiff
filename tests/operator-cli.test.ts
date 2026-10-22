@@ -475,7 +475,7 @@ describe("operator CLI summaries", () => {
       durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
       issueEnrichment: buildIssueEnrichmentStatus({
         config: loadConfig(configPath),
-        canPostAsApp: false,
+        canPost: false,
         checkedAt: "2026-07-03T00:00:00.000Z"
       }),
       checkedAt: "2026-07-03T00:00:00.000Z"

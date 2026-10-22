@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { containsSecretLikeText, redactSecrets } from "../src/secrets.js";
+import { containsSecretLikeText, redactSecrets, secretLikeRuleIds } from "../src/secrets.js";
 
 describe("secret redaction", () => {
+  it("reports canonical IDs without values, including cookie and safe-literal handling", () => {
+    const githubToken = ["ghp", "abcdefgh12345678"].join("_");
+    const fixtureToken = ["super", "secret", "token"].join("-");
+    expect(secretLikeRuleIds(`${githubToken} ${fixtureToken}`)).toEqual(["github-prefixed-token", "hyphenated-named-credential"]);
+    expect(secretLikeRuleIds(githubToken)).toEqual(["github-prefixed-token"]);
+    expect(secretLikeRuleIds(githubToken)).toEqual(["github-prefixed-token"]);
+    expect(secretLikeRuleIds("Cookie: theme=light; session=short")).toEqual(["sensitive-cookie-header"]);
+    expect(secretLikeRuleIds("Set NEONDIFF_PROVIDER_API_KEY; source_token_count=source_tokens")).toEqual([]);
+    expect(secretLikeRuleIds("token=NEONDIFF_PROVIDER_API_KEY")).toContain("named-credential");
+  });
   it("detects and redacts hyphenated fixture tokens", () => {
     const fixtureToken = ["super", "secret", "token"].join("-");
     const text = `fixture contains ${fixtureToken} in source`;

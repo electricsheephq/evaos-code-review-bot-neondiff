@@ -35,10 +35,10 @@ type Scenario = {
 };
 
 const SCENARIOS: Scenario[] = [
-  { id: "public_active", visibility: "public", expected: "allowed", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
+  { id: "public_active", visibility: "public", expected: "allowed", expectedLicenseApiCalls: 0, key: "present", response: "active_all" },
   { id: "private_active", visibility: "private", expected: "allowed", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
   { id: "unknown_repo", visibility: "unknown", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "active_all" },
-  { id: "public_denied", visibility: "public", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "invalid" },
+  { id: "public_free_allowed", visibility: "public", expected: "allowed", expectedLicenseApiCalls: 0, key: "missing", response: "invalid" },
   { id: "private_denied", visibility: "private", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "active_public" },
   { id: "missing_key", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", response: "active_all", operation: "provider_verify" },
   { id: "missing_api_url", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", config: { apiBaseUrl: undefined }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
@@ -46,7 +46,7 @@ const SCENARIOS: Scenario[] = [
   { id: "timeout", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "timeout", operation: "provider_verify" },
   { id: "forged_cache", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", cache: "forged", response: "offline", operation: "provider_verify" },
   { id: "mismatched_cache", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", cache: "mismatched", response: "offline", operation: "provider_verify" },
-  { id: "disabled_policy_attempt", visibility: "public", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", config: { enabled: false, publicReposFree: true }, response: "active_all" },
+  { id: "disabled_policy_attempt", visibility: "private", expected: "denied", expectedLicenseApiCalls: 0, key: "missing", config: { enabled: false, publicReposFree: true }, response: "active_all" },
   { id: "fake_api", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", config: { apiBaseUrl: "https://fake-license.invalid" }, response: "server", operation: "provider_verify", assertCanonicalUrl: true },
   { id: "rate_limited", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "rate_limited", operation: "provider_verify" },
   { id: "server_error", visibility: "not_applicable", expected: "denied", expectedLicenseApiCalls: 1, key: "present", response: "server", operation: "provider_verify" },

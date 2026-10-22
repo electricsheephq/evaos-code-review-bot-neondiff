@@ -110,6 +110,8 @@ describe("mandatory activation proof assembler", () => {
     expect(output.ok).toBe(true);
     expect(output.artifactPaths).toHaveLength(7);
     const aggregate = JSON.parse(readFileSync(output.aggregatePath, "utf8"));
+    expect(aggregate.matrix.scenarios.find((row: { id: string }) => row.id === "public_free_allowed")).toMatchObject({ visibility: "public", expected: "allowed", actual: "allowed", licenseApiCalls: 0 });
+    expect(aggregate.matrix.scenarios.find((row: { id: string }) => row.id === "disabled_policy_attempt")).toMatchObject({ visibility: "private", expected: "denied", actual: "denied", licenseApiCalls: 0 });
     expect(aggregate.evidenceKind).toBe("mandatory_activation_no_bypass");
     expect(aggregate.installedCandidate).toMatchObject({
       packageVersion: "1.0.4",

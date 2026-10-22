@@ -473,3 +473,40 @@ describe("robust false-positive learning — coarse fallback (#302)", () => {
     expect(JSON.stringify(gate.dropped)).not.toContain(token);
   });
 });
+
+
+describe("answered prior threads", () => {
+  const files = [{ filename: "src/save.ts", patch: "@@ -0,0 +1,2 @@\n+save();\n+parse();" }];
+  const finding: Finding = { severity: "P1", category: "data_loss", path: "src/save.ts", line: 1,
+    title: "Rollback clobbers fresh records", body: "Saved database rows disappear during retry.", confidence: 0.9 };
+  const answered = [{ id: 42, path: finding.path, line: 1, title: finding.title, body: finding.body }];
+
+  it("keeps absent, undefined and empty answeredThreads byte-identical", () => {
+    const input = { findings: [finding], files };
+    const before = JSON.stringify(applyDeterministicReviewGate(input));
+    expect(JSON.stringify(applyDeterministicReviewGate({ ...input, answeredThreads: undefined }))).toBe(before);
+    expect(JSON.stringify(applyDeterministicReviewGate({ ...input, answeredThreads: [] }))).toBe(before);
+  });
+  it("counts the drop with its thread id and frees the inline cap slot", () => {
+    const distinct: Finding = { ...finding, severity: "P2", line: 2, title: "Null pointer in decoder",
+      body: "Empty input crashes parsing." };
+    const gate = applyDeterministicReviewGate({ findings: [finding, distinct], files, maxInlineComments: 1, answeredThreads: answered });
+    expect(gate.comments.map((comment) => comment.title)).toEqual([distinct.title]);
+    expect(gate.dropped).toEqual([{ ...finding, reason: "prior_thread_answered", threadId: 42 }]);
+    expect(gate.summary.dropReasonCounts).toEqual({ prior_thread_answered: 1 });
+  });
+  it("turns the only eligible P1 from REQUEST_CHANGES into COMMENT", () => {
+    expect(applyDeterministicReviewGate({ findings: [finding], files }).event).toBe("REQUEST_CHANGES");
+    const gate = applyDeterministicReviewGate({ findings: [finding], files, answeredThreads: answered });
+    expect(gate.event).toBe("COMMENT");
+    expect(gate.summary.requestChangesEligible).toBe(0);
+  });
+  it("sanitizes prior-thread drops through the same boundary as other drops", () => {
+    const token = ["ghp", "1234567890abcdefghijklmnopqrstuvwx"].join("_");
+    const gate = applyDeterministicReviewGate({ findings: [{ ...finding, title: finding.title + " 99% confidence", body: token }], files,
+      answeredThreads: answered });
+    expect(gate.dropped[0]).toMatchObject({ reason: "prior_thread_answered", threadId: 42 });
+    expect(JSON.stringify(gate.dropped)).not.toContain(token);
+    expect(gate.dropped[0]?.title).not.toContain("99%");
+  });
+});

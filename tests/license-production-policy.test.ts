@@ -18,7 +18,7 @@ describe("official license production policy", () => {
       enabled: true,
       apiBaseUrl: canonicalApi,
       offlineGraceMs: 0,
-      publicReposFree: false,
+      publicReposFree: true,
       privateReposRequireEntitlement: true,
       updateEntitlementRequiresLicense: true,
       productionPolicy: {
@@ -36,7 +36,7 @@ describe("official license production policy", () => {
       enabled: true,
       apiBaseUrl: canonicalApi,
       offlineGraceMs: 0,
-      publicReposFree: false,
+      publicReposFree: true,
       privateReposRequireEntitlement: true,
       updateEntitlementRequiresLicense: true,
       cachePath: legacy.license.cachePath,
@@ -47,7 +47,6 @@ describe("official license production policy", () => {
           expect.objectContaining({ field: "enabled" }),
           expect.objectContaining({ field: "apiBaseUrl" }),
           expect.objectContaining({ field: "offlineGraceMs" }),
-          expect.objectContaining({ field: "publicReposFree" }),
           expect.objectContaining({ field: "privateReposRequireEntitlement" }),
           expect.objectContaining({ field: "updateEntitlementRequiresLicense" })
         ])

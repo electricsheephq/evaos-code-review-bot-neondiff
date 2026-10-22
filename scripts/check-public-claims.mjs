@@ -15,22 +15,34 @@ const paths = [
   "docs/releases/v1.0.0.md"
 ];
 
-// Licensing framing (owner ruling; technical-merit resolution 2026-07-16). The
-// SHIPPED CLI (v1.0.x) requires API-backed activation for EVERY repository — a
-// local publicReposFree flag would trust the client's own visibility claim, the
-// exact bypass the #614 server-side broker exists to stop. So public-free is the
-// TARGET, gated on the native app + managed GitHub App broker (#614), and must be
-// announced as upcoming — never asserted as current CLI behavior. Website copy
-// migration is owned by website issue #52. These required claims guard that the
-// docs state current CLI truth AND mark the public-free target correctly.
+// Licensing framing (PM decision 2026-10-22, reversing the 2026-07-16 ruling).
+// From 1.1.0 the official policy sets publicReposFree: true, so a review cycle on
+// a repository whose GitHub-reported visibility is public is admitted without a
+// license call (src/license-admission.ts). The old ruling deferred this to a
+// server-side broker (#614) because a local flag trusts the client; but a
+// source-available client can always be patched, so the broker adds no real
+// enforcement for public repos, and free public review is distribution.
+// Private, internal, and unknown visibility still require live activation.
+// These required claims keep the docs on that truth, the 1.0.x caveat, and the
+// current flat prices; the public-free and activation claims must carry their
+// 1.1.0 and 1.0.x qualifiers.
+// PM decision 2026-10-22 (PR #1171): in 1.1.0 free public review is delivered only
+// through the GitHub Action and `neondiff review-pr --ci`; the Mac app and the
+// self-hosted daemon/run-once/local review-pr still require a key until #1191.
+// Every public-free claim must name that scope (see scopedPublicFree below).
 const required = [
   /source-available/i,
-  /public open-source repositor(?:y|ies) will be free/i,
-  /requires (?:live |active |mandatory )?API-backed activation for every repository/i,
-  /private.*commercial.*paid|paid.*private.*commercial/i,
-  /\$100\/(?:year|yr)/i,
+  /From (?:NeonDiff )?1\.1\.0,\s+review\s+of\s+repositories\s+that\s+GitHub\s+reports\s+as\s+public\s+is\s+free/i,
+  /through\s+the\s+GitHub\s+Action\s+and\s+`neondiff\s+review-pr\s+--ci`/i,
+  /#1191/,
+  /private, internal, and unknown-visibility repositor(?:y|ies) (?:require|need)/i,
+  /1\.0\.x\s+requires\s+(?:live\s+|active\s+|mandatory\s+)?API-backed\s+activation\s+for\s+every\s+repository/i,
+  /\$9\/mo/,
+  /\$90\/(?:year|yr)/i,
+  /\$290\/(?:year|yr)/i,
   /7-day trial/i,
   /30-day trial/i,
+  /existing subscribers keep their current price/i,
   /legacy lifetime licenses? remain honored/i,
   /org_yearly_support/i,
   /--license-key-stdin true/,
@@ -46,7 +58,9 @@ const forbiddenClaims = [
   /\bproduction-ready\b/i,
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,
-  /\bpublic launch is complete\b/i
+  /\bpublic launch is complete\b/i,
+  /\bfree (?:for )?private repo/i,
+  /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i
 ];
 
 let failed = false;
@@ -63,15 +77,31 @@ for (const path of paths) {
   const text = readFileSync(path, "utf8");
   const lines = text.split("\n");
   for (const pattern of forbiddenClaims) {
-    const matches = text.match(new RegExp(pattern.source, `${pattern.flags}g`)) ?? [];
-    for (const match of matches) {
-      const index = lines.findIndex((candidate) => candidate.includes(match));
+    for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
+      // Judge each occurrence by its own line, not the first identical substring.
+      const index = text.slice(0, match.index).split("\n").length - 1;
       const context = lines.slice(Math.max(0, index - 12), index + 2).join("\n");
       const boundaryLanguage = /not |does not|do not|avoid|unless|not claimed|must not|forbidden|never/i.test(context);
       if (!boundaryLanguage) {
-        console.error(`${path}: forbidden public claims phrase outside boundary language: ${match}`);
+        console.error(`${path}: forbidden public claims phrase outside boundary language: ${match[0]}`);
         failed = true;
       }
+    }
+  }
+}
+
+// Each "reports as public is free" claim must name its delivery scope within the
+// same sentence-sized window, so an unscoped broad promise cannot reappear.
+const publicFreeClaim = /reports\s+as\s+public\s+is\s+free/gi;
+const scopedPublicFree = /GitHub\s+Action[\s\S]{0,40}review-pr\s+--ci/i;
+for (const path of paths) {
+  const text = readFileSync(path, "utf8");
+  for (const match of text.matchAll(publicFreeClaim)) {
+    const window = text.slice(match.index, match.index + 200);
+    if (!scopedPublicFree.test(window)) {
+      const line = text.slice(0, match.index).split("\n").length;
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action and review-pr --ci)`);
+      failed = true;
     }
   }
 }

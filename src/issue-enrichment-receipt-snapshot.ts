@@ -29,9 +29,9 @@ export type IssueEnrichmentFlagSnapshot = "true" | "false" | "unreadable";
 
 const enabledConfig = { ...DEFAULT_ISSUE_ENRICHMENT_CONFIG, enabled: true, postIssueComment: true, allowlist: ["owner/repo"] };
 const BLOCKERS = new Set<IssueEnrichmentBlocker>([
-  ...buildIssueEnrichmentStatus({ config: { issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG }, canPostAsApp: false }).blockers,
-  ...buildIssueEnrichmentStatus({ config: { issueEnrichment: enabledConfig }, canPostAsApp: false, modelAnalysisAvailable: false }).blockers,
-  ...buildIssueEnrichmentStatus({ config: { issueEnrichment: enabledConfig }, canPostAsApp: true, modelAnalysisAvailable: true,
+  ...buildIssueEnrichmentStatus({ config: { issueEnrichment: DEFAULT_ISSUE_ENRICHMENT_CONFIG }, canPost: false }).blockers,
+  ...buildIssueEnrichmentStatus({ config: { issueEnrichment: enabledConfig }, canPost: false, modelAnalysisAvailable: false }).blockers,
+  ...buildIssueEnrichmentStatus({ config: { issueEnrichment: enabledConfig }, canPost: true, modelAnalysisAvailable: true,
     issueReadChecks: [{ repo: "owner/repo", ok: false }] }).blockers
 ]);
 const BLOCKER_RANK = new Map([...BLOCKERS].map((blocker, index) => [blocker, index]));

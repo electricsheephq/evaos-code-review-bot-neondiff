@@ -12,12 +12,15 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
 - Keep provider credentials out of committed repo config.
 - Keep issue enrichment separate from PR review policy.
 - Keep public confidence uncalibrated until evaluation evidence exists; no percentages are displayed in this draft.
-- Preserve the current NeonDiff public boundary: source-available beta where the
-  current CLI (v1.0.x) requires mandatory API-backed activation for public,
-  private, internal, and unknown repository work. Public open-source review
-  becomes free (no Activation Key) only in the native app via the managed GitHub
-  App broker (#614); the current CLI still requires activation for every
-  repository.
+- Preserve the current NeonDiff public boundary: source-available beta where,
+  from 1.1.0, review of repositories that GitHub reports as public is free (no
+  Activation Key) through the GitHub Action and `neondiff review-pr --ci` (the
+  Mac app and the self-hosted worker still require activation for now, #1191),
+  and private, internal,
+  and unknown-visibility repository work requires mandatory API-backed
+  activation. The npm CLI 1.0.x requires activation for every repository. The
+  runtime decides the tier from GitHub-reported visibility, not from this draft
+  file.
 
 The v1.0.5 package-allowlisted schema defaults to the explicit
 `requires-license` label for the current CLI. It still accepts the historical
@@ -260,6 +263,18 @@ immediately before posting and again after posting. A head change during the POS
 `head_changed_during_post` and is not claimed as current-head proof. Settings-preview evidence shows
 the configured mode only; it does not claim that a current authorization exists.
 
+#### `priorThreadSuppression`
+
+`reviewGate.priorThreadSuppression.enabled` defaults to `true`. Before posting,
+NeonDiff reads its own inline threads from GitHub and suppresses matching P1–P3
+findings when a human has replied and the root still has a current-head `line`.
+Matches require the same path, a line distance of at most 10, and title-word
+Jaccard similarity of at least 0.5 or body-word similarity of at least 0.4.
+P0 findings are never suppressed. Read failures retain the findings; set
+`enabled: false` to disable the read and suppression. The object accepts only
+the boolean `enabled` key. `prior-threads.json` records counts and matched thread
+IDs in review evidence. Raw LCM assessments and schema-drop counts are unchanged.
+
 #### `selfConsistency`
 
 `config.reviewGate.selfConsistency` adds an opt-in second model draw that verifies or refutes each
@@ -271,12 +286,14 @@ gate-accepted P0/P1 finding before the review posts (#303, `src/self-consistency
 | `severities` | `Array<"P0" \| "P1">` | `["P0", "P1"]` | Which severities get re-checked. Only `P0` and `P1` are accepted; any other value fails config validation. |
 | `provider` | `string` | unset (same provider as the main review) | Provider-registry id to use for the second draw. Absent means the second draw runs on the same provider/model as the primary review call. |
 | `maxFindingsPerReview` | `integer` (`>= 1`) | `5` | Cost bound: at most this many findings (in the gate's ranked, highest-confidence-first order) are re-checked per review. This is the knob that bounds the extra provider spend `selfConsistency` adds — each re-checked finding is one additional model call. |
+| `onUnsupported` | `"suppress"` \| `"demote"` | `"suppress"` | Suppress every unconfirmed P0/P1, or lower it to P2 with a note and preserve its ranked position. |
+| `timeoutMs` | `integer` (`>= 1`) | unset (runtime timeout) | Per-verifier-call timeout for Codex or ZCode; overrides that backend's timeout without changing the main review timeout. |
 
 **Safety invariants:**
 
 - **Default-off, zero-cost when disabled.** `enabled: false` (or omitting `selfConsistency` entirely) means `runSelfConsistencyRecheck` returns the original comments and event untouched, with no second-draw calls issued.
-- **Quieter-only merge semantics.** Agreement between the first and second draw keeps the *original* confidence (the second draw can never raise it). Refutation sets confidence to `min(original, second)` and strips that finding's `REQUEST_CHANGES` eligibility for this review — but the finding still posts as a comment; self-consistency never drops a finding outright. The review event (`REQUEST_CHANGES` vs `COMMENT`) is re-derived only from findings that still carry eligibility after the recheck.
-- **Fail-closed on failure, not fail-open.** Any error from the second-draw call (timeout, malformed response, provider failure) leaves that finding completely untouched — the recheck can only ever make a review quieter, never block, delay, or drop it.
+- **Suppress by default; optionally demote.** Only a complete, confirmed receipt bound to the current review and finding keeps a P0/P1 at its original severity and confidence. The default `"suppress"` removes every other severe finding, including refuted, capped, failed, invalid, stale or incomplete results. With `"demote"`, every such finding instead posts as P2 with `_Severity lowered from P1: a second check did not confirm it._` (or "from P0" for a P0). Confidence and the original fingerprint stay unchanged. The event is re-derived from surviving comments; P2 cannot request changes.
+- **Evidence and formatting bounds.** Files over 64 KiB can never be confirmed with the current evidence collector: they are suppressed by default or lowered to P2 in demote mode. If a comment lacks its matching leading severity prefix, demotion fails closed to suppression and the verdict records `demotionSkipped: true`. Receipt dispositions remain unchanged; `self-consistency.json` records the resolved policy and each verdict's `retained`, `suppressed` or `demoted` action.
 - **Cost note.** Because each configured severity/cap combination issues one additional model call per re-checked finding, `selfConsistency` is the only key in this surface with a direct, ongoing provider-cost implication proportional to `maxFindingsPerReview`. Keep the cap conservative on high-volume repos.
 
 ### `riskWeightedQueue`
@@ -398,13 +415,33 @@ Safety invariants:
 - A deterministic packet is treated as fresh only when its `source.headSha` matches the prepared PR worktree head. Generic JSON and raw Markdown packets are unknown-freshness by default.
 - This flag accepts packet output; it does not vendor OpenWiki source code, run OpenWiki during live reviews, enable scheduled docs updates, or permit edits outside `openwiki/**`.
 
+### Base-merge-only automatic review skip
+
+`baseMergeOnlySkip` defaults to `{ "enabled": true, "excludeRepos": [] }`.
+`excludeRepos` accepts `owner/name` slugs (matched case-insensitively).
+Automatic discovery, queue jobs and failed-head/provider-cooldown retries skip when
+the last posted review has the same base ref and whitespace-sensitive own-diff
+fingerprint, its head is an ancestor of the new head, and re-merging the merged
+base into that head (`git merge-tree --write-tree`, git 2.38+) reproduces the new
+head's tree exactly. Only the latest posted review can anchor; if it lacks a
+fingerprint (including legacy rows) the head is reviewed. Ambiguous/missing git
+evidence or a conflicting re-merge reviews normally.
+
+Skips record local `base_merge_only` state, the original reviewed head and
+`base-merge-only.json`; they call no provider and post nothing new; an existing
+status comment for that head is settled as completed.
+Manual commands, operator `review-pr` (dry and live), and all `--ci` runs always
+review. Config/model changes and conflict-free semantic merge breakage do not
+invalidate the skip; use `re-review` to request a fresh review, or exclude the repository.
+No lcm-x v2 assessment is carried forward.
+
 ### Public repository author gate
 
 `reviewGate.publicRepoAuthorGate` defaults to `mode: "auto"`. In `auto` the gate is on
-whenever Codex is enabled, unless the Codex child process itself receives `CODEX_API_KEY`
-or `OPENAI_API_KEY` and its `CODEX_HOME` holds no ChatGPT login file (`auth.json`).
-The Codex child environment does not currently forward either key, so exporting one in
-the worker's environment does not turn the gate off; use `mode: "off"` for that. While on,
+whenever Codex is enabled, unless an API key is Codex's only credential: `CODEX_API_KEY` or
+`OPENAI_API_KEY` is set (both are forwarded to the Codex child) and its `CODEX_HOME` holds
+no ChatGPT login file (`auth.json`). A machine signed in to Codex with ChatGPT therefore
+keeps the gate on even when a key is exported; use `mode: "off"` to turn it off. While on,
 public and unknown-visibility PRs require `OWNER`, `MEMBER`, or `COLLABORATOR` association, or an exact,
 case-insensitive login in `allowedLogins` (default `dependabot[bot]`, `renovate[bot]`).
 Private/internal repositories bypass this gate. `on` and `off` force the mode.
@@ -412,3 +449,29 @@ Untrusted PRs record `untrusted_author_public_repo` in local state and
 `author-gate.json`, without a model call or GitHub post. Codex reviews write
 `codex-usage.json` with model, reasoning effort, tokens used (null when unavailable),
 and elapsed milliseconds. This evidence does not establish live posting or cost.
+
+## Codex checkout reads
+
+`codexRuntime.checkoutReads` is a boolean, default `true` from 1.1.0. Set it to
+`false` for diff-only reviews. With Codex enabled,
+`true` allows read-only PR-head checkout inspection and requires verbatim evidence
+for claims outside changed lines. Unverified citations drop only their finding;
+empty evidence is allowed for diff-only claims. Citations stay in local evidence.
+With checkout reads on, Codex runs under a named permission profile instead of
+`--sandbox read-only`: the shell tool can read only the checkout, its git mirror,
+the Codex install and system files, so absolute paths, `../` and symlinks in the
+PR tree cannot reach other host files such as `$CODEX_HOME/auth.json`. If the
+Codex CLI is older than 0.163.0, its version cannot be read, or those read roots
+cannot be resolved, the review falls back to a diff-only review (`--sandbox
+read-only`, no checkout instructions, no citation checks). The reason is recorded
+in `checkout-reads.json` and a runtime note, and one `[checkout-reads]` warning is
+logged. Set `checkoutReads` to `false` to make diff-only reviews explicit. Citation checks read at
+most 200 citations and 16 MiB of files (1 MiB per file); a citation over that
+budget drops its finding. When any finding is dropped for evidence, the model
+summary from that response is withheld.
+Every Codex call filters its shell environment to core variables and excludes
+secret-named variables. Every review writes a bounded, detect-only
+`codex-commands.json` audit; flagged commands do not fail the review.
+The audit is best-effort telemetry, not a security boundary: shell quoting, option abbreviations and shell-specific syntax can hide a non-read command from it. The boundary is the sandbox (the checkout-read permission profile when enabled) and the filtered shell environment.
+A review fails closed if the model quotes secret-like text, including in a citation.
+Human-format stderr can imitate exec blocks, so this audit cannot establish execution with certainty.

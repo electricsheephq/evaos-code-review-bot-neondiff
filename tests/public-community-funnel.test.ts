@@ -23,14 +23,15 @@ describe("NeonDiff public community funnel", () => {
       /docs\/pricing\.md/i,
       /docs\/providers\.md/i,
       /docs\/known-limitations-and-provider-status\.md/i,
-      /public open-source repositor(?:y|ies) will be free/i,
-      /current npm CLI \(v1\.0\.x\) requires API-backed activation for every repository/i,
+      /repositories that GitHub reports as public is\s+free/i,
+      /npm CLI 1\.0\.x requires API-backed activation for every repository/i,
       /v1\.0\.5 verification notice/i,
       /keep using the\s*>?\s*verified v1\.0\.4 package/i,
       /v1\.0\.3 and\s*>?\s*earlier do not enforce this boundary/i,
-      /\$1\/month/i,
-      /\$10\/year/i,
-      /\$100\/year/i,
+      /\$9\/mo/i,
+      /\$90\/yr/i,
+      /\$290\/yr/i,
+      /existing subscribers keep their\s+current\s+price/i,
       /7-day trial/i,
       /30-day trial/i,
       /legacy lifetime licenses\s+remain\s+honored/i,
@@ -168,7 +169,8 @@ describe("NeonDiff public community funnel", () => {
     for (const text of [license, boundary]) {
       const normalized = text.replace(/\s+/g, " ");
       expect(text).toMatch(/source-available commercial software/i);
-      expect(normalized).toMatch(/requires?.*active API-backed|active API-backed.*required/i);
+      expect(normalized).toMatch(/requires? an active (?:API-backed )?NeonDiff license/i);
+      expect(normalized).toMatch(/GitHub reports as public is free/i);
       for (const visibility of ["public", "private", "internal", "unknown"]) {
         expect(normalized).toMatch(new RegExp(`\\b${visibility}\\b`, "i"));
       }
@@ -210,9 +212,9 @@ describe("NeonDiff public community funnel", () => {
     // public free; private/internal/commercial require active API-backed entitlement.
     const readmePolicy = read("README.md");
     const contributingPolicy = read("CONTRIBUTING.md");
-    expect(readmePolicy).toMatch(/public open-source repositor(?:y|ies) will be free/i);
-    expect(readmePolicy).toMatch(/current npm CLI \(v1\.0\.x\) requires API-backed activation for every repository/i);
-    expect(contributingPolicy).toMatch(/public open-source review will\s+be free/i);
+    expect(readmePolicy).toMatch(/repositories that GitHub reports as public is\s+free/i);
+    expect(readmePolicy).toMatch(/npm CLI 1\.0\.x requires API-backed activation for every repository/i);
+    expect(contributingPolicy).toMatch(/repositories that GitHub reports as public is free/i);
     expect(contributingPolicy).toMatch(/API-backed activation for private, internal, and commercial/i);
   });
 
@@ -225,9 +227,11 @@ describe("NeonDiff public community funnel", () => {
     for (const text of [pricing, boundary]) {
       expect(text).toMatch(/public/i);
       expect(text).toMatch(/API-backed activation|active API-backed/i);
-      expect(text).toMatch(/\$1\/mo|\$1\/month/i);
-      expect(text).toMatch(/\$10\/yr|\$10\/year/i);
-      expect(text).toMatch(/\$100\/yr|\$100\/year/i);
+      expect(text).toMatch(/\$9\/mo/i);
+      expect(text).toMatch(/\$90\/yr/i);
+      expect(text).toMatch(/\$290\/yr/i);
+      expect(text).toMatch(/existing subscribers keep their current price/i);
+      expect(text).not.toMatch(/\$1\/mo\b|\$10\/yr|\$100\/yr/i);
       expect(text).toMatch(/7-day.*trial/i);
       expect(text).toMatch(/30-day.*trial/i);
       expect(text).toMatch(/legacy lifetime licenses? remain honored/i);
@@ -314,8 +318,8 @@ describe("NeonDiff public community funnel", () => {
       /dry-run true/i,
       /App bot, not the human user token/i,
       /License Boundary/i,
-      /requires live API-backed activation before public/i,
-      /public open-source repository\s+review will be free/i,
+      /repositories that GitHub reports as public is\s+free/i,
+      /require live API-backed activation before any work/i,
       /Legacy `publicReposFree`/i,
       /Private repo data stays local/i,
       /Uninstall/i,

@@ -1,5 +1,7 @@
 # Operator CLI
 
+`review-head-gate` resolves a `base_merge_only` skip through exactly one `carriedFromHead` hop to the posted anchor decision; a missing anchor stays skipped.
+
 The bot has a JSON-first operator CLI for humans, manager agents, and reviewer
 agents. It is the preferred way to answer runtime questions before touching
 launchd, SQLite, or GitHub state by hand.

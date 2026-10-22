@@ -6,30 +6,42 @@ NeonDiff is source-available commercial software. The source is available for
 inspection, contribution, and self-hosted evaluation, but this repository is not
 published under an open-source license.
 
-Supported review of public, private, internal, or unknown repositories requires
-an active API-backed NeonDiff license.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free
+through the GitHub Action and `neondiff review-pr --ci`.
+Review of private, internal, or unknown-visibility repositories requires an
+active NeonDiff license.
 
 ## Source Evaluation Grant
 
 You may inspect, copy, and modify NeonDiff source for evaluation and contribution.
-This grant does not authorize supported repository review, redistribution, or a
-hosted service without an active NeonDiff entitlement or written permission.
+This grant does not authorize redistribution or a hosted service without written
+permission.
 
-## Paid Supported Review And Commercial Use
+## Free Review Of Public Repositories
+
+You may use NeonDiff 1.1.0 or later through the GitHub Action or
+`neondiff review-pr --ci` to review repositories that GitHub reports as public,
+without a license key, including for commercial and company-owned public
+repositories. Earlier releases, the Mac app, and the self-hosted worker
+(`daemon`, `run-once`, and local `review-pr`) still ask for a license key for
+every repository for now; extending free public review to them is tracked in
+issue #1191. You supply your own model provider account and key, and you are responsible for its
+costs and terms.
+
+## Paid License
 
 You need an active paid NeonDiff license for:
 
-- reviewing public repositories through the supported distribution;
-- reviewing private, internal, or otherwise non-public repositories;
-- reviewing commercial or proprietary code;
-- using NeonDiff in a company, client, agency, or consulting workflow;
-- distributing NeonDiff binaries, installers, hosted services, marketplace
-  packages, or managed update channels; and
-- enabling paid-support, private-repo entitlement, or auto-update features.
+- reviewing private, internal, or otherwise non-public repositories, including
+  in a company, client, agency, or consulting workflow;
+- paid-support and private-repository entitlement features.
 
-Repository entitlement checks are implemented separately from pricing.
-Exact prices, support tiers, and marketplace terms live in the product/pricing
-trackers and public purchase surfaces.
+A paid license does not by itself permit distributing NeonDiff binaries,
+installers, hosted services, marketplace packages, or managed update channels;
+those require written permission from Electric Sheep.
+
+Repository entitlement checks are implemented separately from pricing. Current
+prices and terms are published at https://www.neondiff.com/#pricing.
 
 ## Redistribution And Public Claims
 
