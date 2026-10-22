@@ -65,6 +65,10 @@ export interface PullReviewComment {
 }
 
 export interface PullRequestSummary {
+  authorAssociation?: string;
+  authorLogin?: string;
+  author_association?: string;
+  user?: { login?: string } | null;
   number: number;
   title: string;
   draft: boolean;

@@ -106,6 +106,16 @@ describe("GitHub App read authentication", () => {
     expect(readCall?.authorization).not.toBe("Bearer fallback-token");
   });
 
+  it("normalizes author metadata on both PR discovery and refetch", async () => {
+    const payload = { number: 1, author_association: "MEMBER", user: { login: "fixture-member" },
+      head: { sha: "a", ref: "fixture" }, base: { sha: "b", ref: "main", repo: { full_name: "owner/repo", private: false } } };
+    globalThis.fetch = vi.fn(async (url) => jsonResponse(String(url).includes("?state=open") ? [payload] : payload)) as typeof fetch;
+    const github = new GitHubApi({ token: "fixture-token" });
+    for (const summary of [await github.getPull("owner/repo", 1), ...(await github.listOpenPulls("owner/repo"))]) {
+      expect(summary).toMatchObject({ authorAssociation: "MEMBER", authorLogin: "fixture-member", base: { repo: { visibility: "public" } } });
+    }
+  });
+
   it("applies a finite default request timeout", async () => {
     let signal: AbortSignal | null | undefined;
     globalThis.fetch = vi.fn(async (_url, init) => {

@@ -1208,7 +1208,7 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
     codexRuntime: {
       enabled: true,
       cliPath: codexCliPath,
-      model: "gpt-5.6-luna",
+      model: "gpt-6.1-sol",
       reasoningEffort: "max",
       timeoutMs: 30_000,
       maxOutputBytes: 1024 * 1024,
