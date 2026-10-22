@@ -135,7 +135,7 @@ describe("CI review", () => {
     vi.spyOn(GitHubApi.prototype, "getPull").mockResolvedValue({ number: 1, draft: true, head: { sha }, base: { repo: { private: false } } } as any);
     const fetchImpl = vi.fn(() => { throw new Error("unexpected API request"); }); vi.stubGlobal("fetch", fetchImpl);
     const options = { ciConfig, repo: ctx.repo, pullNumber: ctx.pullNumber, explicitPullReview: { repo: ctx.repo, pullNumber: ctx.pullNumber }, expectedHeadSha: sha, dryRun: true, useZCode: false };
-    expect(await runOnce(options)).toMatchObject({ skippedDraft: 1, failed: 0 });
+    expect(await runOnce(options)).toMatchObject({ scopedStatus: "skipped_draft", skippedDraft: 1, failed: 0 });
     expect(fetchImpl).not.toHaveBeenCalled();
     await expect(runOnce({ ...options, expectedHeadSha: "b".repeat(40) })).rejects.toThrow(/head/i);
     for (const visibility of ["private", "internal", undefined]) {
@@ -363,28 +363,60 @@ describe("CI owner license admission", () => {
 
 
 // Exercise argument routing through the real CLI with only its execution seam mocked.
-async function invokeCiCli(event: unknown, eventName: string, extra: string[] = [], reviews: unknown[] = [], expectRun = true) {
+async function invokeCiCli(event: unknown, eventName: string, extra: string[] = [], reviews: unknown[] = [], expectRun = true, draft = false, terminalStatus?: "untrusted_author_restricted_unavailable" | "skipped_policy") {
   vi.resetModules();
   const env = context(event, eventName);
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   const { GitHubApi: CliGitHub } = await import("../src/github.js");
-  const getPull = vi.spyOn(CliGitHub.prototype, "getPull").mockResolvedValue({ head: { sha } } as any);
+  const getPull = vi.spyOn(CliGitHub.prototype, "getPull").mockResolvedValue({ number: 3, draft, title: "fixture", html_url: "https://github.com/owner/repo/pull/3", head: { sha } } as any);
   const listPullReviews = vi.spyOn(CliGitHub.prototype, "listPullReviews").mockResolvedValue(reviews as any);
   vi.spyOn(CliGitHub.prototype, "postingIdentity").mockResolvedValue({ login: "github-actions[bot]", type: "Bot" });
-  const run = vi.fn(async (_input: unknown) => ({ output: JSON.stringify({ ok: true }), exitCode: 0 }));
+  vi.spyOn(CliGitHub.prototype, "getRepo").mockResolvedValue({ full_name: "owner/repo", private: false });
+  const actual = await vi.importActual<typeof import("../src/run-once-cli.js")>("../src/run-once-cli.js");
+  const run = vi.fn(async (input: Parameters<typeof actual.runOnceCliCommand>[0]) => draft
+    ? actual.runOnceCliCommand({ ...input, runOnceImpl: async (options) => {
+        const { runOnce } = await import("../src/worker.js");
+        const result = await runOnce(options);
+        return terminalStatus ? { ...result, scopedStatus: terminalStatus, skippedDraft: 0, skippedPolicy: 1 } : result;
+      } })
+    : ({ report: { ok: true }, output: JSON.stringify({ ok: true }), exitCode: 0 }));
   vi.doMock("../src/run-once-cli.js", () => ({ runOnceCliCommand: run }));
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  const argv = process.argv;
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const argv = process.argv, previousExitCode = process.exitCode;
+  process.exitCode = undefined;
   try {
     process.argv = [argv[0], "src/cli.ts", "review-pr", "--ci", ...extra];
     await import("../src/cli.js");
     await vi.waitFor(() => expect(log).toHaveBeenCalled());
     if (expectRun) expect(run).toHaveBeenCalledOnce(); else expect(run).not.toHaveBeenCalled();
-    return { input: run.mock.calls[0]?.[0] as any, getPull, listPullReviews, output: JSON.parse(String(log.mock.calls.at(-1)?.[0])) };
-  } finally { process.argv = argv; vi.doUnmock("../src/run-once-cli.js"); }
+    return { input: run.mock.calls[0]?.[0] as any, getPull, listPullReviews, output: JSON.parse(String(log.mock.calls.at(-1)?.[0])), exitCode: process.exitCode ?? 0, stderr: stderr.mock.calls.map(([line]) => String(line)) };
+  } finally { process.argv = argv; process.exitCode = previousExitCode; vi.doUnmock("../src/run-once-cli.js"); }
 }
 
 describe("CI CLI routing", () => {
+  it("exits zero for a draft PR in CI with one stderr notice and pure JSON stdout", async () => {
+    const result = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target", [], [], true, true);
+    expect(result.exitCode).toBe(0);
+    expect(result.input.ci).toBe(true);
+    expect(result.output).toMatchObject({ ok: true, result: { scopedStatus: "skipped_draft", skippedDraft: 1 } });
+    expect(result.stderr).toEqual(["::notice::NeonDiff skipped owner/repo#3: skipped_draft"]);
+  });
+  it.each([
+    ["untrusted_author_restricted_unavailable", 0, ["::warning::NeonDiff did not review owner/repo#3: untrusted_author_restricted_unavailable"]],
+    ["skipped_policy", 1, []]
+  ] as const)("routes terminal status %s to the right exit and stderr annotation", async (status, exitCode, stderr) => {
+    const result = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target", [], [], true, true, status);
+    expect(result.exitCode).toBe(exitCode);
+    expect(result.output).toMatchObject({ ok: exitCode === 0, result: { scopedStatus: status } });
+    expect(result.stderr).toEqual(stderr);
+  });
+  it("emits no CI skip annotation for a draft dry run", async () => {
+    const result = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target", ["--dry-run", "true"], [], true, true);
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toMatchObject({ result: { scopedStatus: "skipped_draft" } });
+    expect(result.stderr).toEqual([]);
+  });
   it("implies live posting that runs the configured review, with no file, revision, confirmation, or ZCode flag", async () => {
     const { input, getPull } = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target");
     expect(input.options).toMatchObject({ repo: "owner/repo", pullNumber: 3, expectedHeadSha: sha, dryRun: false, useZCode: true, processedHeadPolicy: "normal" });

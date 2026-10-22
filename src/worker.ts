@@ -275,6 +275,7 @@ export interface RunOnceOptions {
 }
 
 export interface RunOnceResult {
+  scopedStatus?: ReviewPullResult | "failed";
   reposScanned: number;
   pullsSeen: number;
   reviewed: number;
@@ -616,6 +617,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             error,
             preserveExistingDryRun: preserveApprovedDryRun
           })) {
+            if (result.scopedPull) result.scopedStatus = "skipped_provider_cooldown";
             result.skippedProviderCooldown += 1;
             continue;
           }
@@ -627,6 +629,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             error,
             preserveExistingDryRun: preserveApprovedDryRun
           });
+          if (result.scopedPull) result.scopedStatus = "failed";
           result.failed += 1;
           continue;
         }
@@ -640,6 +643,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
 }
 
 export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, status: ReviewPullResult): void {
+  if (result.scopedPull) result.scopedStatus = status;
   switch (status) {
     case "reviewed":
       result.reviewed += 1;

@@ -195,6 +195,71 @@ describe("run-once CLI reporting", () => {
     }).ok).toBe(false);
   });
 
+  const normalCiSkips = [
+    "skipped_draft", "skipped_stale_head", "skipped_closed", "skipped_processed",
+    "skipped_base_merge_only", "skipped_finishing_touch_draft",
+    "untrusted_author_restricted_unavailable", "untrusted_author_public_repo",
+    "skipped_command_stop", "skipped_command_explain"
+  ] as const;
+  const scopedPull = {
+    repo: "owner/repo", pullNumber: 123, headSha: "head-123",
+    title: "scoped fixture", url: "https://github.com/owner/repo/pull/123"
+  };
+
+  it.each(normalCiSkips)("accepts intentional CI skip %s and exposes it in JSON", async (scopedStatus) => {
+    const result = runOnceResult({ scopedPull, scopedStatus });
+    applyReviewPullResultToRunOnceResult(result, scopedStatus);
+    expect(result.scopedStatus).toBe(scopedStatus);
+    expect(runOnceCliExitCode(result, { commandName: "review-pr", dryRun: false, ci: true })).toBe(0);
+    const command = await runOnceCliCommand({
+      commandName: "review-pr", ci: true,
+      options: { dryRun: false, repo: scopedPull.repo, pullNumber: scopedPull.pullNumber },
+      runOnceImpl: async () => result
+    });
+    expect(command.exitCode).toBe(0);
+    expect(JSON.parse(command.output)).toMatchObject({ ok: true, result: { scopedStatus } });
+  });
+
+  it.each(normalCiSkips)("keeps non-CI skip %s nonzero with ci false or absent", (scopedStatus) => {
+    const result = runOnceResult({ scopedPull, scopedStatus });
+    applyReviewPullResultToRunOnceResult(result, scopedStatus);
+    for (const mode of [{}, { ci: false }]) {
+      expect(runOnceCliExitCode(result, { commandName: "review-pr", dryRun: false, ...mode })).toBe(1);
+    }
+  });
+
+  it.each([
+    "skipped_license_gate", "skipped_policy", "skipped_capacity", "skipped_context_budget",
+    "skipped_provider_cooldown", "posted_stale_head", "posted_head_unverified",
+    "skipped_consumed_authorization", "skipped_canary"
+  ] as const)("keeps CI non-posting outcome %s nonzero", (scopedStatus) => {
+    const result = runOnceResult({ scopedPull });
+    applyReviewPullResultToRunOnceResult(result, scopedStatus);
+    expect(runOnceCliExitCode(result, { commandName: "review-pr", dryRun: false, ci: true })).toBe(1);
+  });
+
+  it("fails CI closed for missing scoped status, failed reviews, and license gate counters", () => {
+    for (const overrides of [
+      {},
+      { failed: 1, scopedStatus: "skipped_draft" as const },
+      { failed: 1, scopedStatus: "failed" as const },
+      { skippedLicenseGate: 1, scopedStatus: "skipped_draft" as const }
+    ]) {
+      const result = runOnceResult({ scopedPull, ...overrides });
+      expect(runOnceCliExitCode(result, { commandName: "review-pr", dryRun: false, ci: true })).toBe(1);
+    }
+  });
+
+  it("records terminal status only for scoped worker results", () => {
+    const scoped = runOnceResult({ scopedPull });
+    applyReviewPullResultToRunOnceResult(scoped, "skipped_draft");
+    expect(scoped).toMatchObject({ scopedStatus: "skipped_draft", skippedDraft: 1 });
+    const broad = runOnceResult();
+    applyReviewPullResultToRunOnceResult(broad, "skipped_draft");
+    expect(broad.skippedDraft).toBe(1);
+    expect(broad.scopedStatus).toBeUndefined();
+  });
+
   it("does not apply review-pr exact-one semantics to a broad run-once scan", () => {
     const result = runOnceResult({
       reposScanned: 2,

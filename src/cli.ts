@@ -2295,6 +2295,7 @@ async function main(): Promise<void> {
                 : "normal"
         },
         commandName: command,
+        ci,
         ...(command === "review-pr" ? {} : { admitImpl: async () => {
           const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
           if (!admission) throw new Error("review commands require production license admission");
@@ -2302,6 +2303,15 @@ async function main(): Promise<void> {
         } })
       })
     );
+    const scopedResult = result.report.result;
+    if (ci && command === "review-pr" && !dryRun && result.exitCode === 0 &&
+        scopedResult?.scopedPull && scopedResult.reviewed !== 1 && scopedResult.scopedStatus) {
+      const { repo, pullNumber } = scopedResult.scopedPull;
+      const status = scopedResult.scopedStatus;
+      console.error(status === "untrusted_author_restricted_unavailable"
+        ? `::warning::NeonDiff did not review ${repo}#${pullNumber}: ${status}`
+        : `::notice::NeonDiff skipped ${repo}#${pullNumber}: ${status}`);
+    }
     console.log(result.output);
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;

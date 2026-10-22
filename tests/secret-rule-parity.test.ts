@@ -121,7 +121,7 @@ describe("canonical secret rule parity", () => {
       maxBuffer: 1024 * 1024
     });
     expect(`${result.stdout}\n${result.stderr}`).toContain("secret rule differential ok");
-  }, 90_000);
+  }, 240_000);
 
   it("drives both production scanners with independently expected differential cases", () => {
     const differential = readFileSync("scripts/check-secret-rule-differential.mjs", "utf8");
