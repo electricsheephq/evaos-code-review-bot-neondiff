@@ -3811,7 +3811,7 @@ function buildHelp(command?: string) {
       sourceAvailableCommercial: true,
       activationRequired: command === "review-local"
         ? "Local checkout review posts nothing and requires no activation."
-        : "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none through the GitHub Action or `review-pr --ci`; the self-hosted worker (providers verify, daemon, run-once, local review-pr), the Mac app, and the npm CLI 1.0.x require it for public, private, internal, and unknown repositories (issue #1191).",
+        : "Private, internal, and unknown repository review requires live API-backed activation. From 1.1.0, repositories that GitHub reports as public need none through the GitHub Action or `review-pr --ci` and the self-hosted worker (daemon, run-once, review-pr, providers verify); the Mac app (issue #1203) and the npm CLI 1.0.x require it for public, private, internal, and unknown repositories.",
       packageVersion,
       releaseState: packageVersion === "1.0.3"
         ? "Mandatory activation is staged for v1.0.4; public npm latest v1.0.3 does not enforce this boundary."

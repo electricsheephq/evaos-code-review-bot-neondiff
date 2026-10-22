@@ -22,19 +22,17 @@ for the support-tier pricing contract.
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- a NeonDiff license key for private, internal, or unknown-visibility
-  repositories, and for every repository on the self-hosted worker described in
-  this guide (from 1.1.0, repositories that GitHub reports as public need no key
-  through the GitHub Action or `neondiff review-pr --ci`; the npm CLI 1.0.x
-  requires activation for every repository)
+- a NeonDiff license key for private, internal, or unknown-visibility repositories
+  (from 1.1.0, public repositories need no key through the GitHub Action,
+  `neondiff review-pr --ci`, or the self-hosted worker; the Mac app and npm CLI
+  1.0.x still require activation for every repository)
 
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
 the tier. From 1.1.0, review of repositories that GitHub reports as public is
-free, with no license key, through the GitHub Action and `neondiff review-pr --ci`.
-The self-hosted worker this guide sets up (`providers verify`, `daemon`,
-`run-once`, and local `review-pr`) and the Mac app still ask for a license key
-for every repository for now; extending free public review to them is tracked
-in [#1191](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191). Private, internal, and unknown-visibility
+free, with no license key, through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
+worker (`daemon`, `run-once`, `review-pr`, `providers verify`).
+The Mac app still requires a license key for every repository ([#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203)).
+Private, internal, and unknown-visibility
 repositories require an active NeonDiff license, and unknown visibility fails
 closed. The npm CLI 1.0.x requires API-backed activation for every repository.
 Paid licenses are Solo at $9/mo or $90/yr for one developer and Team at $290/yr
@@ -156,8 +154,8 @@ environment variable name; it must not store the API key itself.
 
 Every private, internal, or unknown-visibility repository review requires a
 live NeonDiff entitlement; from 1.1.0, repositories that GitHub reports as
-public need none through the GitHub Action or `neondiff review-pr --ci` (the
-self-hosted worker still requires one, #1191). The supported distribution pins
+public need none through the GitHub Action, `neondiff review-pr --ci`, or the
+self-hosted worker. The Mac app still requires one (#1203). The supported distribution pins
 `https://neondiff-license.fly.dev`, enables enforcement for private work, and
 grants no offline cache authority. Legacy v1.0.3 fields still load for upgrade recovery but cannot
 weaken this effective policy.
@@ -200,18 +198,19 @@ Private, internal, and unknown-visibility repository work fails closed before
 worktree prep, model/provider calls, or GitHub review posting unless live API
 validation returns an active entitlement covering that operation and visibility.
 From 1.1.0, a repository that GitHub reports as public needs no entitlement for
-review through the GitHub Action or `neondiff review-pr --ci`; the self-hosted
-worker (`providers verify`, `daemon`, `run-once`, and local `review-pr`) and the
-npm CLI 1.0.x still apply the same fail-closed rule to public repositories
-(#1191). Cached entitlement metadata is
-diagnostic only.
+review through the GitHub Action, `neondiff review-pr --ci`, or the self-hosted
+worker (`daemon`, `run-once`, `review-pr`, `providers verify`). A stored but
+broken key still denies worker admission; remove it explicitly to use keyless
+public-only mode. Issue enrichment and update checks remain licensed. The Mac
+app (#1203) and npm CLI 1.0.x still require activation for every repository.
+Cached entitlement metadata is diagnostic only.
 
 Use this matrix when reading doctor or review evidence:
 
 | Repo visibility | License state | Provider state | Expected setup result |
 | --- | --- | --- | --- |
-| public | no license | provider present | 1.1.0+ GitHub Action or `review-pr --ci`: license allows, provider output decides review success; self-hosted worker and 1.0.x: license blocks before checkout/provider/post |
-| public | no license | provider absent | 1.1.0+ GitHub Action or `review-pr --ci`: provider setup blocks; self-hosted worker and 1.0.x: license blocks before checkout/provider/post |
+| public | no license | provider present | 1.1.0+ GitHub Action, `review-pr --ci`, or self-hosted worker: license allows, provider output decides review success; 1.0.x: license blocks before checkout/provider/post |
+| public | no license | provider absent | 1.1.0+ GitHub Action, `review-pr --ci`, or self-hosted worker: provider setup blocks; 1.0.x: license blocks before checkout/provider/post |
 | public | active covering entitlement | provider present | license allows; provider output decides review success |
 | private | no license | provider present | license blocks before checkout/provider/post |
 | private | active private entitlement | provider present | license allows; provider output decides review success |

@@ -22,6 +22,8 @@ import {
   type ReviewWorktreeCleanupSummary
 } from "./worktree-cleanup.js";
 
+let publicOnlyEnrichmentNoticeLogged = false;
+
 export type DaemonCycleResult =
   | { ok: true; result: RunOnceResult }
   | { ok: false; failureKind: "admission_denied" | "runtime_failure"; error: string };
@@ -180,6 +182,10 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       ...(admissions ? { licenseAdmission: admissions.reviewDiscovery } : {})
     });
+    if (admissions && !admissions.daemonCycle.privateRepoAllowed && result.skippedLicenseGate > 0) {
+      stderr(formatDaemonLog({ event: "daemon_private_repositories_skipped", level: "warn", cycle: input.cycle,
+        detail: `${result.skippedLicenseGate} pull requests on private, internal or unknown-visibility repositories were skipped: a Solo or Team license is required` }));
+    }
     recordHeartbeat("daemon_cycle_progress", undefined, heartbeatRunId);
     try {
       if (schedulerEnabled) {
@@ -336,6 +342,14 @@ async function runIssueEnrichmentLane(input: {
   recordHeartbeat: (event: DaemonHeartbeatEvent, error?: string, runId?: string) => void;
   heartbeatRunId: string;
 }): Promise<void> {
+  if (input.admissions && !input.admissions.issueEnrichment) {
+    if (!publicOnlyEnrichmentNoticeLogged) {
+      publicOnlyEnrichmentNoticeLogged = true;
+      input.stdout(formatDaemonLog({ event: "daemon_issue_enrichment_skipped",
+        detail: "issue enrichment requires a Solo or Team license" }));
+    }
+    return;
+  }
   const issueEnrichmentCycleImpl = input.input.issueEnrichmentCycleImpl ?? runIssueEnrichmentCycleFromConfig;
   input.stdout(formatDaemonLog({
     event: "daemon_issue_enrichment_start",

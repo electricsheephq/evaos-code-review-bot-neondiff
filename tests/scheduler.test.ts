@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BotConfig } from "../src/config.js";
+import { requireActiveProductionLicense } from "../src/license-admission.js";
+import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
@@ -42,6 +43,28 @@ describe("provider-aware review scheduler", () => {
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each([false, true])("reviews only covered repositories with paid=%s", async (paid) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-public-worker-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/public", "org/private", "org/internal"]);
+    config.reviewConcurrency.maxActiveRuns = 3;
+    config.reviewScheduler!.maxProviderActive = 3;
+    const admitted = await requireActiveProductionLicense({ config: loadConfigFromObject({ license: { cachePath: join(root, "license-cache.json") } }).license!, operation: "review_discovery",
+      secretReader: { read: () => paid ? ["nd", "live", "schedulerfixture123456789"].join("_") : undefined },
+      fetchImpl: (async () => new Response(JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true }))) as typeof fetch });
+    expect(admitted.ok).toBe(true);
+    if (!admitted.ok) throw new Error("expected discovery admission");
+    const state = new ReviewStateStore(config.statePath);
+    const reviewed: string[] = [];
+    try {
+      const result = await runScheduledCycleWithDeps({ config, state, options: { dryRun: true }, licenseAdmission: admitted.admission,
+        github: githubFromMap(new Map(config.pilotRepos.map((repo) => [repo, [pull(repo, 1, HEAD_A, "base", { visibility: repo.endsWith("public") ? "public" : repo.endsWith("internal") ? "internal" : "private" })]]))),
+        reviewPullImpl: async (input) => { reviewed.push(input.repo); return "reviewed"; } });
+      expect(result.skippedLicenseGate).toBe(paid ? 0 : 2);
+      expect(reviewed.sort()).toEqual(paid ? ["org/internal", "org/private", "org/public"] : ["org/public"]);
+    } finally { state.close(); }
   });
 
   it("rejects a wrong-operation public token before scheduled work", async () => {

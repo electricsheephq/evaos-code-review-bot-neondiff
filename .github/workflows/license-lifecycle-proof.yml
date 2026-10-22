@@ -117,6 +117,8 @@ jobs:
             tests/command-license-policy.test.ts \
             tests/desktop-evaluation-boundary.test.ts \
             tests/mandatory-activation-matrix.test.ts \
+            tests/scheduler.test.ts \
+            tests/daemon-loop.test.ts \
             --pool=forks --maxWorkers=1 \
             --reporter=json --outputFile="$RUNNER_TEMP/useful-work-boundary-tests.json"
           node scripts/run-mandatory-activation-matrix.mjs \

@@ -124,7 +124,8 @@ describe("public NeonDiff CLI surface", () => {
     const licenseHelp = JSON.parse((await runCli(["license", "--help"])).stdout);
     expect(licenseHelp.licenseBoundary.activationRequired).toContain("public, private, internal, and unknown");
     expect(licenseHelp.licenseBoundary.activationRequired).toContain("GitHub Action or `review-pr --ci`");
-    expect(licenseHelp.licenseBoundary.activationRequired).toContain("#1191");
+    expect(licenseHelp.licenseBoundary.activationRequired).toContain("self-hosted worker");
+    expect(licenseHelp.licenseBoundary.activationRequired).toContain("#1203");
     expect(licenseHelp.usage.flags).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--license-key-stdin" }),
       expect.objectContaining({ name: "--persist-local-state" })
@@ -744,7 +745,7 @@ exit 1
       publicOpenSourceReposFree: true,
       activationRequiredForSupportedReview: false,
       activationRequiredForVisibilities: ["private", "internal", "unknown"],
-      publicReposFreeVia: ["github-action", "review-pr --ci"],
+      publicReposFreeVia: ["github-action", "review-pr --ci", "self-hosted worker"],
       publicReposFreeTracking: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191",
       providerCosts: {
         model: "BYOK or local provider",
@@ -925,7 +926,7 @@ exit 1
     expect(doctor).not.toHaveProperty("zcode");
   });
 
-  it("blocks providers doctor smoke before contacting a configured endpoint without activation", async () => {
+  it("allows providers doctor smoke without a license key", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cli-"));
     roots.push(root);
     let providerRequests = 0;
@@ -971,24 +972,19 @@ exit 1
         "ollama-local",
         "--smoke",
         "true"
-      ]).then(
-        () => { throw new Error("providers doctor smoke unexpectedly succeeded without activation"); },
-        (error: unknown) => error as { stdout: string; stderr: string }
-      );
+      ]);
       const output = JSON.parse(result.stdout);
 
       expect(output).toMatchObject({
-        ok: false,
-        command: "providers doctor",
-        error: expect.stringContaining("license missing")
+        ok: true
       });
-      expect(providerRequests).toBe(0);
+      expect(providerRequests).toBeGreaterThan(0);
     } finally {
       await closeServer(server);
     }
   });
 
-  it("blocks provider-key stdin and provider network before activation", async () => {
+  it("allows provider-key stdin and provider network for public-only admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-verify-cli-"));
     roots.push(root);
     const fixtureSecret = "fixture-provider-value";
@@ -1047,28 +1043,67 @@ exit 1
         "fixture-openai",
         "--api-key-stdin",
         "true"
-      ], `${fixtureSecret}\n`).then(
-        () => { throw new Error("providers verify unexpectedly succeeded without activation"); },
-        (error: unknown) => error as { stdout: string; stderr: string }
-      );
+      ], `${fixtureSecret}\n`);
       const output = JSON.parse(result.stdout);
 
       expect(output).toMatchObject({
-        ok: false,
-        command: "providers verify",
-        error: expect.stringContaining("license missing")
+        ok: true, command: "providers verify"
       });
       expect(JSON.stringify(output)).not.toContain(fixtureSecret);
       expect(result.stdout).not.toContain(fixtureSecret);
       expect(result.stderr).not.toContain(fixtureSecret);
-      expect(providerRequests).toBe(0);
+      expect(providerRequests).toBeGreaterThan(0);
     } finally {
       await closeServer(server);
     }
   });
 
-  it("blocks run-once before the first GitHub request without activation", async () => {
+  it("runs public run-once dry-run without activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-run-once-license-cli-"));
+    roots.push(root);
+    let githubRequests = 0;
+    const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
+      githubRequests += 1;
+      response.setHeader("Content-Type", "application/json");
+      const pull = { number: 1, title: "fixture", user: { login: "fixture" }, draft: false, state: "open", head: { sha: "a".repeat(40), ref: "fixture" }, base: { sha: "b".repeat(40), repo: { full_name: "acme/demo", private: false, visibility: "public" } } };
+      const url = _request.url ?? "";
+      response.end(JSON.stringify(url.includes("/files") || url.includes("/comments") || url.includes("/reviews") ? [] : url.includes("/pulls/1") ? pull : [pull]));
+    });
+    await listen(server);
+    try {
+      const address = server.address() as AddressInfo;
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        activation: { reviewExistingOpenPrsOnActivation: true },
+        pilotRepos: ["acme/demo"],
+        workRoot: join(root, "runtime"),
+        statePath: join(root, "state.sqlite"),
+        evidenceDir: join(root, "evidence"),
+        github: {
+          token: "fixture-github-token",
+          apiBaseUrl: `http://127.0.0.1:${address.port}`
+        }
+      })}\n`);
+
+      const result = await runCli([
+        "run-once",
+        "--config",
+        configPath,
+        "--repo",
+        "acme/demo", "--dry-run", "true", "--zcode", "false"
+      ]);
+
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        result: { reviewed: 1, skippedLicenseGate: 0, failed: 0 }
+      });
+      expect(githubRequests).toBeGreaterThan(0);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("allows status and coverage commands with public-only admission", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-default-deny-cli-"));
     roots.push(root);
     let githubRequests = 0;
     const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
@@ -1091,83 +1126,19 @@ exit 1
         }
       })}\n`);
 
-      const result = await runCli([
-        "run-once",
-        "--config",
-        configPath,
-        "--repo",
-        "acme/demo"
-      ]).then(
-        () => { throw new Error("run-once unexpectedly succeeded without activation"); },
-        (error: unknown) => error as { stdout: string; stderr: string }
-      );
-
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        command: "run-once",
-        error: { message: expect.stringContaining("license missing") }
-      });
-      expect(githubRequests).toBe(0);
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("applies default-deny admission to useful commands without scoped help metadata", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neondiff-default-deny-cli-"));
-    roots.push(root);
-    let githubRequests = 0;
-    const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
-      githubRequests += 1;
-      response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify({}));
-    });
-    await listen(server);
-    try {
-      const address = server.address() as AddressInfo;
-      const configPath = join(root, "config.json");
-      writeFileSync(configPath, `${JSON.stringify({
-        pilotRepos: ["acme/demo"],
-        workRoot: join(root, "runtime"),
-        statePath: join(root, "state.sqlite"),
-        evidenceDir: join(root, "evidence"),
-        github: {
-          token: "fixture-github-token",
-          apiBaseUrl: `http://127.0.0.1:${address.port}`
-        }
-      })}\n`);
-
-      const result = await runCli([
-        "build-github-related-context-packet",
-        "--config", configPath,
-        "--repo", "acme/demo",
-        "--pr", "1",
-        "--output-dir", join(root, "packet")
-      ]).then(
-        () => { throw new Error("context packet unexpectedly bypassed activation"); },
-        (error: unknown) => error as { stdout: string; stderr: string }
-      );
-
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("license missing");
-
       for (const coverageArgs of [
         ["status", "--config", configPath],
         ["runtime-inventory", "--config", configPath],
         ["queue", "--config", configPath],
+        ["coverage", "--config", configPath],
         ["why", "--repo", "acme/demo", "--pr", "1", "--config", configPath],
         ["dashboard", "--operator", "true", "--config", configPath],
         ["release-status", "--coverage", "true", "--config", configPath]
       ]) {
-        const blocked = await runCli(coverageArgs).then(
-          () => { throw new Error(`${coverageArgs[0]} unexpectedly bypassed activation`); },
-          (error: unknown) => error as { stdout: string; stderr: string }
-        );
-        expect(blocked.stdout).toBe("");
-        expect(blocked.stderr).toContain("license missing");
-        expect(githubRequests).toBe(0);
+        const output = await runCli(coverageArgs).catch((error: { stdout: string; stderr: string }) => error);
+        expect(output.stderr).not.toContain("license missing");
+        expect(output.stdout, `${coverageArgs[0]}: ${output.stderr}`).not.toBe("");
       }
-      expect(githubRequests).toBe(0);
     } finally {
       await closeServer(server);
     }
@@ -1216,10 +1187,15 @@ exit 1
   });
 
   it("denies providers verify before waiting on an open stdin pipe", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-broken-key-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(join(root, "license.key"), "broken-key", { mode: 0o600 });
+    writeFileSync(configPath, JSON.stringify({ statePath: join(root, "state.sqlite"), license: { keyPath: join(root, "license.key") } }));
     const startedAt = Date.now();
     const result = await runCliWithOpenStdin([
       "providers",
-      "verify",
+      "verify", "--config", configPath,
       "--provider",
       "openai-compatible",
       "--api-key-stdin",
@@ -1229,7 +1205,7 @@ exit 1
     ], "partial-fixture-provider-value");
 
     expect(result.error).toBeTruthy();
-    expect(result.stdout).toContain("license missing");
+    expect(result.stdout).toContain("license invalid");
     expect(result.stdout).not.toContain("partial-fixture-provider-value");
     expect(result.stderr).not.toContain("partial-fixture-provider-value");
     expect(Date.now() - startedAt).toBeLessThan(5_000);
@@ -1470,7 +1446,7 @@ exit 1
     expect({ stdinReads, providerCalls }).toEqual({ stdinReads: 0, providerCalls: 0 });
   });
 
-  it("fails hosted remote smoke on activation before considering provider credentials", async () => {
+  it("keeps hosted remote smoke opt-in after keyless admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-remote-provider-cli-"));
     roots.push(root);
     const configPath = join(root, "config.json");
@@ -1514,7 +1490,7 @@ exit 1
         NEONDIFF_PROVIDER_API_KEY: "provider-secret"
       }
     })).rejects.toMatchObject({
-      stdout: expect.stringContaining("license missing")
+      stdout: expect.stringContaining("require explicit remote opt-in")
     });
   });
 
@@ -4406,12 +4382,15 @@ exit 0
   it("requires activation before confirmed live daemon mutation with an external plist", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-external-"));
     roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(join(root, "license.key"), "broken-key", { mode: 0o600 });
+    writeFileSync(configPath, JSON.stringify({ statePath: join(root, "state.sqlite"), license: { keyPath: join(root, "license.key") } }));
     const plistPath = join(root, "com.example.neondiff.plist");
     writeLaunchdPlist(plistPath, "com.example.neondiff");
 
     await expect(runCli([
       "daemon",
-      "start",
+      "start", "--config", configPath,
       "--launchd-label",
       "com.example.neondiff",
       "--plist",
@@ -4421,14 +4400,19 @@ exit 0
       "--confirm",
       "true"
     ], { env: darwinDaemonEnv })).rejects.toMatchObject({
-      stderr: expect.stringContaining("license missing")
+      stderr: expect.stringContaining("license invalid")
     });
   });
 
   it("blocks a confirmed live daemon start with an internal plist before launchctl", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-broken-daemon-key-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(join(root, "license.key"), "broken-key", { mode: 0o600 });
+    writeFileSync(configPath, JSON.stringify({ statePath: join(root, "state.sqlite"), license: { keyPath: join(root, "license.key") } }));
     await expect(runCli([
       "daemon",
-      "start",
+      "start", "--config", configPath,
       "--launchd-label",
       "com.example.neondiff",
       "--plist",
@@ -4438,7 +4422,7 @@ exit 0
       "--confirm",
       "true"
     ], { env: darwinDaemonEnv })).rejects.toMatchObject({
-      stderr: expect.stringContaining("license missing")
+      stderr: expect.stringContaining("license invalid")
     });
   });
 
@@ -4457,29 +4441,9 @@ exit 0
     await expect(runCli(["daemon", "bad-subcommand"])).rejects.toMatchObject({
       stderr: expect.stringContaining("daemon subcommand must be one of")
     });
-    // The loop dispatches, but useful daemon work remains blocked until activation.
-    await expect(runCli([
-      "daemon",
-      "--config",
-      configPath,
-      "--dry-run",
-      "true",
-      "--once",
-      "true"
-    ])).rejects.toMatchObject({
-      stdout: "",
-      stderr: expect.stringContaining("license missing")
-    });
-    await expect(runCli([
-      "daemon",
-      "--config",
-      configPath,
-      "--dry-run",
-      "true"
-    ], { timeout: 5_000 })).rejects.toMatchObject({
-      stdout: "",
-      stderr: expect.stringContaining("license missing")
-    });
+    const result = await runCli(["daemon", "--config", configPath, "--dry-run", "true", "--once", "true"]);
+    expect(result.stdout).toContain("daemon_cycle_complete");
+    expect(result.stderr).not.toContain("license missing");
   });
 });
 

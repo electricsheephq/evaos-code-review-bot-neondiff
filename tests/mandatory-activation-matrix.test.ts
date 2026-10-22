@@ -6,10 +6,10 @@ describe("mandatory activation no-bypass matrix", () => {
     const result = await runMandatoryActivationMatrix();
     expect(result.ok).toBe(true);
     expect(result.bypassAllowedCases).toBe(0);
-    expect(result.records).toHaveLength(19);
-    expect(new Set(result.records.map((record) => record.id)).size).toBe(19);
-    expect(result.records.filter((record) => record.expected === "allowed")).toHaveLength(3);
-    expect(result.records.filter((record) => record.expected === "denied")).toHaveLength(16);
+    expect(result.records).toHaveLength(21);
+    expect(new Set(result.records.map((record) => record.id)).size).toBe(21);
+    expect(result.records.filter((record) => record.expected === "allowed")).toHaveLength(7);
+    expect(result.records.filter((record) => record.expected === "denied")).toHaveLength(14);
     for (const record of result.records) {
       expect(record.actual, record.id).toBe(record.expected);
       expect(record.licenseApiCalls, record.id).toBe(record.expectedLicenseApiCalls);
