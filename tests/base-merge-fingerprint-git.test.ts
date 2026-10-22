@@ -51,6 +51,17 @@ describe.skipIf(!hasGit)("real-git own-diff fingerprints", () => {
     expect(await f.fingerprint(nextBase, h2)).toBe(await f.fingerprint(base, h1));
   });
 
+  it("keeps the fingerprint when the base advances again without a new head", async () => {
+    const f = fixture(); f.write("review.txt", "before\n"); f.commit();
+    f.git("checkout", "-b", "pr"); f.write("review.txt", "after\n"); f.commit();
+    f.git("checkout", "main"); f.write("base.txt", "base advance\n"); const mergedBase = f.commit();
+    f.git("checkout", "pr"); f.git("merge", "--no-edit", "main");
+    const head = f.git("rev-parse", "HEAD");
+    f.git("checkout", "main"); f.write("later.txt", "later base advance\n"); const laterBase = f.commit();
+    // A skip computed against a base snapshot that moved on since is the decision the newer base gives.
+    expect(await f.fingerprint(laterBase, head)).toBe(await f.fingerprint(mergedBase, head));
+  });
+
   it.each(["log", "diff", "ignore_all"])("detects a last-sorting gitlink bump under %s", async (kind) => {
     const f = fixture(); f.write("review.txt", "before\n"); const sub1 = f.commit();
     f.write("review.txt", "base\n"); const sub2 = f.commit();
