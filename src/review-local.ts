@@ -2,20 +2,29 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadConfigFromObject } from "./config.js";
 import { runCodexReview } from "./codex-runtime.js";
 import { planContextBudget } from "./context-budget.js";
-import { resolveRepoProfile } from "./repo-policy.js";
+import { isLcmReviewRepository } from "./lcm-review-repository.js";
+import { filterPullFilesForProfile, resolveRepoProfile } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
 import { buildReviewPrompt } from "./zcode.js";
 import type { Finding, PullFilePatch, PullRequestSummary, ReviewComment } from "./types.js";
+
+// Git's C-style quoting (quote_c_style): named escapes plus octal bytes.
+const GIT_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
 
 function gitPath(raw: string): string {
   if (!raw.startsWith('"')) return raw;
   const bytes: number[] = [];
   for (const part of raw.slice(1, -1).match(/\\[0-7]{1,3}|\\.|[^\\]+/g) ?? []) {
-    bytes.push(...(/^\\[0-7]/.test(part) ? [parseInt(part.slice(1), 8)] : Buffer.from(part.startsWith("\\") ? JSON.parse(`"${part}"`) : part)));
+    if (/^\\[0-7]/.test(part)) bytes.push(parseInt(part.slice(1), 8));
+    else if (part.startsWith("\\")) {
+      const byte = GIT_ESCAPES[part[1]!];
+      if (byte === undefined) throw new Error(`Unsupported git path escape: ${part}`);
+      bytes.push(byte);
+    } else bytes.push(...Buffer.from(part));
   }
   return Buffer.from(bytes).toString("utf8");
 }
@@ -101,9 +110,12 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   const agent = arg("agent") ?? env.RB_AGENT ?? "neondiff";
   console.log(`model=${runtime.model} effort=${runtime.reasoningEffort} checkout_reads=${runtime.checkoutReads === true}`);
   const diffPath = input("diff-file", "RB_DIFF");
-  const files = parseLocalDiff(diffPath ? readFileSync(diffPath, "utf8") : git("diff", "--no-ext-diff", "--no-textconv", "--no-color", `${base}...${head}`));
-  const profile = resolveRepoProfile({ ...config, repoProfiles: undefined }, repo);
+  const diffFiles = parseLocalDiff(diffPath ? readFileSync(diffPath, "utf8") : git("diff", "--no-ext-diff", "--no-textconv", "--no-color", `${base}...${head}`));
+  // Use the configured profile when there is one; a repo missing from (or disabled in) the registry reviews under the default.
+  const configured = resolveRepoProfile(config, repo);
+  const profile = configured.allowed ? configured : resolveRepoProfile({ ...config, repoProfiles: undefined }, repo);
   if (!profile.allowed) throw new Error("Default repo policy unavailable");
+  const files = filterPullFilesForProfile(diffFiles, profile.profile);
   const pull: PullRequestSummary = { number, title, body: metadata.body ?? "", draft: false, html_url: `https://github.com/${repo}/pull/${number}`,
     head: { sha: head, ref: head }, base: { sha: base, ref: base, repo: { full_name: repo } } };
   const promptForFiles = (files: PullFilePatch[]) => buildReviewPrompt({ repo, pull, files, repoProfile: profile.profile,
@@ -113,6 +125,9 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   if (budget.mode === "skip") throw new Error(`review-local ${budget.reason}`);
   const keep = boolean(arg("keep-evidence"), "--keep-evidence");
   const evidenceRoot = arg("evidence-dir") ? resolve(arg("evidence-dir")!) : tmpdir();
+  const fromRepo = relative(repoPath, evidenceRoot);
+  // Runtime artifacts inside the checkout would trip the runtime's own worktree write check.
+  if (fromRepo !== ".." && !fromRepo.startsWith(`..${sep}`) && !isAbsolute(fromRepo)) throw new Error("--evidence-dir must be outside the reviewed checkout");
   mkdirSync(evidenceRoot, { recursive: true });
   const evidenceDir = mkdtempSync(join(evidenceRoot, "neondiff-review-local-"));
   try {
@@ -124,7 +139,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
       const chunkDir = join(evidenceDir, `chunk-${index}`);
       const result = await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
         cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort, checkoutReads: runtime.checkoutReads === true,
-        timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes }, {
+        timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes, lcmReviewAssessment: isLcmReviewRepository(repo) }, {
         captureWorktreeState: () => git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
       });
       findings.push(...result.findings.filter(f => chunk.some(file => file.filename === f.path)));

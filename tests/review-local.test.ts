@@ -100,3 +100,34 @@ it("honors chunk budgeting locally and preserves only findings from each chunk",
   expect(runCodexReview).toHaveBeenCalledTimes(2);
   expect(JSON.parse(fs.readFileSync(args().out, "utf8"))).toHaveLength(1);
 });
+it("decodes every Git C-style path escape, including bell and vertical tab", () => {
+  const diff = 'diff --git "a/x\\ay\\vz\\b\\f\\r\\n\\"\\\\\\303\\251" "b/x\\ay\\vz\\b\\f\\r\\n\\"\\\\\\303\\251"\n--- /dev/null\n+++ "b/x\\ay\\vz\\b\\f\\r\\n\\"\\\\\\303\\251"\n@@ -0,0 +1 @@\n+hi\n';
+  expect(parseLocalDiff(diff).map(x => x.filename)).toEqual(["x\x07y\x0bz\b\f\r\n\"\\é"]);
+  expect(() => parseLocalDiff('diff --git "a/\\q" "b/\\q"\n--- /dev/null\n+++ "b/\\q"\n')).toThrow(/escape/);
+});
+it("applies the configured repository profile's path filters and prompt guidance", async () => {
+  fs.writeFileSync(join(repo, "two.ts"), "hi\n"); git("add", "."); git("commit", "-qm", "two"); head = git("rev-parse", "HEAD");
+  const config = join(root, "config.json");
+  fs.writeFileSync(config, JSON.stringify({ repoProfiles: { repos: { "fixture/repo": { pathFilters: ["!two.ts"], pathInstructions: { "file.ts": ["Check the caller contract."] } } } } }));
+  await runReviewLocal({ ...args(), config });
+  const prompt = vi.mocked(runCodexReview).mock.calls[0]![0].prompt;
+  expect(prompt).toContain("Check the caller contract."); expect(prompt).toContain("### file.ts"); expect(prompt).not.toContain("### two.ts");
+  vi.mocked(runCodexReview).mockClear();
+  fs.writeFileSync(config, JSON.stringify({ repoProfiles: { repos: { "other/repo": {} } } }));
+  await runReviewLocal({ ...args(), config });
+  expect(vi.mocked(runCodexReview).mock.calls[0]![0].prompt).toContain("### two.ts");
+});
+it("rejects an evidence directory inside the reviewed checkout before running", async () => {
+  for (const dir of [join(repo, ".neondiff/evidence"), repo]) {
+    await expect(runReviewLocal({ ...args(), "evidence-dir": dir })).rejects.toThrow(/outside the reviewed checkout/);
+  }
+  expect(runCodexReview).not.toHaveBeenCalled(); expect(fs.existsSync(join(repo, ".neondiff"))).toBe(false);
+  await runReviewLocal({ ...args(), "evidence-dir": join(root, "evidence") });
+  expect(runCodexReview).toHaveBeenCalledTimes(1);
+});
+it("requests the LCM review assessment schema for the repository whose prompt asks for it", async () => {
+  await runReviewLocal({ ...args(), repo: "electricsheephq/lcm-x" });
+  expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ lcmReviewAssessment: true, prompt: expect.stringContaining("review_assessment") }), expect.any(Object));
+  vi.mocked(runCodexReview).mockClear(); await runReviewLocal(args());
+  expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ lcmReviewAssessment: false }), expect.any(Object));
+});
