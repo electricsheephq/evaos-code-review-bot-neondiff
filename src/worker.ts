@@ -944,6 +944,9 @@ export async function retryFailedHeadWithDeps(input: {
         maxActiveRuns: 1
       }
     };
+    // Keep the source config path so the sensitive-path check still covers it on retries.
+    const sourceConfigPath = configFilePaths.get(config);
+    if (sourceConfigPath) configFilePaths.set(retryReviewConfig, sourceConfigPath);
     const status = await input.reviewPullImpl({
       config: retryReviewConfig,
       github,
@@ -1932,7 +1935,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       profile: repoPolicy.profile
     });
     const proof = evaluateProofRequirements({ pull, validation });
-    const reviewCliPath = config.codexRuntime?.enabled
+    // Pin Codex only when this review can spawn it; no-provider dry runs work on hosts without Codex.
+    const reviewCliPath = config.codexRuntime?.enabled && input.useZCode
       ? resolveTrustedCodexPath(config.codexRuntime.cliPath, config.workRoot) : config.codexRuntime?.cliPath;
     const worktree = await preparePullWorktree({
       repo,
