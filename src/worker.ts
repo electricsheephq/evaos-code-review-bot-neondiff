@@ -34,7 +34,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { GitHubApi, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
@@ -55,7 +55,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
-import { collectAnsweredThreads, type AnsweredThread } from "./prior-thread-suppression.js";
+import { collectAnsweredThreads, suppressAnsweredDemotedComments, type AnsweredThread } from "./prior-thread-suppression.js";
 import { buildFindingFingerprint } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
@@ -185,13 +185,16 @@ function recordConsumedAuthorizationIncident(input: {
   });
 }
 
-export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+export function buildReviewProviderMetadata(config: BotConfig, env: NodeJS.ProcessEnv = process.env): ReviewProviderMetadata {
   if (config.codexRuntime?.enabled) {
+    // providerId stays the stable registry/ledger key; the display name says which credential Codex
+    // uses. buildCodexRuntimeEnv passes either API key to the child, and Codex prefers it over OAuth.
+    const apiKey = Boolean(env.CODEX_API_KEY || env.OPENAI_API_KEY);
     return {
       providerId: "codex-cli-oauth",
       adapter: "codex-cli",
       model: config.codexRuntime.model,
-      displayName: "Codex CLI (existing OAuth session)"
+      displayName: apiKey ? "Codex CLI (API key)" : "Codex CLI (existing OAuth session)"
     };
   }
   const providerId = resolveReviewRegistryProviderId(config);
@@ -2159,7 +2162,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       try {
         const priorComments = await github.listPullReviewComments(repo, pull.number);
         priorThreadEvidence.commentsRead = priorComments.length;
-        const isOwn = (comment: (typeof priorComments)[number]) => github.isBotAuthoredComment(comment);
+        const identity = await github.postingIdentity();
+        const isOwn = (comment: (typeof priorComments)[number]) => isAuthoredBy(comment.user, identity);
         priorThreadEvidence.ownRoots = priorComments.filter((comment) => comment.in_reply_to_id == null && isOwn(comment)).length;
         answeredThreads = collectAnsweredThreads(priorComments, isOwn);
         priorThreadEvidence.answeredRoots = answeredThreads.length;
@@ -2213,10 +2217,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
-    const comments = selfConsistency.comments;
+    // A P0 lowered to P2 skipped the gate's prior-thread match; re-apply it at the published severity.
+    // P2 is never REQUEST_CHANGES-eligible, so dropping one leaves selfConsistency.event unchanged.
+    const answeredDemoted = suppressAnsweredDemotedComments(selfConsistency.comments, gatedFindings, answeredThreads ?? []);
+    if (answeredDemoted.dropped.length) {
+      priorThreadEvidence.matches.push(...answeredDemoted.dropped
+        .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId })));
+      priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
+      writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
+    }
+    const comments = answeredDemoted.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
-    const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
+    const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDemoted.dropped], config.confidenceCalibration?.publicDisplay);
     const candidateEvent = selfConsistency.event;
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({

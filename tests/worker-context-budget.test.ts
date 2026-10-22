@@ -220,7 +220,7 @@ describe("worker context budget preflight", () => {
     });
     const github = githubForPull(pull, [file]);
     if (mode !== "missing") Object.assign(github, { listPullReviewComments,
-      isBotAuthoredComment: (comment: typeof comments[number]) => comment.user.type === "Bot" && comment.user.login === "evaos-code-review-bot[bot]" });
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
     try {
       expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
       expect(createdReviews).toHaveLength(1);
@@ -872,6 +872,49 @@ describe("worker context budget preflight", () => {
     });
     expect(JSON.stringify(selfConsistency)).not.toContain(blob);
     state.close();
+  });
+
+  it("suppresses a demoted P0 whose prior thread a human already answered", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-demoted-p0-answered-"));
+    roots.push(root);
+    const fixture = join(root, "worktree");
+    mkdirSync(join(fixture, "src"), { recursive: true });
+    const filename = "src/oversized.ts";
+    writeFileSync(join(fixture, filename), `${"x".repeat(65_536)}\n`);
+    execFileSync("git", ["init", "--quiet"], { cwd: fixture });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: fixture });
+    execFileSync("git", ["config", "user.name", "NeonDiff test"], { cwd: fixture });
+    execFileSync("git", ["add", "."], { cwd: fixture });
+    execFileSync("git", ["commit", "--quiet", "-m", "oversized"], { cwd: fixture });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
+    const file = { filename, patch: "@@ -1 +1 @@\n+x", status: "modified", additions: 1, deletions: 0, changes: 1 };
+    severeCurrentWorktree.enabled = true;
+    severeWorktreePath.value = fixture;
+    const config = minimalConfig(root);
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true, onUnsupported: "demote" } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1172, head);
+    const candidate = { ...p1Finding(filename, "Answered severe candidate"), severity: "P0" as const };
+    zcodeFindingsByPath.set(filename, [candidate]);
+    const comments = [
+      { id: 52, path: filename, line: 1, body: `**P2: ${candidate.title}**\n\n${candidate.body}`,
+        user: { login: "evaos-code-review-bot[bot]", type: "Bot" } },
+      { id: 53, in_reply_to_id: 52, user: { login: "human", type: "User" } }
+    ];
+    const github = Object.assign(githubForPull(pull, [file]), { listPullReviewComments: async () => comments,
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
+    try {
+      expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
+      expect(createdReviews).toHaveLength(1);
+      expect(createdReviews[0]?.comments).toHaveLength(0);
+      expect(createdReviews[0]?.event).toBe("COMMENT");
+      const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, head);
+      expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts[0]).toMatchObject({ action: "demoted", severity: "P0" });
+      expect(JSON.parse(readFileSync(join(evidenceDir, "prior-threads.json"), "utf8")))
+        .toMatchObject({ suppressedFindings: 1, matches: [{ findingTitle: candidate.title, threadId: 52 }] });
+      expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).dropped)
+        .toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
+    } finally { state.close(); }
   });
 
   it.each([undefined, 60_000])("passes the verifier timeout %s to Codex and ZCode without changing the main timeout", async (timeoutMs) => {

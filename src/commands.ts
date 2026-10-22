@@ -242,8 +242,8 @@ export function classifyCommandAuthorization(
  * path must never let ANY automated actor (dependabot, another app, or ourselves) spin up reviews,
  * so we reject on user.type === "Bot" OR login === botLogin.
  *
- * This is intentionally DIFFERENT from GitHubApi.isBotAuthoredComment, which is the NARROWER
- * app-own-comment check (type === "Bot" AND login === botLogin) used to detect the bot's OWN status
+ * This is intentionally DIFFERENT from github.ts isAuthoredBy, which is the NARROWER
+ * own-comment check (type AND login equal the posting identity) used to detect the bot's OWN status
  * comments for marker matching. Different questions ("is this any bot?" vs "is this MY comment?"), so
  * they are not unified; both derive the identity from the same botLogin config value. Trusted-author
  * authorization is unaffected — this only guards the public path.
