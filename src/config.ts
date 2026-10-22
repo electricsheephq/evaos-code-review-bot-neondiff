@@ -621,7 +621,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   codexRuntime: {
     enabled: false,
-    checkoutReads: false,
+    checkoutReads: true,
     cliPath: "codex",
     model: "gpt-6.1-sol",
     reasoningEffort: "high",
