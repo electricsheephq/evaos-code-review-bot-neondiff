@@ -382,11 +382,13 @@ unsafe app/config/worker path, unavailable Keychain item, device mismatch, or
 launchd failure fails closed. Do not replace this with a `security -w` wrapper,
 export the key to disk, or weaken its Keychain access control.
 
-The installed LaunchAgent's background PR review lane remains held. A heartbeat
-proves service liveness only; issue-enrichment success requires lane-specific
-result evidence. The independently admitted issue-enrichment lane may run, but
-neither its admission nor the daemon heartbeat authorizes a PR review or post.
-Native live PR posting uses only the exact scoped `review-pr` dry review plus
+The background worker reviews new pull requests on the repositories you
+enrolled and posts its reviews; in dry-run mode it writes them to local
+evidence instead.
+A heartbeat proves service liveness only; issue-enrichment success requires
+lane-specific result evidence. The independently admitted issue-enrichment lane
+may also run; neither its admission nor the heartbeat authorizes a PR post.
+One-off native live PR posting outside the background worker uses only the exact scoped `review-pr` dry review plus
 explicit same-head confirmation, and that matching approval is consumed
 atomically.
 **Install & Start** and **Start/Restart** therefore manage the background
@@ -444,7 +446,9 @@ the same Mac. In that exact case it opens a reconciliation path:
   40-character head SHA, and requires explicit confirmation (see
   [Run A Dry-Run Review](#5-run-a-dry-run-review)); a transport failure revokes
   the approval and requires a new dry review;
-  daemon-wide start stays blocked for multi-repository workers;
+  daemon-wide start stays blocked for customer multi-repository workers; a
+  verified internal-admin worker may start and then reviews its whole
+  allowlist, with license admission checked for every pull request;
 - it keeps new work blocked until the exact current GitHub/repository and
   entitlement checks required by the release path pass.
 
@@ -601,8 +605,8 @@ repositories. Current-access verification uses `doctor github --repo` for that
 one selected target, while the default CLI command without `--repo` continues
 to inspect the complete configured allowlist. The native app can run one scoped
 dry review through the exact matched local agent, then offer a confirmed live
-post pinned to that dry-run head. It still does not start the multi-repository
-daemon or rewrite its allowlist. The managed B1 broker remains a separate path.
+post pinned to that dry-run head. It does not rewrite the allowlist, and it
+starts the multi-repository daemon only for a verified internal-admin worker. The managed B1 broker remains a separate path.
 The dashboard shows license status, GitHub App status, daemon status, and
 provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
@@ -696,9 +700,11 @@ a filesystem security boundary. The automatically selected exact standard
 LaunchAgent path does not require that override; explicitly supplied paths
 outside the package root still do.
 
-Starting this raw daemon does not enable background PR review: that lane remains
-held while its independently admitted issue-enrichment work may run. Live
-`review-pr` posting is intentionally harder than dry-run inspection. Use
+Starting this raw daemon enables automatic PR review of enrolled repositories.
+With `--dry-run false` it posts its reviews; in dry-run mode it writes them to
+local evidence instead. Its
+independently admitted issue-enrichment work may also run. Live `review-pr`
+posting is intentionally harder than dry-run inspection. Use
 `--dry-run true` for normal local checks. A live scoped PR review requires
 `--dry-run false --confirm true` after the target repo, PR, head SHA, and config
 path are approved by the relevant issue.

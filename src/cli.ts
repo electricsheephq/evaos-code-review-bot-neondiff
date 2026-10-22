@@ -2538,7 +2538,7 @@ async function runRawDaemon(args: ParsedArgs): Promise<void> {
     const cycleResult = await runDaemonCycle({
       cycle,
       dryRun,
-      reviewLane: "held",
+      reviewLane: "active",
       pilotRepos: config.pilotRepos,
       monitoredRepos,
       canaryPulls: config.canaryPulls ?? [],
