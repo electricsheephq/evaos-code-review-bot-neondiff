@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -64,7 +65,11 @@ it.skipIf(!enabled)("real Codex omits shell tools and project docs, with a trust
     }
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }, 55_000);
-it.skipIf(!enabled || process.platform !== "linux" || !process.env.CI)("Linux permission profile denies proc, runner temp and outside-checkout reads", async () => {
+// The sandbox runs in its own PID namespace with a fresh /proc (Codex 0.163 linux-sandbox: bwrap
+// --unshare-pid --proc /proc), so /proc lists only sandboxed processes, whose environment is the
+// filtered shell environment. The property under test is therefore that no secret from the parent
+// Codex environment is visible in any process environment inside the sandbox, not that /proc is absent.
+it.skipIf(!enabled || process.platform !== "linux" || !process.env.CI)("Linux permission profile denies runner temp and outside-checkout reads and hides parent secrets", async () => {
   const { root, cwd, env, cli } = fixture();
   const runnerTemp = process.env.RUNNER_TEMP!;
   expect(runnerTemp).toBeTruthy();
@@ -73,17 +78,30 @@ it.skipIf(!enabled || process.platform !== "linux" || !process.env.CI)("Linux pe
   const runnerFile = join(runnerDir, "x"); writeFileSync(runnerFile, "fixture");
   const outside = join(root, "outside"); writeFileSync(outside, "fixture");
   const inside = join(cwd, "inside"); writeFileSync(inside, "fixture");
+  const canary = `neondiff-canary-${randomBytes(12).toString("hex")}`;
+  const parentEnv = { ...env, OPENAI_API_KEY: canary, CODEX_API_KEY: canary, NEONDIFF_PROBE_TOKEN: canary };
   const invocation = buildCodexExecInvocation({ cliPath: cli, cwd, model: "fixture", reasoningEffort: "high", schemaPath: "unused", outputPath: "unused",
-    restrictTools: true, readConfinement: resolveCodexReadConfinement(cwd, cli, env, true) });
+    restrictTools: true, readConfinement: resolveCodexReadConfinement(cwd, cli, parentEnv, true) });
   const flags = invocation.args.flatMap((arg, i, args) => arg === "-c" ? [arg, args[i + 1]!] : []);
-  // Exact paths arrive as arguments (the sandbox may not forward RUNNER_TEMP); the checkout file is the positive control.
-  const script = 'for path in "$@" /proc/$PPID/environ; do if cat "$path" >/dev/null 2>&1; then printf "READABLE:%s\\n" "$path"; else printf "DENIED:%s\\n" "$path"; fi; done';
+  // Exact paths arrive as arguments (the sandbox may not forward RUNNER_TEMP); the checkout file is the positive
+  // control for reads, and the parent's HOME (inherited by the core shell policy) is the positive control for environ reads.
+  const script = [
+    'canary="$1"; home="$2"; shift 2',
+    'for path in "$@"; do if cat "$path" >/dev/null 2>&1; then printf "READABLE:%s\\n" "$path"; else printf "DENIED:%s\\n" "$path"; fi; done',
+    'for f in /proc/[0-9]*/environ; do if tr "\\000" "\\n" < "$f" 2>/dev/null | grep -qF -- "$canary"; then printf "LEAK:%s\\n" "$f"; fi; done',
+    'if tr "\\000" "\\n" < /proc/self/environ | grep -qxF -- "HOME=$home"; then printf "ENV_VISIBLE\\n"; fi',
+    'printf "PIDNS:%s\\n" "$(readlink /proc/self/ns/pid)"'
+  ].join("; ");
   // Codex 0.163 runs the platform sandbox from `codex sandbox` itself; the fixture's CODEX_HOME holds no user config.
   const result = await run(invocation.command, ["sandbox", ...flags, "--", "/bin/sh", "-c", script, "probe",
-    inside, "/proc/self/environ", runnerFile, outside], cwd, env);
+    canary, env.HOME!, inside, runnerFile, outside], cwd, parentEnv);
   expect(result.code, result.output).toBe(0);
   expect(result.output, "the probe must be able to read the checkout").toContain(`READABLE:${inside}\n`);
-  for (const path of ["/proc/self/environ", runnerFile, outside]) expect(result.output, result.output).toContain(`DENIED:${path}\n`);
-  expect(result.output).toMatch(/DENIED:\/proc\/\d+\/environ\n/);
+  for (const path of [runnerFile, outside]) expect(result.output, result.output).toContain(`DENIED:${path}\n`);
   expect(result.output.match(/READABLE:/g)).toHaveLength(1);
+  expect(result.output, "the probe must be able to read a sandboxed environment").toContain("ENV_VISIBLE\n");
+  expect(result.output, result.output).not.toContain("LEAK:");
+  const sandboxPidNamespace = /PIDNS:(pid:\[\d+\])\n/.exec(result.output)?.[1];
+  expect(sandboxPidNamespace, result.output).toBeDefined();
+  expect(sandboxPidNamespace, "the sandbox must not share the host PID namespace").not.toBe(readlinkSync("/proc/self/ns/pid"));
 });
