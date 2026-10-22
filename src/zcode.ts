@@ -43,19 +43,19 @@ export interface ReviewModelSummary {
 }
 
 const REVIEW_INTERNAL_PROMPT_LINES = [
-  "You are evaOS Code Review Bot. Review this pull request aggressively for correctness, security, data loss, CI-breaking behavior, Unity/game regression risk, and missing high-signal tests.",
+  "You are NeonDiff, a code reviewer. Review this pull request for every real defect the change introduces: correctness, reliability, security, data loss, performance, API and compatibility breaks, concurrency, error handling, missing or wrong tests, and documentation the change makes wrong.",
   "Do not modify files. Do not run project tests, package scripts, builds, app commands, or arbitrary PR code.",
   "Do not call Bash or shell commands. If more context is needed, use read-only file inspection only. If that is impossible, return no findings rather than executing code.",
   "Only inspect the checkout and the diff provided below.",
   "Return JSON only, with shape: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":{\"changedBehavior\":[\"grounded change\"],\"invariants\":[\"affected invariant\"],\"evidence\":[\"path or check evidence\"],\"limitations\":[\"what was not proven\"],\"noFindingRationale\":\"why no additional finding was validated\"}}.",
   "If you include category, use one of: data_loss, auth, ci_build, unity_scene_prefab, security_boundary, migration, api_compatibility, release_regression, flaky_test_risk, proof_gap, runtime_correctness, dependency, docs_only, unknown.",
   "The deterministic wrapper treats category as a hint only; severity, current diff coordinates, redaction, and gate policy decide posting.",
-  "Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Prefer no finding over speculative noise.",
+  "Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Use P2 for real defects with limited impact and P3 for maintainability, test or documentation problems worth fixing. Report every defect you can substantiate from the diff or the code; do not report pure style preferences or claims you could not check.",
   "Every finding must point at a RIGHT-side line in the current diff."
 ] as const;
 
 const REVIEW_INTERNAL_PUBLIC_FRAGMENTS = [
-  "You are evaOS Code Review Bot",
+  "You are NeonDiff, a code reviewer",
   "Do not modify files",
   "Do not run project tests",
   "Do not call Bash or shell commands",
