@@ -20,7 +20,8 @@ import {
   type IssueAnalysisEvidenceContext,
   type IssueAnalysisPolicyContext
 } from "./issue-analysis.js";
-import type { CodexReasoningEffort } from "./codex-runtime.js";
+import { resolveCheckoutReadsStatus, type CodexReasoningEffort } from "./codex-runtime.js";
+import type { BotConfig } from "./config.js";
 import {
   buildReviewLensPacket,
   type ReviewLensConfig,
@@ -769,6 +770,9 @@ export async function runIssueEnrichmentCycle(input: {
   config: {
     workRoot?: string;
     evidenceDir?: string;
+    github?: { privateKeyPath?: string };
+    statePath?: string;
+    license?: { keyPath?: string };
     codexRuntime?: {
       enabled: boolean;
       cliPath: string;
@@ -1241,6 +1245,18 @@ export async function runIssueEnrichmentCycle(input: {
           if (!sourceSnapshot) throw new Error(`issue_enrichment_source_snapshot_missing: ${item.repo}`);
           workspacePath = sourceSnapshot.path;
           headSha = sourceSnapshot.headSha;
+          // config.ts imports the enrichment defaults; defer its registry to avoid an eager cycle.
+          const { configFilePaths } = await import("./config.js");
+          const checkoutReads = resolveCheckoutReadsStatus({
+            checkoutReads: true, cwd: workspacePath, cliPath: input.config.codexRuntime.cliPath,
+            sensitivePaths: { config: configFilePaths.get(input.config as BotConfig) ?? process.env.NEONDIFF_CONFIG,
+              "private key": input.config.github?.privateKeyPath, "state DB": input.config.statePath,
+              "license key": process.env.NEONDIFF_LICENSE_KEY_FILE, "configured license key": input.config.license?.keyPath,
+              evidence: input.config.evidenceDir }
+          });
+          if (checkoutReads.status !== "enabled") {
+            throw new Error(`issue_enrichment_read_confinement_unavailable: ${checkoutReads.detail ?? checkoutReads.status}`);
+          }
           analysisEvidenceDir = join(
             input.config.evidenceDir,
             checkedAt.slice(0, 10),
