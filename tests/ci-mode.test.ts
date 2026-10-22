@@ -381,9 +381,9 @@ async function invokeCiCli(event: unknown, eventName: string, extra: string[] = 
 }
 
 describe("CI CLI routing", () => {
-  it("implies live posting with no file, revision, confirmation, or ZCode flag", async () => {
+  it("implies live posting that runs the configured review, with no file, revision, confirmation, or ZCode flag", async () => {
     const { input, getPull } = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target");
-    expect(input.options).toMatchObject({ repo: "owner/repo", pullNumber: 3, expectedHeadSha: sha, dryRun: false, useZCode: false, processedHeadPolicy: "normal" });
+    expect(input.options).toMatchObject({ repo: "owner/repo", pullNumber: 3, expectedHeadSha: sha, dryRun: false, useZCode: true, processedHeadPolicy: "normal" });
     expect(input.options.configPath).toBeUndefined(); expect(input.options.expectedConfigRevision).toBeUndefined(); expect(input.admitImpl).toBeUndefined();
     expect(getPull).not.toHaveBeenCalled();
   });
