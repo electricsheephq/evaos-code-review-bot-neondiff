@@ -26,9 +26,15 @@ const paths = [
 // These required claims keep the docs on that truth, the 1.0.x caveat, and the
 // current flat prices; the public-free and activation claims must carry their
 // 1.1.0 and 1.0.x qualifiers.
+// PM decision 2026-10-22 (PR #1171): in 1.1.0 free public review is delivered only
+// through the GitHub Action and `neondiff review-pr --ci`; the Mac app and the
+// self-hosted daemon/run-once/local review-pr still require a key until #1191.
+// Every public-free claim must name that scope (see scopedPublicFree below).
 const required = [
   /source-available/i,
   /From (?:NeonDiff )?1\.1\.0,\s+review\s+of\s+repositories\s+that\s+GitHub\s+reports\s+as\s+public\s+is\s+free/i,
+  /through\s+the\s+GitHub\s+Action\s+and\s+`neondiff\s+review-pr\s+--ci`/i,
+  /#1191/,
   /private, internal, and unknown-visibility repositor(?:y|ies) (?:require|need)/i,
   /1\.0\.x\s+requires\s+(?:live\s+|active\s+|mandatory\s+)?API-backed\s+activation\s+for\s+every\s+repository/i,
   /\$9\/mo/,
@@ -80,6 +86,22 @@ for (const path of paths) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match[0]}`);
         failed = true;
       }
+    }
+  }
+}
+
+// Each "reports as public is free" claim must name its delivery scope within the
+// same sentence-sized window, so an unscoped broad promise cannot reappear.
+const publicFreeClaim = /reports\s+as\s+public\s+is\s+free/gi;
+const scopedPublicFree = /GitHub\s+Action[\s\S]{0,40}review-pr\s+--ci/i;
+for (const path of paths) {
+  const text = readFileSync(path, "utf8");
+  for (const match of text.matchAll(publicFreeClaim)) {
+    const window = text.slice(match.index, match.index + 200);
+    if (!scopedPublicFree.test(window)) {
+      const line = text.slice(0, match.index).split("\n").length;
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action and review-pr --ci)`);
+      failed = true;
     }
   }
 }

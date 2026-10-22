@@ -12,8 +12,13 @@ with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
-free, with no license key. Private, internal, and unknown-visibility
-repositories need an active NeonDiff license; unknown visibility fails closed.
+free, with no license key, through the GitHub Action and `neondiff review-pr --ci`.
+The Mac app and the self-hosted worker (`daemon`, `run-once`, and local
+`review-pr`) still ask for a license key for every repository for now; extending
+free public review to them is tracked in
+[#1191](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191).
+Private, internal, and unknown-visibility repositories need an active NeonDiff
+license; unknown visibility fails closed.
 The npm CLI 1.0.x requires API-backed activation for every repository.
 
 Paid licenses are flat, with no per-seat pricing: **Solo** $9/mo or $90/yr for

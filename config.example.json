@@ -116,7 +116,7 @@
     }
   },
   "license": {
-    "_enabledComment": "The supported distribution requires live activation for private, internal, and unknown repositories (from 1.1.0, GitHub-public repositories need none; 1.0.x requires it for every visibility); this value cannot disable enforcement.",
+    "_enabledComment": "The supported distribution requires live activation for private, internal, and unknown repositories (from 1.1.0, GitHub-public repositories need none through the GitHub Action or review-pr --ci; the self-hosted daemon, run-once, and local review-pr, and 1.0.x, require it for every visibility until issue #1191); this value cannot disable enforcement.",
     "enabled": true,
     "_apiBaseUrlComment": "The supported distribution pins the canonical production license API.",
     "apiBaseUrl": "https://neondiff-license.fly.dev",
