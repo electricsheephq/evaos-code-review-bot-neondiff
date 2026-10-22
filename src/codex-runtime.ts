@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
@@ -289,11 +290,16 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
     const target = cpu && (process.platform === "linux" ? `${cpu}-unknown-linux-musl`
       : process.platform === "darwin" ? `${cpu}-apple-darwin` : undefined);
     // 0.163 ships the binary at vendor/<target>/bin/codex in the platform package; older builds used
-    // vendor/<target>/codex/codex, and a bundled install keeps vendor/ inside @openai/codex.
-    const native = target && [`codex-${process.platform}-${process.arch}`, "codex"].flatMap(pkg => [
-      join(npmScope, pkg, "vendor", target, "bin", "codex"),
-      join(npmScope, pkg, "vendor", target, "codex", "codex")
-    ]).find(path => existsSync(path));
+    // vendor/<target>/codex/codex, and a bundled install keeps vendor/ inside @openai/codex. The
+    // launcher finds the platform package with require.resolve from itself, which also covers a
+    // global install that nests it under @openai/codex/node_modules; resolve it the same way.
+    const platformPackage = `@openai/codex-${process.platform}-${process.arch}`;
+    let resolvedPlatformRoot: string | undefined;
+    try { resolvedPlatformRoot = dirname(createRequire(command).resolve(`${platformPackage}/package.json`)); } catch { /* fall back */ }
+    const native = target && [resolvedPlatformRoot, join(npmScope, `codex-${process.platform}-${process.arch}`), join(npmScope, "codex")]
+      .filter((root): root is string => root !== undefined)
+      .flatMap(root => [join(root, "vendor", target, "bin", "codex"), join(root, "vendor", target, "codex", "codex")])
+      .find(path => existsSync(path));
     if (!native) throw new Error("codex_runtime_read_confinement_unavailable: npm native binary not found");
     command = realpathSync(native);
   }

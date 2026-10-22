@@ -217,6 +217,20 @@ describe("checkout reads", () => {
     const checkout = join(top, "checkout"); mkdirSync(checkout);
     expect(resolveCodexReadConfinement(checkout, cli, env, true)).toEqual({ command: join(bin, "codex"), readableRoots: [checkout, bin] });
   });
+  it("finds the native binary of a global npm install that nests the platform package", () => {
+    const top = realpathSync(root());
+    const pkg = join(top, "lib", "node_modules", "@openai", "codex");
+    const cli = join(pkg, "bin", "codex.js");
+    mkdirSync(join(pkg, "bin"), { recursive: true }); writeFileSync(cli, "// fixture");
+    const cpu = process.arch === "x64" ? "x86_64" : "aarch64";
+    const target = process.platform === "darwin" ? `${cpu}-apple-darwin` : `${cpu}-unknown-linux-musl`;
+    const platformRoot = join(pkg, "node_modules", "@openai", `codex-${process.platform}-${process.arch}`);
+    const bin = join(platformRoot, "vendor", target, "bin");
+    mkdirSync(bin, { recursive: true }); writeFileSync(join(bin, "codex"), "fixture");
+    writeFileSync(join(platformRoot, "package.json"), JSON.stringify({ name: `@openai/codex-${process.platform}-${process.arch}`, version: "0.163.0" }));
+    const checkout = join(top, "checkout"); mkdirSync(checkout);
+    expect(resolveCodexReadConfinement(checkout, cli, { HOME: join(top, "home") }, true)).toEqual({ command: join(bin, "codex"), readableRoots: [checkout, bin] });
+  });
   it("skips unreadable PATH entries and, on macOS, mis-cased aliases of the work root", () => {
     const top = realpathSync(root());
     const bin = join(top, "bin");
