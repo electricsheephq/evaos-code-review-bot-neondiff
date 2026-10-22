@@ -1,0 +1,9 @@
+exec
+/bin/zsh -lc "python3 - <<'PY'
+from pathlib import Path
+p=Path('/work/notes/final-delta-3/head-selector.ts')
+for n,line in enumerate(p.read_text().splitlines(),1):
+    if 196<=n<=283: print(f'{n:4} {line}')
+PY" in /work/repo
+ succeeded in 0ms:
+ 196 // A proof mention counts unless a negation sits in its own sentence (up to the match) or in a line that

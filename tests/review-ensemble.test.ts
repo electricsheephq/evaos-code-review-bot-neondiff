@@ -59,6 +59,13 @@ describe("review ensemble planning", () => {
     expect(statePrompt).toContain("Do not use tools");
     expect(statePrompt).toContain("smallest safe fix direction");
     expect(statePrompt).toContain(prompt);
+    expect(buildReviewEnsembleLeafPrompt(prompt, "state", { checkoutReads: false })).toBe(statePrompt);
+    expect(buildReviewEnsembleLeafPrompt(prompt, "anchor", { checkoutReads: true })).toBe(prompt);
+    const checkoutPrompt = buildReviewEnsembleLeafPrompt(prompt, "state", { checkoutReads: true });
+    expect(checkoutPrompt).toBe(statePrompt.replace(
+      "Do not use tools, agents, web, MCP, shell, memory, or writes. Use only the supplied immutable review context.",
+      "Do not use agents, web, MCP, memory, or writes; read-only checkout inspection is allowed only as described above."
+    ));
   });
 });
 

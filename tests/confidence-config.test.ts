@@ -214,6 +214,17 @@ describe("review gate config", () => {
     });
   });
 
+  it("validates the optional selfConsistency demotion mode and per-call timeout", () => {
+    const load = (fields: Record<string, unknown>) => loadConfigFromObject({ reviewGate: { selfConsistency: { enabled: true, ...fields } } }).reviewGate!.selfConsistency!;
+    for (const onUnsupported of ["suppress", "demote"]) expect(load({ onUnsupported }).onUnsupported).toBe(onUnsupported);
+    for (const onUnsupported of ["drop", true, null]) expect(() => load({ onUnsupported })).toThrow(/onUnsupported/);
+    expect(load({ timeoutMs: 60_000 }).timeoutMs).toBe(60_000);
+    for (const timeoutMs of [0, -1, 1.5, "60000"]) expect(() => load({ timeoutMs })).toThrow(/timeoutMs.*positive integer/);
+    expect(load({}).onUnsupported).toBeUndefined();
+    expect(load({}).timeoutMs).toBeUndefined();
+    expect(() => load({ futureKey: true })).not.toThrow();
+  });
+
   it("fails closed on malformed selfConsistency fields (#303)", () => {
     expect(() => loadConfigFromObject({ reviewGate: { selfConsistency: { enabled: "yes" } } })).toThrow(
       /reviewGate\.selfConsistency\.enabled must be a boolean/

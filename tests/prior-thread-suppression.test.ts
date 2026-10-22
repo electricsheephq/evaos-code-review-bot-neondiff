@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { GitHubApi, isAuthoredBy } from "../src/github.js";
-import { collectAnsweredThreads, matchPriorThread, titleWords, wordSetJaccard } from "../src/prior-thread-suppression.js";
+import { demoteReviewComment, normalizeFindingsForReview, SEVERITY_DEMOTION_NOTE } from "../src/findings.js";
+import { collectAnsweredThreads, matchPriorThread, suppressAnsweredDemotedComments, titleWords, wordSetJaccard } from "../src/prior-thread-suppression.js";
 import type { Finding, PullReviewComment } from "../src/types.js";
 
 const ownIdentity = { login: "evaos-code-review-bot[bot]", type: "Bot" as const };
@@ -17,6 +18,14 @@ const finding: Finding = { severity: "P2", path: "src/save.ts", line: 30, title:
 const threads = () => collectAnsweredThreads([root, reply], isOwn);
 
 describe("prior thread suppression", () => {
+  it("round trips a demoted production comment without leaking its note into the extracted body", () => {
+    const severe = { ...finding, severity: "P1" as const };
+    const formatted = normalizeFindingsForReview([severe]).comments[0]!;
+    const demoted = demoteReviewComment(formatted, SEVERITY_DEMOTION_NOTE)!;
+    expect(demoted.body).toContain("_Severity lowered from P1:");
+    expect(collectAnsweredThreads([{ ...root, body: demoted.body }, reply], isOwn))
+      .toEqual([{ id: root.id, path: finding.path, line: finding.line, title: finding.title, body: finding.body }]);
+  });
   it("extracts title/body and keeps the current-head line", () => {
     expect(threads()).toEqual([{ id: 1, path: root.path, line: 30, title: finding.title, body: finding.body }]);
   });
@@ -46,6 +55,19 @@ describe("prior thread suppression", () => {
   it("never matches P0 but matches P1 through P3", () => {
     expect(matchPriorThread({ ...finding, severity: "P0" }, threads())).toBeUndefined();
     for (const severity of ["P1", "P2", "P3"] as const) expect(matchPriorThread({ ...finding, severity }, threads())?.id).toBe(1);
+  });
+  it("matches an answered thread once a P0 is published as a demoted P2, but keeps an undemoted P0", () => {
+    const severe = { ...finding, severity: "P0" as const };
+    const formatted = normalizeFindingsForReview([severe]).comments[0]!;
+    const demoted = demoteReviewComment(formatted, SEVERITY_DEMOTION_NOTE)!;
+    expect(suppressAnsweredDemotedComments([demoted], [severe], threads())).toEqual({
+      comments: [], dropped: [{ ...severe, reason: "prior_thread_answered", threadId: 1 }]
+    });
+    expect(suppressAnsweredDemotedComments([formatted], [severe], threads())).toEqual({ comments: [formatted], dropped: [] });
+    expect(suppressAnsweredDemotedComments([demoted], [severe], [])).toEqual({ comments: [demoted], dropped: [] });
+    const distinct = { ...severe, title: "Null pointer in parser", body: "Empty input crashes decoding." };
+    const distinctDemoted = demoteReviewComment(normalizeFindingsForReview([distinct]).comments[0]!, SEVERITY_DEMOTION_NOTE)!;
+    expect(suppressAnsweredDemotedComments([distinctDemoted], [distinct], threads()).comments).toEqual([distinctDemoted]);
   });
   it("retains a distinct nearby finding and matches by body independently", () => {
     const distinct = { ...finding, line: 33, title: "Null pointer in parser", body: "Empty input crashes decoding." };

@@ -17,6 +17,14 @@
     "repo"
   ],
   "properties": {
+    "baseMergeOnlySkip": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "excludeRepos": { "type": "array", "default": [], "items": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" } }
+      }
+    },
     "$schema": {
       "description": "Optional NeonDiff-specific editor hint pointing at this draft schema. In user config this is not a JSON Schema meta-schema declaration; the meta-schema for this schema document is the top-level https://json-schema.org/draft/2020-12/schema value.",
       "type": "string",
@@ -79,6 +87,7 @@
     "codexRuntime": {
       "type": "object",
       "properties": {
+        "checkoutReads": { "type": "boolean", "default": true },
         "enabled": { "type": "boolean", "default": false },
         "cliPath": { "type": "string", "pattern": "\\S", "default": "codex" },
         "model": { "type": "string", "pattern": "\\S", "default": "gpt-6.1-sol" },

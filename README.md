@@ -32,6 +32,7 @@ software, not open-source software.
 [Code of Conduct](CODE_OF_CONDUCT.md) · [License](LICENSE.md) ·
 [License Boundary](docs/license-boundary.md) · [Pricing](docs/pricing.md) ·
 [Providers](docs/providers.md) ·
+[Local checkout review](docs/review-local.md) ·
 [systemd](docs/systemd.md) · [Docker](docs/docker.md) · [CI Runner](docs/ci-runner.md) ·
 [Known Limitations](docs/known-limitations-and-provider-status.md) ·
 [Precision Badge](docs/precision-badge.md) ·
