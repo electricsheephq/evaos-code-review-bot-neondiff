@@ -250,6 +250,7 @@ export async function runIssueAnalysis(input: {
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,
     artifactPrefix: "codex-issue-analysis",
+    rejectSecretOutput: true,
     schema: ISSUE_ANALYSIS_JSON_SCHEMA,
     parse: parseIssueAnalysis
   }, dependencies);
@@ -269,6 +270,7 @@ export async function runIssueAnalysis(input: {
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,
     artifactPrefix: "codex-issue-fact-adjudication",
+    rejectSecretOutput: true,
     schema: ISSUE_ANALYSIS_FACT_ENTAILMENT_SCHEMA,
     parse: (value) => parseIssueFactEntailment(value, result.value.verifiedFacts.length)
   }, dependencies);

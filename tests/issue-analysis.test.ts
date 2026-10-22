@@ -399,6 +399,44 @@ describe("model-backed issue analysis", () => {
     }
   });
 
+  it("rejects secret-like analysis output instead of redacting it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-issue-secret-"));
+    try {
+      const evidenceDir = join(root, "evidence");
+      const workspacePath = join(root, "workspace");
+      mkdirSync(join(workspacePath, "src"), { recursive: true });
+      writeFileSync(join(workspacePath, "src/importer.py"), "def replay(message):\n    insert_replay_row(message)\n");
+      const token = ["super", "secret", "token"].join("-");
+      const invocations: string[] = [];
+      await expect(runIssueAnalysis({
+        repo: "electricsheephq/lcm-x",
+        issue,
+        repoPolicy,
+        allowedLabels: ["data-integrity", "needs-repro"],
+        suggestedLabels: ["needs-repro"],
+        workspacePath,
+        headSha: HEAD_SHA,
+        evidenceDir,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        timeoutMs: 30_000,
+        maxOutputBytes: 1024 * 1024
+      }, {
+        captureWorktreeState: () => "clean",
+        runProcess: async (invocation) => {
+          invocations.push(invocation.outputPath);
+          writeFileSync(invocation.outputPath, JSON.stringify({ ...analysis, nextGate: `${analysis.nextGate} ${token}` }));
+          return { stdout: "", stderr: "", status: 0, signal: null };
+        }
+      })).rejects.toThrow("codex_runtime_secret_output: result contained secret-like text");
+      expect(invocations).toHaveLength(1);
+      expect(readFileSync(invocations[0]!, "utf8")).toBe('{"status":"rejected-secret-like-output"}\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a valid source excerpt that does not entail the claimed verified fact", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-issue-entailment-"));
     try {

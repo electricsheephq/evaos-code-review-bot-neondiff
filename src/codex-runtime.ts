@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
@@ -276,11 +276,17 @@ export async function runCodexReview(input: {
 } = {}): Promise<ZCodeReviewResult> {
   const schema = input.checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
   const droppedFromEvidence: DroppedFinding[] = [];
+  const redactionReportPath = join(input.evidenceDir, "secret-redactions.json");
+  // A retry of the same head reuses this evidence dir; a clean rerun must not inherit an old report.
+  rmSync(redactionReportPath, { force: true });
+  let secretRedacted = false;
   const result = await runCodexStructuredOutput({
     ...input,
     artifactPrefix: "codex-review",
-    onSecretRedaction: (report) => writeSecureFileSync(join(input.evidenceDir, "secret-redactions.json"),
-      `${JSON.stringify({ count: report.locations.length, ...report }, null, 2)}\n`),
+    onSecretRedaction: (report) => {
+      secretRedacted = true;
+      writeSecureFileSync(redactionReportPath, `${JSON.stringify({ count: report.locations.length, ...report }, null, 2)}\n`);
+    },
     schema: input.lcmReviewAssessment ? {
       ...schema,
       required: [...schema.required, "review_assessment"],
@@ -307,6 +313,7 @@ export async function runCodexReview(input: {
     droppedFromSchema: [],
     ...(input.checkoutReads ? { droppedFromEvidence } : {}),
     rawResponse: result.rawResponse,
+    ...(secretRedacted ? { secretRedacted: true } : {}),
     attempts: 1,
     degradedRecovery: false
   };
@@ -327,6 +334,8 @@ export async function runCodexStructuredOutput<T>(input: {
   /** Where this call's usage file goes when its own evidence dir is scratch (defaults to evidenceDir). */
   usageEvidenceDir?: string;
   onSecretRedaction?: (report: SecretRedactionReport) => void;
+  /** Fail closed on secret-like output instead of redacting it (callers whose gates must see the original text). */
+  rejectSecretOutput?: boolean;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
@@ -428,6 +437,7 @@ export async function runCodexStructuredOutput<T>(input: {
       return value;
     };
     try {
+      if (input.rejectSecretOutput) throw new Error("redaction disabled");
       rawResponse = JSON.stringify(walk(JSON.parse(rawResponse), ""));
       if (containsSecretLikeText(rawResponse)) throw new Error("redaction incomplete");
     } catch {
