@@ -437,8 +437,12 @@ empty evidence is allowed for diff-only claims. Citations stay in local evidence
 With checkout reads on, Codex runs under a named permission profile instead of
 `--sandbox read-only`: the shell tool can read only the checkout, its git mirror,
 the Codex install and system files, so absolute paths, `../` and symlinks in the
-PR tree cannot reach other host files such as `$CODEX_HOME/auth.json`. If those
-read roots cannot be resolved, the review fails closed. Citation checks read at
+PR tree cannot reach other host files such as `$CODEX_HOME/auth.json`. If the
+Codex CLI is older than 0.163.0, its version cannot be read, or those read roots
+cannot be resolved, the review falls back to a diff-only review (`--sandbox
+read-only`, no checkout instructions, no citation checks). The reason is recorded
+in `checkout-reads.json` and a runtime note, and one `[checkout-reads]` warning is
+logged. Set `checkoutReads` to `false` to make diff-only reviews explicit. Citation checks read at
 most 200 citations and 16 MiB of files (1 MiB per file); a citation over that
 budget drops its finding. When any finding is dropped for evidence, the model
 summary from that response is withheld.
