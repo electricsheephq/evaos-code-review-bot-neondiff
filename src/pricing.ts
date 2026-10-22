@@ -109,9 +109,14 @@ export function buildPricingOutput() {
     command: "pricing",
     product: "NeonDiff",
     currency: "USD",
-    billingModel: "free for public repositories; flat paid plans for private repositories",
+    billingModel: "free for GitHub-public repositories through the GitHub Action and review-pr --ci; flat paid plans for private repositories",
     sourceAvailableBeta: true,
     publicOpenSourceReposFree: true,
+    // PM decision 2026-10-22: in 1.1.0 the free public path is delivered only by the
+    // CI review path; the Mac app and the self-hosted daemon/run-once/local review-pr
+    // still require activation until issue #1191 lands.
+    publicReposFreeVia: ["github-action", "review-pr --ci"],
+    publicReposFreeTracking: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191",
     activationRequiredForSupportedReview: false,
     activationRequiredForVisibilities: ["private", "internal", "unknown"],
     paidTierIncludes: [

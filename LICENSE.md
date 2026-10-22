@@ -6,7 +6,8 @@ NeonDiff is source-available commercial software. The source is available for
 inspection, contribution, and self-hosted evaluation, but this repository is not
 published under an open-source license.
 
-From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free.
+From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free
+through the GitHub Action and `neondiff review-pr --ci`.
 Review of private, internal, or unknown-visibility repositories requires an
 active NeonDiff license.
 
@@ -18,11 +19,13 @@ permission.
 
 ## Free Review Of Public Repositories
 
-You may use NeonDiff 1.1.0 or later through the npm CLI or the GitHub Action to
-review repositories that GitHub reports as public, without a license key,
-including for commercial and company-owned public repositories. Earlier releases
-and the Mac app beta still require an active license for every repository. You
-supply your own model provider account and key, and you are responsible for its
+You may use NeonDiff 1.1.0 or later through the GitHub Action or
+`neondiff review-pr --ci` to review repositories that GitHub reports as public,
+without a license key, including for commercial and company-owned public
+repositories. Earlier releases, the Mac app, and the self-hosted worker
+(`daemon`, `run-once`, and local `review-pr`) still ask for a license key for
+every repository for now; extending free public review to them is tracked in
+issue #1191. You supply your own model provider account and key, and you are responsible for its
 costs and terms.
 
 ## Paid License

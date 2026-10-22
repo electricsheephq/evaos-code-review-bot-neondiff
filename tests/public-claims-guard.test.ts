@@ -57,6 +57,18 @@ describe("public claims guard", () => {
     expect(result.stderr).toMatch(/missing required public boundary .*1\\\.1\\\.0/);
   });
 
+  it("rejects a public-free claim that drops its GitHub Action / review-pr --ci scope", () => {
+    const result = runGuardWith("From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free, with no license key, everywhere.");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/README\.md:1: public-free claim must name its scope/);
+  });
+
+  it("requires the #1191 pointer for the surfaces that still need a key", () => {
+    const result = runGuardWith("", (text) => text.replace(/#1191/g, "the tracker"));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/missing required public boundary .*#1191/);
+  });
+
   it("requires the 1.0.x qualifier on the every-repository activation claim", () => {
     const result = runGuardWith("", (text) => text.replace(/1\.0\.x(\s+)requires/g, "always$1requires"));
     expect(result.status).toBe(1);
