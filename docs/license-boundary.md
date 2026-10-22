@@ -26,12 +26,14 @@ holders but are no longer sold. Licenses do not include hosted model credits,
 unlimited SaaS inference, or bundled provider tokens: you bring your own
 provider key or local model.
 
-## Local Development Exemption
+## Local Development
 
 `review-local` is a local development tool that posts nothing and needs no activation,
 including for a private checkout: it reviews a local diff without GitHub calls.
-This explicit exemption supports local development without granting GitHub
-review posting or self-hosted worker entitlement. You bring your own OpenAI
+This is an exemption from the activation check, not a license grant: reviewing
+private or internal code outside evaluation still needs a paid license under
+[LICENSE.md](../LICENSE.md), and it grants no GitHub review posting or
+self-hosted worker entitlement. You bring your own OpenAI
 API key or Codex login on your own machine; NeonDiff never pays for or proxies
 model calls.
 
