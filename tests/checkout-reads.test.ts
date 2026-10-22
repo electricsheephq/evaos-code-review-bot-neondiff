@@ -194,9 +194,28 @@ describe("checkout reads", () => {
     expect(resolveCodexReadConfinement(join(top, "wt"), "codex", env)).toEqual({
       command: join(bin, "codex"), readableRoots: [join(top, "wt"), bin, join(top, "mirror.git")]
     });
+    expect(resolveCodexReadConfinement(join(top, "wt"), "codex", env, true)).toEqual({
+      command: join(bin, "codex"), readableRoots: [join(top, "wt"), bin]
+    });
+    expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { ...env, CODEX_HOME: join(top, "wt", "home") }, true)).toThrow("CODEX_HOME");
     expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { ...env, CODEX_HOME: bin })).toThrow("CODEX_HOME");
     expect(() => resolveCodexReadConfinement(join(top, "wt"), "codex", { PATH: join(top, "missing") })).toThrow("not found");
    }, 30_000);
+  it("restricts npm installs to their native binary directory rather than the package scope", () => {
+    const top = realpathSync(root());
+    const scope = join(top, "node_modules", "@openai");
+    const cli = join(scope, "codex", "bin", "codex.js");
+    mkdirSync(join(scope, "codex", "bin"), { recursive: true }); writeFileSync(cli, "// fixture");
+    const env = { HOME: join(top, "home") };
+    expect(() => resolveCodexReadConfinement(top, cli, env, true)).toThrow("native binary not found");
+    const cpu = process.arch === "x64" ? "x86_64" : "aarch64";
+    const target = process.platform === "darwin" ? `${cpu}-apple-darwin` : `${cpu}-unknown-linux-musl`;
+    const bin = join(scope, `codex-${process.platform}-${process.arch}`, "vendor", target, "codex");
+    mkdirSync(bin, { recursive: true }); writeFileSync(join(bin, "codex"), "fixture");
+    // Put the checkout beside the package, as in the actual worker.
+    const checkout = join(top, "checkout"); mkdirSync(checkout);
+    expect(resolveCodexReadConfinement(checkout, cli, env, true)).toEqual({ command: join(bin, "codex"), readableRoots: [checkout, bin] });
+  });
   it("skips unreadable PATH entries and, on macOS, mis-cased aliases of the work root", () => {
     const top = realpathSync(root());
     const bin = join(top, "bin");

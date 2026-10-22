@@ -23,6 +23,16 @@ export function codexChildUsesApiKeyOnly(
   return !fileExists(join(child.CODEX_HOME || join(homedir(), ".codex"), "auth.json"));
 }
 
+function matchesTrustedAuthor(config: BotConfig, pull: PullRequestSummary): boolean {
+  const gate = config.reviewGate?.publicRepoAuthorGate ?? DEFAULT_PUBLIC_REPO_AUTHOR_GATE;
+  return Boolean((pull.authorAssociation && gate.allowedAssociations.includes(pull.authorAssociation)) ||
+    (pull.authorLogin && gate.allowedLogins.some(login => login.toLowerCase() === pull.authorLogin!.toLowerCase())));
+}
+
+export function isUntrustedPublicAuthor(config: BotConfig, pull: PullRequestSummary): boolean {
+  return visibilityFromPullSummary(pull) === "public" && !matchesTrustedAuthor(config, pull);
+}
+
 export function isPublicRepoAuthorBlocked(
   config: BotConfig, pull: PullRequestSummary, visibility = visibilityFromPullSummary(pull)
 ): boolean {
@@ -30,6 +40,5 @@ export function isPublicRepoAuthorBlocked(
   const enabled = gate.mode === "on" ||
     (gate.mode === "auto" && config.codexRuntime?.enabled === true && !codexChildUsesApiKeyOnly());
   if (!enabled || visibility === "private") return false;
-  return !(pull.authorAssociation && gate.allowedAssociations.includes(pull.authorAssociation)) &&
-    !(pull.authorLogin && gate.allowedLogins.some((login) => login.toLowerCase() === pull.authorLogin!.toLowerCase()));
+  return !matchesTrustedAuthor(config, pull);
 }

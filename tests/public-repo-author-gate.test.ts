@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
-import { codexChildUsesApiKeyOnly, isPublicRepoAuthorBlocked } from "../src/public-repo-author-gate.js";
+import { codexChildUsesApiKeyOnly, isPublicRepoAuthorBlocked, isUntrustedPublicAuthor } from "../src/public-repo-author-gate.js";
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
@@ -15,9 +15,11 @@ import { buildOperatorDashboard, formatOperatorDashboardHuman } from "../src/ope
 import type { CoverageAuditReport } from "../src/coverage-audit.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
-const mocks = vi.hoisted(() => ({ provider: vi.fn(), prepare: vi.fn() }));
+const mocks = vi.hoisted(() => ({ provider: vi.fn(), prepare: vi.fn(), confinement: vi.fn() }));
 vi.mock("../src/codex-runtime.js", async (original) => ({
-  ...await original<typeof import("../src/codex-runtime.js")>(), runCodexReview: mocks.provider
+  ...await original<typeof import("../src/codex-runtime.js")>(), runCodexReview: mocks.provider,
+  resolveCheckoutReadsStatus: (input: { restrictTools?: boolean }) => input.restrictTools
+    ? mocks.confinement() : { status: "disabled" }
 }));
 vi.mock("../src/git.js", async (original) => ({
   ...await original<typeof import("../src/git.js")>(), preparePullWorktree: mocks.prepare,
@@ -44,6 +46,7 @@ function pull(visibility: string, association?: string, login = "fixture-author"
 function apiEnv(key?: string) {
   vi.stubEnv("CODEX_API_KEY", key === "codex" ? "fake-api-key" : "");
   vi.stubEnv("OPENAI_API_KEY", key === "openai" ? "fake-api-key" : "");
+  mocks.confinement.mockReturnValue({ status: "enabled", confinement: { command: "/test/codex", readableRoots: ["/fixture/checkout", "/test"] } });
   // Isolate from any real ChatGPT login on the test machine.
   vi.stubEnv("CODEX_HOME", mkdtempSync(join(tmpdir(), "neondiff-codex-home-")));
 }
@@ -87,6 +90,7 @@ describe("public repository author gate", () => {
           const blocked = !keyReachesCodex && ["public", "unknown"].includes(visibility) &&
             !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "");
           expect(isPublicRepoAuthorBlocked(cfg, pr)).toBe(blocked);
+          expect(isUntrustedPublicAuthor(cfg, pr)).toBe(visibility === "public" && !["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? ""));
           const root = mkdtempSync(join(tmpdir(), "neondiff-author-gate-")); roots.push(root);
           cfg.evidenceDir = join(root, "evidence"); cfg.workRoot = join(root, "work");
           const state = new ReviewStateStore(join(root, "state.sqlite"));
@@ -117,6 +121,14 @@ describe("public repository author gate", () => {
               if (visibility !== "unknown") {
                 expect(files).toHaveBeenCalledOnce(); expect(mocks.provider).toHaveBeenCalledOnce();
                 expect(status).toBe("reviewed");
+                if (isUntrustedPublicAuthor(cfg, pr)) {
+                  expect(mocks.provider.mock.calls[0]![0]).toMatchObject({ restrictTools: true, checkoutReads: false,
+                    readConfinement: { command: "/test/codex" } });
+                  expect(JSON.parse(readFileSync(findFile(cfg.evidenceDir, "author-trust.json")!, "utf8")))
+                    .toMatchObject({ restricted: true, reason: "untrusted_author_public_repo" });
+                  expect(readFileSync(findFile(cfg.evidenceDir, "outcome-ledger.json")!, "utf8"))
+                    .toContain("Untrusted public author");
+                }
               }
             }
           } finally { state.close(); }
@@ -124,6 +136,31 @@ describe("public repository author gate", () => {
       }
     }
   }
+  it.each(["enabled", "unavailable:codex_version", "unavailable:confinement"])("gate off: restricted confinement %s", async (status) => {
+    apiEnv();
+    const cfg = config(); cfg.reviewGate!.publicRepoAuthorGate!.mode = "off";
+    cfg.codexRuntime!.checkoutReads = true;
+    mocks.confinement.mockReturnValue({ status, detail: "fixture unavailable", confinement: { command: "/test/codex", readableRoots: ["/fixture"] } });
+    const root = mkdtempSync(join(tmpdir(), "neondiff-restricted-")); roots.push(root);
+    cfg.evidenceDir = join(root, "evidence"); cfg.workRoot = join(root, "work");
+    const state = new ReviewStateStore(join(root, "state.sqlite")); const pr = pull("public", "NONE");
+    mocks.prepare.mockResolvedValue({ path: root, headSha: pr.head.sha });
+    mocks.provider.mockResolvedValue({ findings: [], droppedFromSchema: [], rawResponse: '{"findings":[]}', attempts: 1, degradedRecovery: false });
+    const post = vi.fn();
+    const github = { getPull: async () => pr, canPostAsApp: () => true, createReview: post, upsertIssueComment: post,
+      listPullFiles: async () => [{ filename: "fixture.ts", patch: "@@ -1 +1 @@\n-old\n+new", status: "modified", additions: 1, deletions: 1, changes: 2 }] } as unknown as GitHubApi;
+    try {
+      const result = await reviewPull({ config: cfg, github, state, repo: "org/repo", pull: pr, dryRun: true, useZCode: true, licenseAdmission: testLicenseAdmission });
+      expect(result).toBe(status === "enabled" ? "reviewed" : "untrusted_author_restricted_unavailable");
+      if (status === "enabled") {
+        expect(mocks.provider.mock.calls[0]![0]).toMatchObject({ restrictTools: true, checkoutReads: false });
+      } else {
+        expect(mocks.provider).not.toHaveBeenCalled(); expect(post).not.toHaveBeenCalled();
+        expect(state.getReviewReadiness("org/repo", 1, pr.head.sha)?.reason).toBe("untrusted_author_restricted_unavailable");
+        expect(readFileSync(findFile(cfg.evidenceDir, "author-trust.json")!, "utf8")).toContain("fixture unavailable");
+      }
+    } finally { state.close(); }
+  });
   it.each(["public", "unknown"])("scheduler %s discovery and pre-existing queues never post", async (visibility) => {
     apiEnv();
     for (const queued of [false, true]) {

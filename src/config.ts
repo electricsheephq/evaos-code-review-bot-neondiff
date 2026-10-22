@@ -115,6 +115,9 @@ export interface BotConfig {
   codexRuntime?: {
     enabled: boolean;
     checkoutReads?: boolean;
+    /** Per-review derived restrictions; never lifted by checkout-read fallback. */
+    restrictTools?: boolean;
+    readConfinement?: import("./codex-runtime.js").CodexReadConfinement;
     cliPath: string;
     model: string;
     reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";

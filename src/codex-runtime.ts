@@ -271,29 +271,41 @@ const CHECKOUT_READ_PERMISSION_PROFILE = "neondiff_checkout_read";
  * login). Checkout reads use a named permission profile instead, so a hostile PR cannot get the
  * model to read outside the worktree via absolute paths, `../`, or symlinks in the PR tree.
  */
-export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: NodeJS.ProcessEnv): CodexReadConfinement {
+export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: NodeJS.ProcessEnv, restrictTools = false): CodexReadConfinement {
   const located = isAbsolute(cliPath) ? cliPath : (env.PATH ?? "").split(delimiter)
     .filter((entry) => isAbsolute(entry)).map((entry) => join(entry, cliPath)).find((candidate) => {
       try { accessSync(candidate, constants.X_OK); return statSync(candidate).isFile(); } catch { return false; }
     });
   if (!located) throw new Error("codex_runtime_read_confinement_unavailable: Codex CLI not found");
-  const command = realpathSync(located);
-  const roots = [realpathSync(cwd), dirname(command)];
+  let command = realpathSync(located);
   // npm installs run a JS launcher that spawns the native binary from a sibling @openai package.
   const npmScope = /^(.*\/node_modules\/@openai)\//.exec(command)?.[1];
-  if (npmScope) roots.push(npmScope);
+  if (restrictTools && npmScope) {
+    // Invoke the npm distribution's native binary directly, so only its binary dir is granted.
+    const cpu = process.arch === "x64" ? "x86_64" : process.arch === "arm64" ? "aarch64" : undefined;
+    const target = cpu && (process.platform === "linux" ? `${cpu}-unknown-linux-musl`
+      : process.platform === "darwin" ? `${cpu}-apple-darwin` : undefined);
+    const native = target && [
+      join(npmScope, `codex-${process.platform}-${process.arch}`, "vendor", target, "codex", "codex"),
+      join(npmScope, "codex", "vendor", target, "codex", "codex")
+    ].find(path => existsSync(path));
+    if (!native) throw new Error("codex_runtime_read_confinement_unavailable: npm native binary not found");
+    command = realpathSync(native);
+  }
+  const roots = [realpathSync(cwd), dirname(command)];
+  if (npmScope && !restrictTools) roots.push(npmScope);
   // A worktree's .git file points at the mirror; git show/log/blame need to read it.
-  const gitDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+  const gitDir = !restrictTools && spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
     cwd, env, encoding: "utf8", timeout: 30_000
   });
-  if (!gitDir.error && gitDir.status === 0 && gitDir.stdout.trim()) {
+  if (gitDir && !gitDir.error && gitDir.status === 0 && gitDir.stdout.trim()) {
     const commonDir = realpathSync(gitDir.stdout.trim());
     assertGitConfigHasNoCredentials(commonDir, [...roots, commonDir], env);
     roots.push(commonDir);
   }
   const codexHome = env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex");
   const codexHomeReal = existsSync(codexHome) ? realpathSync(codexHome) : codexHome;
-  if (roots.some((root) => codexHomeReal === root || codexHomeReal.startsWith(`${root}/`))) {
+  if (roots.some((root) => under(canonicalPath(codexHomeReal), root))) {
     throw new Error("codex_runtime_read_confinement_unavailable: a readable root would expose CODEX_HOME");
   }
   return { command, readableRoots: [...new Set(roots)] };
@@ -363,14 +375,15 @@ function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | 
 /**
  * Decides once per review whether confined checkout reads can run. When they cannot (an older
  * Codex CLI without permission profiles, or no safe read roots), the review falls back to the
- * diff-only invocation instead of failing under `--strict-config`.
+ * diff-only invocation instead of failing under `--strict-config`. Restricted reviews must skip
+ * instead; they require confinement even with checkout reads disabled.
  */
-export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd: string; cliPath: string; sensitivePaths?: Record<string, string | undefined> }, dependencies: {
+export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; restrictTools?: boolean; cwd: string; cliPath: string; sensitivePaths?: Record<string, string | undefined> }, dependencies: {
   platform?: NodeJS.Platform;
   readVersion?: (cliPath: string, env: NodeJS.ProcessEnv) => string | undefined;
   resolveReadConfinement?: typeof resolveCodexReadConfinement;
-} = {}): { status: CheckoutReadsStatus; detail?: string } {
-  if (input.checkoutReads !== true) return { status: "disabled" };
+} = {}): { status: CheckoutReadsStatus; detail?: string; confinement?: CodexReadConfinement } {
+  if (input.checkoutReads !== true && !input.restrictTools) return { status: "disabled" };
   const env = buildCodexRuntimeEnv(process.env);
   const output = (dependencies.readVersion ?? readCodexCliVersion)(input.cliPath, env);
   const version = output === undefined ? undefined : parseCodexCliVersion(output);
@@ -379,7 +392,7 @@ export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd
     return { status: "unavailable:codex_version", detail: `Codex CLI ${version.join(".")} is older than ${CODEX_CHECKOUT_READS_MIN_VERSION}` };
   }
   try {
-    const confinement = (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env);
+    const confinement = (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env, input.restrictTools === true);
     const platform = dependencies.platform ?? process.platform;
     const systemRoots = platform === "darwin" ? ["/etc", "/private/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/dev"]
       : platform === "linux" ? ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/opt", "/dev", "/proc", "/sys", "/run", "/snap"] : [];
@@ -391,14 +404,15 @@ export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd
         return { status: "unavailable:confinement", detail: `${kind} path [redacted] is readable inside the Codex sandbox; move it outside system directories to enable checkout reads` };
       }
     }
+    if (input.restrictTools) return { status: "enabled", confinement };
   } catch (error) {
     return { status: "unavailable:confinement", detail: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }
   return { status: "enabled" };
 }
 
-function checkoutReadPermissionArgs(readableRoots: string[]): string[] {
-  const entries = [":minimal", ":workspace_roots", ...readableRoots].map((root) => `${JSON.stringify(root)}="read"`);
+function checkoutReadPermissionArgs(readableRoots: string[], restrictTools = false): string[] {
+  const entries = [":minimal", ...(!restrictTools ? [":workspace_roots"] : []), ...readableRoots].map((root) => `${JSON.stringify(root)}="read"`);
   return [
     "-c", 'shell_environment_policy.set={GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1"}',
     "-c", `default_permissions="${CHECKOUT_READ_PERMISSION_PROFILE}"`,
@@ -414,7 +428,9 @@ export function buildCodexExecInvocation(input: {
   schemaPath: string;
   outputPath: string;
   readConfinement?: CodexReadConfinement;
+  restrictTools?: boolean;
 }): Pick<CodexExecInvocation, "command" | "args"> {
+  if (input.restrictTools && !input.readConfinement) throw new Error("codex_runtime_read_confinement_unavailable: restricted review requires confinement");
   return {
     command: input.readConfinement?.command ?? input.cliPath,
     args: [
@@ -426,13 +442,14 @@ export function buildCodexExecInvocation(input: {
       "--disable", "apps",
       "--disable", "multi_agent",
       "--disable", "multi_agent_v2",
+      ...(input.restrictTools ? ["--disable", "shell_tool", "-c", "project_doc_max_bytes=0"] : []),
       "-c", "approval_policy=\"never\"",
       "-c", `model_reasoning_effort=\"${input.reasoningEffort}\"`,
       "--model", input.model,
       "-c", 'shell_environment_policy.inherit="core"',
       "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","*TOKEN*","*PASSWORD*","*CREDENTIAL*","*AUTH*"]',
       // `--sandbox` overrides a permission profile, so the confined variant must omit it.
-      ...(input.readConfinement ? checkoutReadPermissionArgs(input.readConfinement.readableRoots) : ["--sandbox", "read-only"]),
+      ...(input.readConfinement ? checkoutReadPermissionArgs(input.readConfinement.readableRoots, input.restrictTools) : ["--sandbox", "read-only"]),
       "--cd", input.cwd,
       "--output-schema", input.schemaPath,
       "--output-last-message", input.outputPath,
@@ -453,12 +470,15 @@ export async function runCodexReview(input: {
   maxOutputBytes: number;
   lcmReviewAssessment?: boolean;
   checkoutReads?: boolean;
+  restrictTools?: boolean;
+  readConfinement?: CodexReadConfinement;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
   resolveReadConfinement?: typeof resolveCodexReadConfinement;
 } = {}): Promise<ZCodeReviewResult> {
-  const schema = input.checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
+  const checkoutReads = input.checkoutReads === true && !input.restrictTools;
+  const schema = checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
   const droppedFromEvidence: DroppedFinding[] = [];
   const redactionReportPath = join(input.evidenceDir, "secret-redactions.json");
   // A retry of the same head reuses this evidence dir; a clean rerun must not inherit an old report.
@@ -466,7 +486,7 @@ export async function runCodexReview(input: {
   let secretRedacted = false;
   const result = await runCodexStructuredOutput({
     ...input,
-    confineReadsToCheckout: input.checkoutReads === true,
+    confineReadsToCheckout: checkoutReads,
     artifactPrefix: "codex-review",
     onSecretRedaction: (report) => {
       secretRedacted = true;
@@ -484,7 +504,7 @@ export async function runCodexReview(input: {
         throw new Error(`${dropped.length} finding(s) failed NeonDiff validation`);
       }
       const readBudget = createSourceRefReadBudget();
-      const verifiedFindings = input.checkoutReads ? findings.filter((finding) => {
+      const verifiedFindings = checkoutReads ? findings.filter((finding) => {
         const failure = finding.evidenceMalformed ? "malformed" : (finding.evidence ?? []).map((ref) => verifySourceRef(input.cwd, ref, readBudget)).find(Boolean);
         if (!failure) return true;
         droppedFromEvidence.push({ ...finding, reason: "evidence_unverified", evidenceFailure: failure });
@@ -503,7 +523,7 @@ export async function runCodexReview(input: {
     findings: result.value.findings,
     summary: result.value.summary,
     droppedFromSchema: [],
-    ...(input.checkoutReads ? { droppedFromEvidence } : {}),
+    ...(checkoutReads ? { droppedFromEvidence } : {}),
     rawResponse: result.rawResponse,
     ...(secretRedacted ? { secretRedacted: true } : {}),
     attempts: 1,
@@ -530,6 +550,8 @@ export async function runCodexStructuredOutput<T>(input: {
   rejectSecretOutput?: boolean;
   /** Checkout reads: confine the shell tool's file reads to the checkout (fails closed if unavailable). */
   confineReadsToCheckout?: boolean;
+  restrictTools?: boolean;
+  readConfinement?: CodexReadConfinement;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
@@ -550,7 +572,8 @@ export async function runCodexStructuredOutput<T>(input: {
     reasoningEffort: input.reasoningEffort,
     schemaPath,
     outputPath,
-    ...(input.confineReadsToCheckout ? {
+    restrictTools: input.restrictTools,
+    ...(input.readConfinement ? { readConfinement: input.readConfinement } : input.confineReadsToCheckout ? {
       readConfinement: (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env)
     } : {})
   });
