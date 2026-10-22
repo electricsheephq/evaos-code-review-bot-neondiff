@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCiConfig, ciGitAuthToken, ciLicenseMachineId, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
 import { buildReviewProviderMetadata, codexRuntimeCredentialNote, runOnce } from "../src/worker.js";
+import { runOnceCliExitCode } from "../src/run-once-cli.js";
 import { loadConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
@@ -137,7 +138,13 @@ describe("CI review", () => {
     const options = { ciConfig, repo: ctx.repo, pullNumber: ctx.pullNumber, explicitPullReview: { repo: ctx.repo, pullNumber: ctx.pullNumber }, expectedHeadSha: sha, dryRun: true, useZCode: false };
     expect(await runOnce(options)).toMatchObject({ scopedStatus: "skipped_draft", skippedDraft: 1, failed: 0 });
     expect(fetchImpl).not.toHaveBeenCalled();
-    await expect(runOnce({ ...options, expectedHeadSha: "b".repeat(40) })).rejects.toThrow(/head/i);
+    // A head that moved after the triggering event is a superseded CI run: skipped, never reviewed.
+    const stale = await runOnce({ ...options, expectedHeadSha: "b".repeat(40) });
+    expect(stale).toMatchObject({ scopedStatus: "skipped_stale_head", skippedStaleHead: 1, reviewed: 0, failed: 0, scopedPull: { headSha: sha } });
+    expect(runOnceCliExitCode(stale, { commandName: "review-pr", dryRun: false, ci: true })).toBe(0);
+    expect(runOnceCliExitCode(stale, { commandName: "review-pr", dryRun: false })).toBe(1);
+    const { ciConfig: _ci, ...nonCi } = options;
+    await expect(runOnce({ ...nonCi, configPath: undefined, expectedHeadSha: "b".repeat(40) })).rejects.toThrow(/head/i);
     for (const visibility of ["private", "internal", undefined]) {
       metadata.mockResolvedValue({ full_name: ctx.repo, ...(visibility ? { visibility } : {}) } as any);
       await expect(runOnce(options)).rejects.toThrow(/license/);
