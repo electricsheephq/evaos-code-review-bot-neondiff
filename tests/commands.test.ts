@@ -309,8 +309,8 @@ describe("public command bot-author identity (#345)", () => {
   });
 
   it("rejects ANY Bot-type actor, not just the app's own login (deliberate breadth, loop protection)", () => {
-    // Pins the intended breadth vs the narrower GitHubApi.isBotAuthoredComment (which needs BOTH
-    // type === "Bot" AND login === botLogin). A third-party bot triggering a public review must be
+    // Pins the intended breadth vs the narrower isAuthoredBy(user, postingIdentity) (which needs BOTH
+    // type AND login to match the posting identity). A third-party bot triggering a public review must be
     // blocked, so type === "Bot" alone (any login) rejects.
     expect(isBotCommandComment({ login: "third-party-app[bot]", type: "Bot" }, "evaos-code-review-bot[bot]")).toBe(true);
     expect(isBotCommandComment({ login: "renovate[bot]", type: "Bot" }, "evaos-code-review-bot[bot]")).toBe(true);

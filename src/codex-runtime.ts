@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
 import { parseFindings } from "./findings.js";
-import { verifySourceRef } from "./issue-analysis.js";
+import { createSourceRefReadBudget, verifySourceRef } from "./issue-analysis.js";
 import type { DroppedFinding } from "./types.js";
 import { containsSecretLikeText, redactSecrets, secretLikeRuleIds } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
@@ -225,6 +226,109 @@ export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessE
   return env;
 }
 
+/** OS-enforced read roots for a checkout-read review: the shell tool can read only these plus system files. */
+export interface CodexReadConfinement {
+  /** Real path of the Codex CLI: its sandbox helper re-executes itself and must be readable. */
+  command: string;
+  readableRoots: string[];
+}
+
+const CHECKOUT_READ_PERMISSION_PROFILE = "neondiff_checkout_read";
+
+/**
+ * `--sandbox read-only` only blocks writes; it can still read any host file (including the Codex
+ * login). Checkout reads use a named permission profile instead, so a hostile PR cannot get the
+ * model to read outside the worktree via absolute paths, `../`, or symlinks in the PR tree.
+ */
+export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: NodeJS.ProcessEnv): CodexReadConfinement {
+  const located = isAbsolute(cliPath) ? cliPath : (env.PATH ?? "").split(delimiter)
+    .filter((entry) => isAbsolute(entry)).map((entry) => join(entry, cliPath)).find((candidate) => {
+      try { accessSync(candidate, constants.X_OK); return statSync(candidate).isFile(); } catch { return false; }
+    });
+  if (!located) throw new Error("codex_runtime_read_confinement_unavailable: Codex CLI not found");
+  const command = realpathSync(located);
+  const roots = [realpathSync(cwd), dirname(command)];
+  // npm installs run a JS launcher that spawns the native binary from a sibling @openai package.
+  const npmScope = /^(.*\/node_modules\/@openai)\//.exec(command)?.[1];
+  if (npmScope) roots.push(npmScope);
+  // A worktree's .git file points at the mirror; git show/log/blame need to read it.
+  const gitDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd, env, encoding: "utf8", timeout: 30_000
+  });
+  if (!gitDir.error && gitDir.status === 0 && gitDir.stdout.trim()) roots.push(realpathSync(gitDir.stdout.trim()));
+  const codexHome = env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex");
+  const codexHomeReal = existsSync(codexHome) ? realpathSync(codexHome) : codexHome;
+  if (roots.some((root) => codexHomeReal === root || codexHomeReal.startsWith(`${root}/`))) {
+    throw new Error("codex_runtime_read_confinement_unavailable: a readable root would expose CODEX_HOME");
+  }
+  return { command, readableRoots: [...new Set(roots)] };
+}
+
+/** Oldest Codex CLI tested with the named permission profiles that confined checkout reads use. */
+export const CODEX_CHECKOUT_READS_MIN_VERSION = "0.163.0";
+
+export type CheckoutReadsStatus = "disabled" | "enabled" | "unavailable:codex_version" | "unavailable:confinement";
+
+/** Parses `codex --version` output such as `codex-cli 0.163.0`. */
+export function parseCodexCliVersion(output: string): [number, number, number] | undefined {
+  const match = /\b(\d+)\.(\d+)\.(\d+)\b/.exec(output);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
+}
+
+export function codexCliVersionAtLeast(version: [number, number, number], minimum: string): boolean {
+  const floor = parseCodexCliVersion(minimum)!;
+  for (let index = 0; index < 3; index += 1) {
+    if (version[index] !== floor[index]) return version[index] > floor[index];
+  }
+  return true;
+}
+
+// Only successful reads are cached, so a CLI installed after startup is picked up on the next review.
+const codexCliVersionCache = new Map<string, string>();
+
+function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | undefined {
+  const cached = codexCliVersionCache.get(cliPath);
+  if (cached !== undefined) return cached;
+  const result = spawnSync(cliPath, ["--version"], { env, encoding: "utf8", timeout: 30_000 });
+  if (result.error || result.status !== 0 || !parseCodexCliVersion(result.stdout)) return undefined;
+  codexCliVersionCache.set(cliPath, result.stdout);
+  return result.stdout;
+}
+
+/**
+ * Decides once per review whether confined checkout reads can run. When they cannot (an older
+ * Codex CLI without permission profiles, or no safe read roots), the review falls back to the
+ * diff-only invocation instead of failing under `--strict-config`.
+ */
+export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd: string; cliPath: string }, dependencies: {
+  readVersion?: (cliPath: string, env: NodeJS.ProcessEnv) => string | undefined;
+  resolveReadConfinement?: typeof resolveCodexReadConfinement;
+} = {}): { status: CheckoutReadsStatus; detail?: string } {
+  if (input.checkoutReads !== true) return { status: "disabled" };
+  const env = buildCodexRuntimeEnv(process.env);
+  const output = (dependencies.readVersion ?? readCodexCliVersion)(input.cliPath, env);
+  const version = output === undefined ? undefined : parseCodexCliVersion(output);
+  if (!version) return { status: "unavailable:codex_version", detail: "could not read `codex --version`" };
+  if (!codexCliVersionAtLeast(version, CODEX_CHECKOUT_READS_MIN_VERSION)) {
+    return { status: "unavailable:codex_version", detail: `Codex CLI ${version.join(".")} is older than ${CODEX_CHECKOUT_READS_MIN_VERSION}` };
+  }
+  try {
+    (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env);
+  } catch (error) {
+    return { status: "unavailable:confinement", detail: redactSecrets(error instanceof Error ? error.message : String(error)) };
+  }
+  return { status: "enabled" };
+}
+
+function checkoutReadPermissionArgs(readableRoots: string[]): string[] {
+  const entries = [":minimal", ":workspace_roots", ...readableRoots].map((root) => `${JSON.stringify(root)}="read"`);
+  return [
+    "-c", 'shell_environment_policy.set={GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1"}',
+    "-c", `default_permissions="${CHECKOUT_READ_PERMISSION_PROFILE}"`,
+    "-c", `permissions.${CHECKOUT_READ_PERMISSION_PROFILE}.filesystem={${entries.join(", ")}}`
+  ];
+}
+
 export function buildCodexExecInvocation(input: {
   cliPath: string;
   cwd: string;
@@ -232,9 +336,10 @@ export function buildCodexExecInvocation(input: {
   reasoningEffort: CodexReasoningEffort;
   schemaPath: string;
   outputPath: string;
+  readConfinement?: CodexReadConfinement;
 }): Pick<CodexExecInvocation, "command" | "args"> {
   return {
-    command: input.cliPath,
+    command: input.readConfinement?.command ?? input.cliPath,
     args: [
       "exec",
       "--ephemeral",
@@ -249,7 +354,8 @@ export function buildCodexExecInvocation(input: {
       "--model", input.model,
       "-c", 'shell_environment_policy.inherit="core"',
       "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","*TOKEN*","*PASSWORD*","*CREDENTIAL*","*AUTH*"]',
-      "--sandbox", "read-only",
+      // `--sandbox` overrides a permission profile, so the confined variant must omit it.
+      ...(input.readConfinement ? checkoutReadPermissionArgs(input.readConfinement.readableRoots) : ["--sandbox", "read-only"]),
       "--cd", input.cwd,
       "--output-schema", input.schemaPath,
       "--output-last-message", input.outputPath,
@@ -273,6 +379,7 @@ export async function runCodexReview(input: {
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
+  resolveReadConfinement?: typeof resolveCodexReadConfinement;
 } = {}): Promise<ZCodeReviewResult> {
   const schema = input.checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
   const droppedFromEvidence: DroppedFinding[] = [];
@@ -282,6 +389,7 @@ export async function runCodexReview(input: {
   let secretRedacted = false;
   const result = await runCodexStructuredOutput({
     ...input,
+    confineReadsToCheckout: input.checkoutReads === true,
     artifactPrefix: "codex-review",
     onSecretRedaction: (report) => {
       secretRedacted = true;
@@ -298,13 +406,20 @@ export async function runCodexReview(input: {
       if (dropped.length > 0) {
         throw new Error(`${dropped.length} finding(s) failed NeonDiff validation`);
       }
+      const readBudget = createSourceRefReadBudget();
       const verifiedFindings = input.checkoutReads ? findings.filter((finding) => {
-        const failure = finding.evidenceMalformed ? "malformed" : (finding.evidence ?? []).map((ref) => verifySourceRef(input.cwd, ref)).find(Boolean);
+        const failure = finding.evidenceMalformed ? "malformed" : (finding.evidence ?? []).map((ref) => verifySourceRef(input.cwd, ref, readBudget)).find(Boolean);
         if (!failure) return true;
         droppedFromEvidence.push({ ...finding, reason: "evidence_unverified", evidenceFailure: failure });
         return false;
       }) : findings.map(({ evidence, evidenceMalformed, ...finding }) => finding);
-      return { findings: verifiedFindings, summary: parseReviewModelSummary(parsed, verifiedFindings.length) };
+      const summary = parseReviewModelSummary(parsed, verifiedFindings.length);
+      // The summary comes from the same response; a rejected claim must not survive through it.
+      return { findings: verifiedFindings, summary: droppedFromEvidence.length > 0 ? {
+        changedBehavior: [], invariants: [], evidence: [],
+        limitations: [`The model summary was withheld because ${droppedFromEvidence.length} finding(s) cited checkout evidence that did not verify.`],
+        noFindingRationale: "The model summary was withheld because some checkout citations did not verify."
+      } : summary };
     }
   }, dependencies);
   return {
@@ -336,9 +451,12 @@ export async function runCodexStructuredOutput<T>(input: {
   onSecretRedaction?: (report: SecretRedactionReport) => void;
   /** Fail closed on secret-like output instead of redacting it (callers whose gates must see the original text). */
   rejectSecretOutput?: boolean;
+  /** Checkout reads: confine the shell tool's file reads to the checkout (fails closed if unavailable). */
+  confineReadsToCheckout?: boolean;
 }, dependencies: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
+  resolveReadConfinement?: typeof resolveCodexReadConfinement;
 } = {}): Promise<{ value: T; rawResponse: string }> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.artifactPrefix)) {
     throw new Error("codex_runtime_invalid_artifact_prefix");
@@ -347,19 +465,23 @@ export async function runCodexStructuredOutput<T>(input: {
   const schemaPath = join(input.evidenceDir, `${input.artifactPrefix}-schema.json`);
   const outputPath = join(input.evidenceDir, `${input.artifactPrefix}-result.json`);
   writeSecureFileSync(schemaPath, `${JSON.stringify(input.schema, null, 2)}\n`);
+  const env = buildCodexRuntimeEnv(process.env);
   const command = buildCodexExecInvocation({
     cliPath: input.cliPath,
     cwd: input.cwd,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
     schemaPath,
-    outputPath
+    outputPath,
+    ...(input.confineReadsToCheckout ? {
+      readConfinement: (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env)
+    } : {})
   });
   const invocation: CodexExecInvocation = {
     ...command,
     cwd: input.cwd,
     stdin: input.prompt,
-    env: buildCodexRuntimeEnv(process.env),
+    env,
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,
     outputPath

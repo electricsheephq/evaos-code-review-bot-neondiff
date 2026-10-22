@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import {
   buildCodexRuntimeEnv,
@@ -778,21 +778,45 @@ export function assertIssueAnalysisSourceRefs(input: {
     if (failure) {
       const messages = { path_missing: "path does not exist", path_escapes: "path escapes workspace",
         non_canonical: "path is not canonical", range_out_of_bounds: "line range is out of bounds",
-        excerpt_mismatch: "excerpt does not match source" };
+        excerpt_mismatch: "excerpt does not match source", citation_budget_exceeded: "citation exceeds the read budget" };
       throw new Error(`issue_analysis_source_ref_unverified: verifiedFacts[${index}] ${messages[failure]}`);
     }
   }
 }
 
+/** Bounds model-selected citation reads: a cited file is read once, and big files or citation floods fail closed. */
+export interface SourceRefReadBudget {
+  maxCitations: number;
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  citations: number;
+  bytesRead: number;
+  lines: Map<string, string[]>;
+}
+
+export function createSourceRefReadBudget(): SourceRefReadBudget {
+  return { maxCitations: 200, maxFileBytes: 1024 * 1024, maxTotalBytes: 16 * 1024 * 1024, citations: 0, bytesRead: 0, lines: new Map() };
+}
+
 /** Verify one PR-head source citation; invalid references never fail the whole review. */
-export function verifySourceRef(workspacePath: string, source: FindingEvidenceRef): Exclude<DroppedFinding["evidenceFailure"], "malformed" | undefined> | null {
+export function verifySourceRef(workspacePath: string, source: FindingEvidenceRef, budget?: SourceRefReadBudget): Exclude<DroppedFinding["evidenceFailure"], "malformed" | undefined> | null {
+  if (budget && ++budget.citations > budget.maxCitations) return "citation_budget_exceeded";
   try {
     const workspaceRoot = realpathSync(workspacePath);
     const resolvedPath = realpathSync(resolve(workspaceRoot, source.path));
     const relativePath = relative(workspaceRoot, resolvedPath);
     if (!relativePath || relativePath.startsWith("..") || resolve(workspaceRoot, relativePath) !== resolvedPath) return "path_escapes";
     if (relativePath.replaceAll("\\", "/") !== source.path.replace(/^\.\//, "")) return "non_canonical";
-    const lines = readFileSync(resolvedPath, "utf8").replace(/\r\n?/g, "\n").split("\n");
+    let lines = budget?.lines.get(resolvedPath);
+    if (!lines) {
+      if (budget) {
+        const size = statSync(resolvedPath).size;
+        if (size > budget.maxFileBytes || budget.bytesRead + size > budget.maxTotalBytes) return "citation_budget_exceeded";
+        budget.bytesRead += size;
+      }
+      lines = readFileSync(resolvedPath, "utf8").replace(/\r\n?/g, "\n").split("\n");
+      budget?.lines.set(resolvedPath, lines);
+    }
     if (!Number.isInteger(source.startLine) || source.startLine < 1 || !Number.isInteger(source.endLine) ||
       source.endLine < source.startLine || source.endLine > lines.length) return "range_out_of_bounds";
     const selected = lines.slice(source.startLine - 1, source.endLine).join("\n");
