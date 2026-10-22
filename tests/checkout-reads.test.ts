@@ -248,6 +248,29 @@ describe("checkout reads", () => {
     expect(() => resolveRoots()).toThrow("holds credentials");
     config("include.path", join(top, "outside.inc"));
     expect(() => resolveRoots()).not.toThrow();
+    // A system directory the sandbox can read under :minimal counts as a readable root.
+    if (process.platform === "darwin" || process.platform === "linux") {
+      config("include.path", "/etc/neondiff-fixture.inc");
+      expect(() => resolveRoots()).toThrow("holds credentials");
+    }
+    config("--unset", "include.path");
+    // With extensions.worktreeConfig, the main worktree's settings live in <common>/config.worktree.
+    config("extensions.worktreeConfig", "true");
+    config("--worktree", "http.https://github.com/.extraheader", "AUTHORIZATION: basic fixture");
+    expect(() => resolveRoots()).toThrow("holds credentials");
+    config("--worktree", "--unset", "http.https://github.com/.extraheader");
+    expect(() => resolveRoots()).not.toThrow();
+    // `url."<url>".insteadOf` stores the credential-bearing URL in the key, not the value.
+    config("url.https://x-access-token:fixture@github.com/.insteadOf", "https://github.com/");
+    expect(() => resolveRoots()).toThrow("holds credentials");
+    config("--remove-section", "url.https://x-access-token:fixture@github.com/");
+    config("url.https://github.com/.insteadOf", "git@github.com:");
+    expect(() => resolveRoots()).not.toThrow();
+    // An include outside the roots that links to a file inside one is judged by its target.
+    writeFileSync(join(top, "repo", ".git", "creds.inc"), "");
+    symlinkSync(join(top, "repo", ".git", "creds.inc"), join(top, "outside-link.inc"));
+    config("include.path", join(top, "outside-link.inc"));
+    expect(() => resolveRoots()).toThrow("holds credentials");
   }, 30_000);
   it.each([true, false])("passes read confinement to Codex only when checkoutReads=%s", async checkoutReads => {
     const cwd = root();

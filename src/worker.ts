@@ -2075,11 +2075,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
     // schema, sandbox and citation checks all agree on the fallback.
-    const checkoutReads = config.codexRuntime?.enabled
+    // Only a review that spawns Codex probes it: the probe runs the pinned binary, never a PATH lookup.
+    const checkoutReads = config.codexRuntime?.enabled && input.useZCode
       ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, cwd: worktree.path, cliPath: reviewCliPath!,
           sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
             "private key": config.github.privateKeyPath, "state DB": config.statePath,
-            "license key": process.env.NEONDIFF_LICENSE_KEY_FILE || config.license?.keyPath, evidence: config.evidenceDir } })
+            // Both license paths: an inherited env file must not hide the configured key.
+            "license key": process.env.NEONDIFF_LICENSE_KEY_FILE, "configured license key": config.license?.keyPath,
+            evidence: config.evidenceDir } })
       : { status: "disabled" as const };
     const reviewConfig: BotConfig = config.codexRuntime?.enabled
       ? { ...config, codexRuntime: { ...config.codexRuntime, cliPath: reviewCliPath!, checkoutReads: checkoutReads.status === "enabled" } }
