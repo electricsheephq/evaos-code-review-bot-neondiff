@@ -12,12 +12,13 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
 - Keep provider credentials out of committed repo config.
 - Keep issue enrichment separate from PR review policy.
 - Keep public confidence uncalibrated until evaluation evidence exists; no percentages are displayed in this draft.
-- Preserve the current NeonDiff public boundary: source-available beta where the
-  current CLI (v1.0.x) requires mandatory API-backed activation for public,
-  private, internal, and unknown repository work. Public open-source review
-  becomes free (no Activation Key) only in the native app via the managed GitHub
-  App broker (#614); the current CLI still requires activation for every
-  repository.
+- Preserve the current NeonDiff public boundary: source-available beta where,
+  from 1.1.0, review of repositories that GitHub reports as public is free (no
+  Activation Key) in the npm CLI and the GitHub Action, and private, internal,
+  and unknown-visibility repository work requires mandatory API-backed
+  activation. The npm CLI 1.0.x requires activation for every repository. The
+  runtime decides the tier from GitHub-reported visibility, not from this draft
+  file.
 
 The v1.0.5 package-allowlisted schema defaults to the explicit
 `requires-license` label for the current CLI. It still accepts the historical

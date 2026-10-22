@@ -24,12 +24,13 @@ const paths = [
 // enforcement for public repos, and free public review is distribution.
 // Private, internal, and unknown visibility still require live activation.
 // These required claims keep the docs on that truth, the 1.0.x caveat, and the
-// current flat prices.
+// current flat prices; the public-free and activation claims must carry their
+// 1.1.0 and 1.0.x qualifiers.
 const required = [
   /source-available/i,
-  /repositor(?:y|ies) that GitHub reports as public (?:is |for )free/i,
+  /From (?:NeonDiff )?1\.1\.0,\s+review\s+of\s+repositories\s+that\s+GitHub\s+reports\s+as\s+public\s+is\s+free/i,
   /private, internal, and unknown-visibility repositor(?:y|ies) (?:require|need)/i,
-  /requires (?:live |active |mandatory )?API-backed activation for every repository/i,
+  /1\.0\.x\s+requires\s+(?:live\s+|active\s+|mandatory\s+)?API-backed\s+activation\s+for\s+every\s+repository/i,
   /\$9\/mo/,
   /\$90\/(?:year|yr)/i,
   /\$290\/(?:year|yr)/i,
@@ -70,13 +71,13 @@ for (const path of paths) {
   const text = readFileSync(path, "utf8");
   const lines = text.split("\n");
   for (const pattern of forbiddenClaims) {
-    const matches = text.match(new RegExp(pattern.source, `${pattern.flags}g`)) ?? [];
-    for (const match of matches) {
-      const index = lines.findIndex((candidate) => candidate.includes(match));
+    for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
+      // Judge each occurrence by its own line, not the first identical substring.
+      const index = text.slice(0, match.index).split("\n").length - 1;
       const context = lines.slice(Math.max(0, index - 12), index + 2).join("\n");
       const boundaryLanguage = /not |does not|do not|avoid|unless|not claimed|must not|forbidden|never/i.test(context);
       if (!boundaryLanguage) {
-        console.error(`${path}: forbidden public claims phrase outside boundary language: ${match}`);
+        console.error(`${path}: forbidden public claims phrase outside boundary language: ${match[0]}`);
         failed = true;
       }
     }
