@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -1254,11 +1254,15 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
 }
 
 function writeFixtureCodexCli(root: string): string {
-  const path = join(root, "fixture-codex.cjs");
+  // Its own directory: the Codex binary's directory is a readable root, so it must not hold config or state.
+  mkdirSync(join(root, "codex-bin"), { recursive: true });
+  const path = join(root, "codex-bin", "fixture-codex.cjs");
   writeFileSync(path, `#!/usr/bin/env node
 const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const args = process.argv.slice(2);
+// Issue analysis checks for a Codex that supports confined checkout reads (0.163.0+).
+if (args[0] === "--version") { console.log("codex-cli 0.163.0"); process.exit(0); }
 const outputIndex = args.indexOf("--output-last-message");
 if (outputIndex < 0 || !args[outputIndex + 1]) process.exit(2);
 const outputPath = args[outputIndex + 1];
