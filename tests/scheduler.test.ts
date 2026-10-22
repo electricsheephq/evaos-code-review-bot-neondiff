@@ -87,6 +87,36 @@ describe("provider-aware review scheduler", () => {
     } finally { state.close(); }
   });
 
+  it("checks an empty repository's visibility once before activating it on a public-only worker", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-empty-activation-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/private", "org/public"]);
+    config.activation.reviewExistingOpenPrsOnActivation = false;
+    const state = new ReviewStateStore(config.statePath);
+    const pulls = new Map<string, PullRequestSummary[]>([["org/private", []], ["org/public", []]]);
+    const getRepo = vi.fn(async (repo: string) => ({ full_name: repo, private: repo === "org/private", visibility: repo === "org/private" ? "private" : "public" }));
+    const reviewed: string[] = [];
+    const cycle = async (paid: boolean) => runScheduledCycleWithDeps({ config, state, options: { dryRun: true }, github: { ...githubFromMap(pulls), getRepo },
+      licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: paid ? "all" : "public", privateRepoAllowed: paid }),
+      reviewPullImpl: async (input) => { reviewed.push(`${input.repo}#${input.pull.number}`); return "reviewed"; } });
+    try {
+      await cycle(false);
+      expect(state.hasRepoActivation("org/public")).toBe(true);
+      expect(state.hasRepoActivation("org/private")).toBe(false);
+      await cycle(false);
+      // The activated public repository is never looked up again; the private one waits for a license.
+      expect(getRepo.mock.calls.map(([repo]) => repo)).toEqual(["org/private", "org/public", "org/private"]);
+      pulls.set("org/private", [pull("org/private", 1, HEAD_A, "base", { visibility: "private" })]);
+      pulls.set("org/public", [pull("org/public", 2, HEAD_B, "base")]);
+      await cycle(false);
+      expect(reviewed).toEqual(["org/public#2"]);
+      const licensed = await cycle(true);
+      expect(licensed.baselinedExisting).toBe(1);
+      expect(state.hasProcessed("org/private", 1, HEAD_A)).toBe(true);
+      // Dry runs record nothing, so the public pull is reviewed again; the private one is baselined.
+      expect(reviewed.filter((entry) => entry.startsWith("org/private"))).toEqual([]);
+    } finally { state.close(); }
+  });
+
   it.each([false, true])("reviews only covered repositories with paid=%s", async (paid) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-public-worker-"));
     roots.push(root);

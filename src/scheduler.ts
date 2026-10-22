@@ -54,7 +54,7 @@ import {
   type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
-import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, ReviewEvent } from "./types.js";
+import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
 import { buildChangedSurfaceValidationReport } from "./validation-selector.js";
 import { collectRightSideLines } from "./diff.js";
@@ -68,6 +68,7 @@ import {
 } from "./outcome-observer.js";
 import {
   activateRepoForNewOnlyReview,
+  resolveEmptyRepositoryCoverage,
   isCanaryAllowed,
   recordFailedReview,
   recordPublicRepoAuthorGateSkip,
@@ -121,6 +122,8 @@ export interface SchedulerGitHubApi {
   // a merged PR's outcome (revert/hotfix/human-thread). All read-only; absent ⇒ merge-state-only cut.
   listRecentMergedPulls?(repo: string, limit: number): Promise<PullRequestSummary[]>;
   listPullReviewComments?(repo: string, pullNumber: number): Promise<PullReviewComment[]>;
+  // Optional: read once for an unactivated repository with no open pulls on a public-only worker.
+  getRepo?(repo: string): Promise<RepositorySummary>;
 }
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
@@ -214,7 +217,9 @@ export async function runScheduledCycleWithDeps(input: {
       pulls,
       scopedPullNumber: input.options.pullNumber,
       now,
-      licenseAdmission: input.licenseAdmission
+      licenseAdmission: input.licenseAdmission,
+      repositoryCovered: await resolveEmptyRepositoryCoverage({ config, state: input.state, github: input.github, repo, pulls,
+        scopedPullNumber: input.options.pullNumber, licenseAdmission: input.licenseAdmission })
     });
     result.baselinedExisting += activation.baselined;
     const admittedPulls = pulls.filter((pull) => {
