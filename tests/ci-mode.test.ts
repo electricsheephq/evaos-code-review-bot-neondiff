@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCiConfig, ciGitAuthToken, ciLicenseMachineId, findPostedCiReview, readCiPullContext } from "../src/ci-mode.js";
-import { buildReviewProviderMetadata, runOnce } from "../src/worker.js";
+import { buildReviewProviderMetadata, codexRuntimeCredentialNote, runOnce } from "../src/worker.js";
 import { loadConfig } from "../src/config.js";
 import { GitHubApi } from "../src/github.js";
 import { buildCodexRuntimeEnv } from "../src/codex-runtime.js";
@@ -187,6 +187,10 @@ describe("CI review", () => {
     expect(buildReviewProviderMetadata(config, { OPENAI_API_KEY: "fixture" })).toMatchObject({ providerId: "codex-cli-oauth", displayName: "Codex CLI (API key)" });
     expect(buildReviewProviderMetadata(config, { CODEX_API_KEY: "fixture" }).displayName).toBe("Codex CLI (API key)");
     expect(buildReviewProviderMetadata(config, {})).toMatchObject({ providerId: "codex-cli-oauth", displayName: "Codex CLI (existing OAuth session)" });
+    // The runtime evidence note names the same credential as the display name.
+    expect(codexRuntimeCredentialNote({ OPENAI_API_KEY: "fixture" })).toMatch(/API key/);
+    expect(codexRuntimeCredentialNote({ CODEX_API_KEY: "fixture" })).toMatch(/API key/);
+    expect(codexRuntimeCredentialNote({})).toMatch(/existing authenticated session/);
   });
 
 });
@@ -381,9 +385,9 @@ async function invokeCiCli(event: unknown, eventName: string, extra: string[] = 
 }
 
 describe("CI CLI routing", () => {
-  it("implies live posting with no file, revision, confirmation, or ZCode flag", async () => {
+  it("implies live posting that runs the configured review, with no file, revision, confirmation, or ZCode flag", async () => {
     const { input, getPull } = await invokeCiCli({ pull_request: { number: 3, head: { sha } } }, "pull_request_target");
-    expect(input.options).toMatchObject({ repo: "owner/repo", pullNumber: 3, expectedHeadSha: sha, dryRun: false, useZCode: false, processedHeadPolicy: "normal" });
+    expect(input.options).toMatchObject({ repo: "owner/repo", pullNumber: 3, expectedHeadSha: sha, dryRun: false, useZCode: true, processedHeadPolicy: "normal" });
     expect(input.options.configPath).toBeUndefined(); expect(input.options.expectedConfigRevision).toBeUndefined(); expect(input.admitImpl).toBeUndefined();
     expect(getPull).not.toHaveBeenCalled();
   });
