@@ -288,7 +288,7 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
   });
   if (!gitDir.error && gitDir.status === 0 && gitDir.stdout.trim()) {
     const commonDir = realpathSync(gitDir.stdout.trim());
-    assertGitConfigHasNoCredentials(commonDir, [...roots, commonDir], env);
+    assertGitConfigHasNoCredentials(commonDir, [...roots, commonDir, ...sandboxSystemRoots(process.platform)], env);
     roots.push(commonDir);
   }
   const codexHome = env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex");
@@ -306,7 +306,8 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
  */
 export function assertGitConfigHasNoCredentials(commonDir: string, readableRoots: string[], env: NodeJS.ProcessEnv): void {
   const worktreesDir = join(commonDir, "worktrees");
-  const files = [join(commonDir, "config"), ...(existsSync(worktreesDir)
+  // With extensions.worktreeConfig, the main worktree's settings live in <common>/config.worktree.
+  const files = [join(commonDir, "config"), join(commonDir, "config.worktree"), ...(existsSync(worktreesDir)
     ? readdirSync(worktreesDir).map((name) => join(worktreesDir, name, "config.worktree")) : [])].filter((file) => existsSync(file));
   for (const file of files) {
     const listed = spawnSync("git", ["config", "--file", file, "--null", "--list"], { env, encoding: "utf8", timeout: 30_000 });
@@ -327,6 +328,12 @@ export function assertGitConfigHasNoCredentials(commonDir: string, readableRoots
       }
     }
   }
+}
+
+/** System directories the Codex sandbox can read under `:minimal`; empty where the platform is unsupported. */
+export function sandboxSystemRoots(platform: NodeJS.Platform): string[] {
+  return platform === "darwin" ? ["/etc", "/private/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/dev"]
+    : platform === "linux" ? ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/opt", "/dev", "/proc", "/sys", "/run", "/snap"] : [];
 }
 
 /** Oldest Codex CLI tested with the named permission profiles that confined checkout reads use. */
@@ -381,8 +388,7 @@ export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd
   try {
     const confinement = (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env);
     const platform = dependencies.platform ?? process.platform;
-    const systemRoots = platform === "darwin" ? ["/etc", "/private/etc", "/usr", "/bin", "/sbin", "/System", "/Library", "/Applications", "/dev"]
-      : platform === "linux" ? ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/opt", "/dev", "/proc", "/sys", "/run", "/snap"] : [];
+    const systemRoots = sandboxSystemRoots(platform);
     const roots = [...systemRoots, input.cwd, dirname(confinement.command), ...confinement.readableRoots].map(canonicalPath);
     for (const [kind, path] of Object.entries(input.sensitivePaths ?? {})) {
       if (!path) continue;

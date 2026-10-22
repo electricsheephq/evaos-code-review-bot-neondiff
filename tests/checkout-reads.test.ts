@@ -248,6 +248,18 @@ describe("checkout reads", () => {
     expect(() => resolveRoots()).toThrow("holds credentials");
     config("include.path", join(top, "outside.inc"));
     expect(() => resolveRoots()).not.toThrow();
+    // A system directory the sandbox can read under :minimal counts as a readable root.
+    if (process.platform === "darwin" || process.platform === "linux") {
+      config("include.path", "/etc/neondiff-fixture.inc");
+      expect(() => resolveRoots()).toThrow("holds credentials");
+    }
+    config("--unset", "include.path");
+    // With extensions.worktreeConfig, the main worktree's settings live in <common>/config.worktree.
+    config("extensions.worktreeConfig", "true");
+    config("--worktree", "http.https://github.com/.extraheader", "AUTHORIZATION: basic fixture");
+    expect(() => resolveRoots()).toThrow("holds credentials");
+    config("--worktree", "--unset", "http.https://github.com/.extraheader");
+    expect(() => resolveRoots()).not.toThrow();
   }, 30_000);
   it.each([true, false])("passes read confinement to Codex only when checkoutReads=%s", async checkoutReads => {
     const cwd = root();
