@@ -1,5 +1,11 @@
 # evaOS Code Review Bot Beta Release Runbook
 
+For stable npm versions 1.1.0 and later, follow the
+[lean release path](release-governance.md#lean-release-path-110-and-later)
+instead of the frozen 1.0.x candidate-ledger process. `release-npm.yml` owns
+publishing, provenance verification and channel read-back; this runbook still
+describes local beta-worker operations.
+
 This repository runs a live local beta worker through launchd. Treat each live
 update as a named beta release, not as an informal pull from `main`.
 
