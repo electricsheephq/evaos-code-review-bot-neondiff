@@ -14,15 +14,21 @@ on the default branch. Add your own `OPENAI_API_KEY` in repository or
 organization Actions secrets. NeonDiff uses your model access and never pays
 for or proxies model calls. Public repositories need no activation on this CI
 path; private repositories also need the `NEONDIFF_LICENSE_KEY` secret described
-below. Each license covers one GitHub organization or user account: Solo is
-$9/mo or $90/yr, Team is $290/yr.
+below. In CI a license activates once for the repository owner: Team ($290/yr)
+for an organization's repositories, Solo ($9/mo or $90/yr) for one developer's
+own account.
 
-This workflow posts a current-head review when a PR opens or becomes ready,
-or when an OWNER, MEMBER, or COLLABORATOR comments `/neondiff review` on a PR.
+This workflow posts a current-head review when a non-draft PR opens or a draft
+is marked ready for review, or when an OWNER, MEMBER, or COLLABORATOR comments
+`/neondiff review` on a PR.
 It never checks out PR code into the workflow job. NeonDiff fetches the diff and
 uses its confined review checkout; repository contents remain untrusted input.
-The separate `electricsheephq/neondiff-action` repository is not available yet;
-this workflow uses the versioned CLI directly once 1.1.0 is published.
+For most repositories, use the
+[`electricsheephq/neondiff-action@v1`](https://github.com/electricsheephq/neondiff-action)
+GitHub Action, which wraps this workflow; the workflow below does the same with
+the versioned CLI directly. In 1.1.0 a run that posts no review fails the job,
+for example a skipped outside-contributor review or a head that moved before
+the job started ([#1218](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1218)).
 
 ```yaml
 name: NeonDiff review
@@ -40,7 +46,7 @@ permissions:
 jobs:
   neondiff:
     if: >-
-      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        startsWith(github.event.comment.body, '/neondiff review') &&
