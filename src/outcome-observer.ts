@@ -529,7 +529,7 @@ export async function runScheduledObservePass(input: {
   state: ReviewStateStore;
   config: ObserveScheduleConfig | undefined;
   evidenceDir: string;
-  fetchOutcome: (target: ScheduledObserveTarget) => ObservedPullOutcome | Promise<ObservedPullOutcome>;
+  fetchOutcome: (target: ScheduledObserveTarget) => ObservedPullOutcome | undefined | Promise<ObservedPullOutcome | undefined>;
   now?: Date;
 }): Promise<ScheduledObservePassResult> {
   const schedule = input.config;
@@ -549,6 +549,7 @@ export async function runScheduledObservePass(input: {
   const observedRepos = new Set<string>();
   for (const target of targets) {
     const outcome = await input.fetchOutcome(target);
+    if (!outcome) continue;
     let labeled = 0;
     let postMergeStatus: OutcomeLedgerPostMergeStatus = outcome.merged ? "no_incident_seen" : "not_merged";
     if (outcome.merged) {

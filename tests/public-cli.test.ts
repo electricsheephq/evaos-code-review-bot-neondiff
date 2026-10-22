@@ -42,6 +42,28 @@ describe("public NeonDiff CLI surface", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it.each([["build-enrichment-comment", "--pr"], ["build-enrichment-comment", "--issue"], ["build-gitnexus-context-packet", "--pr"], ["build-github-related-context-packet", "--pr"]])("blocks non-public content before reads: %s %s", async (command, target) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-content-gate-"));
+    roots.push(root);
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url!);
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify(request.url!.endsWith("/files") ? [] : { private: true, visibility: "private", number: 1, title: "Fixture", body: "", labels: [], head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40), repo: { private: true } } }));
+    });
+    await listen(server);
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, JSON.stringify({ pilotRepos: ["fixture/private"], statePath: join(root, "state.sqlite"), workRoot: join(root, "runtime"), evidenceDir: join(root, "evidence"), github: { token: "fixture-token", apiBaseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` } }));
+      {
+        const result = await runCli([command, "--config", configPath, "--repo", "fixture/private", target, "1"]).catch((error) => error);
+        expect(requests.filter((url) => /\/(pulls|issues)\//.test(url))).toEqual([]);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toMatch(/Solo or Team license/);
+      }
+    } finally { await closeServer(server); }
+  });
+
   it("declares the neondiff package binary", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
@@ -471,6 +493,7 @@ exit 1
     const server = createServer((request: IncomingMessage, response: ServerResponse) => {
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
+      if (url.pathname === "/repos/acme/demo") { response.end(JSON.stringify({ private: false, visibility: "public" })); return; }
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/pulls/7") {
         response.end(JSON.stringify({
           number: 7,
@@ -1061,13 +1084,21 @@ exit 1
   it("runs public run-once dry-run without activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-run-once-license-cli-"));
     roots.push(root);
+    const fixture = join(root, "fixture"); mkdirSync(fixture);
+    const git = async (...args: string[]) => (await execFileAsync("git", ["-C", fixture, ...args])).stdout.trim();
+    await git("init", "--initial-branch=main");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base");
+    const base = await git("rev-parse", "HEAD"); writeFileSync(join(fixture, "fixture.txt"), "fixture\n"); await git("add", "fixture.txt");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "head");
+    const head = await git("rev-parse", "HEAD"); await git("update-ref", "refs/pull/1/head", head);
+    const gitConfig = join(root, "gitconfig"); writeFileSync(gitConfig, `[url "${fixture}"]\n insteadOf = https://github.com/acme/demo.git\n`);
     let githubRequests = 0;
     const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
       githubRequests += 1;
       response.setHeader("Content-Type", "application/json");
-      const pull = { number: 1, title: "fixture", user: { login: "fixture" }, draft: false, state: "open", head: { sha: "a".repeat(40), ref: "fixture" }, base: { sha: "b".repeat(40), repo: { full_name: "acme/demo", private: false, visibility: "public" } } };
+      const pull = { number: 1, title: "fixture", user: { login: "fixture" }, draft: false, state: "open", head: { sha: head, ref: "fixture" }, base: { sha: base, repo: { full_name: "acme/demo", private: false, visibility: "public" } } };
       const url = _request.url ?? "";
-      response.end(JSON.stringify(url.includes("/files") || url.includes("/comments") || url.includes("/reviews") ? [] : url.includes("/pulls/1") ? pull : [pull]));
+      response.end(JSON.stringify(url.includes("/files") ? [{ filename: "fixture.txt", status: "added" }] : url.includes("/comments") || url.includes("/reviews") ? [] : url.includes("/pulls/1") ? pull : [pull]));
     });
     await listen(server);
     try {
@@ -1091,7 +1122,7 @@ exit 1
         configPath,
         "--repo",
         "acme/demo", "--dry-run", "true", "--zcode", "false"
-      ]);
+      ], { env: { GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" } });
 
       expect(JSON.parse(result.stdout)).toMatchObject({
         result: { reviewed: 1, skippedLicenseGate: 0, failed: 0 }
@@ -1105,6 +1136,7 @@ exit 1
   it("allows status and coverage commands with public-only admission", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-default-deny-cli-"));
     roots.push(root);
+    const bin = join(root, "bin"); mkdirSync(bin); writeFileSync(join(bin, "ps"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     let githubRequests = 0;
     const server = createServer((_request: IncomingMessage, response: ServerResponse) => {
       githubRequests += 1;
@@ -1128,14 +1160,14 @@ exit 1
 
       for (const coverageArgs of [
         ["status", "--config", configPath],
-        ["runtime-inventory", "--config", configPath],
+        ["runtime-inventory", "--config", configPath, "--launchd-label", "com.fixture.neondiff"],
         ["queue", "--config", configPath],
         ["coverage", "--config", configPath],
         ["why", "--repo", "acme/demo", "--pr", "1", "--config", configPath],
         ["dashboard", "--operator", "true", "--config", configPath],
         ["release-status", "--coverage", "true", "--config", configPath]
       ]) {
-        const output = await runCli(coverageArgs).catch((error: { stdout: string; stderr: string }) => error);
+        const output = await runCli(coverageArgs, { env: { PATH: `${bin}:${process.env.PATH}` } }).catch((error: { stdout: string; stderr: string }) => error);
         expect(output.stderr).not.toContain("license missing");
         expect(output.stdout, `${coverageArgs[0]}: ${output.stderr}`).not.toBe("");
       }

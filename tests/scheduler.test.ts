@@ -45,6 +45,21 @@ describe("provider-aware review scheduler", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("blocks private leased jobs before status posts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-leased-gate-")); roots.push(root);
+    const config = schedulerConfig(root, []); config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    state.enqueueReviewQueueJob({ repo: "org/private", pullNumber: 1, headSha: HEAD_A, baseSha: "base" });
+    const posts: StatusCommentCall[] = []; const review = vi.fn(async () => "reviewed" as const);
+    try {
+      const result = await runScheduledCycleWithDeps({ config, state, options: { dryRun: false },
+        github: githubFromMap(new Map([["org/private", [pull("org/private", 1, HEAD_A, "base", { visibility: "private", state: "closed" })]]]), new Map(), posts), reviewPullImpl: review,
+        licenseAdmission: await createTestLicenseAdmission({ operation: "review_discovery", scope: "public", privateRepoAllowed: false }) });
+      expect(result.skippedLicenseGate).toBe(1); expect(posts).toEqual([]); expect(review).not.toHaveBeenCalled();
+      expect(state.listReviewQueueJobs()[0]?.state).toBe("blocked_on_proof");
+    } finally { state.close(); }
+  });
+
   it.each([false, true])("reviews only covered repositories with paid=%s", async (paid) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-public-worker-"));
     roots.push(root);
@@ -2533,7 +2548,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.skippedPolicy).toBe(1);
-    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "skipped"]);
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress"]);
     expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })).toHaveLength(1);
     expect(state.listReviewQueueJobs({ state: "blocked_on_proof" })[0]).toMatchObject({
       nextEligibleAt: "2026-07-02T00:15:00.000Z"

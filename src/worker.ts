@@ -853,6 +853,10 @@ export async function retryFailedHeadWithDeps(input: {
     throw new Error(`Refusing retry for repo skipped by policy: ${options.repo} (${repoPolicy.reason})`);
   }
   const pull = await github.getPull(options.repo, options.pullNumber);
+  if (!authorizeAdmissionForVisibility(input.licenseAdmission, visibilityFromPullSummary(pull), "review_discovery").ok) {
+    updateRetryQueueJobsAfterRetry({ state, ...options, status: "skipped_license_gate" });
+    return { repo: options.repo, pullNumber: options.pullNumber, headSha: options.headSha, status: "skipped_license_gate" };
+  }
   if (isClosedPull(pull)) {
     recordClosedRetrySkip({ state, repo: options.repo, pull, headSha: options.headSha });
     updateRetryQueueJobsAfterRetry({
@@ -2061,7 +2065,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const githubRelatedContext = analysisPlan?.githubRelatedContext === false
       ? {}
       : await buildGitHubRelatedContext({
-          config,
+          config, licenseAdmission: input.licenseAdmission,
           github: createGitHubRelatedContextReader(config, github),
           repo,
           pull,
@@ -3554,6 +3558,7 @@ export function buildReviewLensContext(input: {
 
 export async function buildGitHubRelatedContext(input: {
   config: BotConfig;
+  licenseAdmission?: ProductionLicenseAdmission;
   github: GitHubRelatedContextReader;
   repo: string;
   pull: PullRequestSummary;
@@ -3566,7 +3571,7 @@ export async function buildGitHubRelatedContext(input: {
   const packetResult = await buildGitHubRelatedContextPacket({
     repo: input.repo,
     pull: input.pull,
-    config: relatedConfig,
+    config: { ...relatedConfig, includeCrossRepoRefs: Boolean(input.licenseAdmission?.privateRepoAllowed) && relatedConfig.includeCrossRepoRefs },
     reader: input.github,
     ...(input.files ? { files: input.files } : {})
   });

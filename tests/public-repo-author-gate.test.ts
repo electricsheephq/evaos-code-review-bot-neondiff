@@ -140,13 +140,17 @@ describe("public repository author gate", () => {
             listIssueComments: commands, canPostAsApp: () => true, upsertIssueComment: post },
           options: { dryRun: false }, reviewPullImpl: provider, licenseAdmission: testLicenseAdmission });
         expect(result.skippedPolicy).toBe(1);
-        expect(result.queue.staleRetired).toBe(queued ? 1 : 0);
+        const licenseBlocked = queued && visibility === "unknown";
+        expect(result.skippedLicenseGate).toBe(licenseBlocked ? 1 : 0);
+        expect(result.queue.staleRetired).toBe(queued && !licenseBlocked ? 1 : 0);
         expect(provider).not.toHaveBeenCalled(); expect(post).not.toHaveBeenCalled(); expect(commands).not.toHaveBeenCalled();
-        expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
+        if (licenseBlocked) expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toBeUndefined();
+        else expect(state.getProcessedReview("org/repo", 1, pr.head.sha)).toMatchObject({ status: "skipped", error: "untrusted_author_public_repo" });
         if (queued) {
-          // Terminal, so the job is never re-leased on later cycles.
+          // Unknown visibility blocks before author gating; public author denials retire the job.
           expect(state.listReviewQueueJobsForPull({ repo: "org/repo", pullNumber: 1 })[0]).toMatchObject({
-            state: "stale_retired", lastError: "untrusted_author_public_repo" });
+            state: licenseBlocked ? "blocked_on_proof" : "stale_retired",
+            ...(!licenseBlocked ? { lastError: "untrusted_author_public_repo" } : {}) });
           const getPull = vi.fn(async () => pr);
           await runScheduledCycleWithDeps({ config: cfg, state,
             github: { listOpenPulls: async () => [], getPull, listIssueComments: commands, canPostAsApp: () => true, upsertIssueComment: post },

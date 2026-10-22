@@ -185,3 +185,5 @@ Private-repo failure copy should say:
 - Pricing implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/105
 - License activation implementation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/111
 - Public release readiness: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/396
+
+Operator status commands show open-PR metadata for every configured repository; reviewing, enriching or posting on a private repository needs a license.

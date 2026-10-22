@@ -619,7 +619,7 @@ describe("local HTML dashboard", () => {
           "openai-compatible": {
             enabled: true,
             baseUrl: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`,
-            model: "review-model"
+            model: "review-model", capabilities: { review: true, jsonOutput: true, local: true, streaming: false }
           }
         }
       }
