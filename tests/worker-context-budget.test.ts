@@ -220,7 +220,7 @@ describe("worker context budget preflight", () => {
     });
     const github = githubForPull(pull, [file]);
     if (mode !== "missing") Object.assign(github, { listPullReviewComments,
-      isBotAuthoredComment: (comment: typeof comments[number]) => comment.user.type === "Bot" && comment.user.login === "evaos-code-review-bot[bot]" });
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
     try {
       expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
       expect(createdReviews).toHaveLength(1);
@@ -902,7 +902,7 @@ describe("worker context budget preflight", () => {
       { id: 53, in_reply_to_id: 52, user: { login: "human", type: "User" } }
     ];
     const github = Object.assign(githubForPull(pull, [file]), { listPullReviewComments: async () => comments,
-      isBotAuthoredComment: (comment: typeof comments[number]) => comment.user.type === "Bot" });
+      postingIdentity: async () => ({ login: "evaos-code-review-bot[bot]", type: "Bot" as const }) });
     try {
       expect(await reviewPull({ config, github, state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true })).toBe("reviewed");
       expect(createdReviews).toHaveLength(1);

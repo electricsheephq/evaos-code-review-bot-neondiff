@@ -34,7 +34,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { GitHubApi, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
@@ -185,13 +185,16 @@ function recordConsumedAuthorizationIncident(input: {
   });
 }
 
-export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+export function buildReviewProviderMetadata(config: BotConfig, env: NodeJS.ProcessEnv = process.env): ReviewProviderMetadata {
   if (config.codexRuntime?.enabled) {
+    // providerId stays the stable registry/ledger key; the display name says which credential Codex
+    // uses. buildCodexRuntimeEnv passes either API key to the child, and Codex prefers it over OAuth.
+    const apiKey = Boolean(env.CODEX_API_KEY || env.OPENAI_API_KEY);
     return {
       providerId: "codex-cli-oauth",
       adapter: "codex-cli",
       model: config.codexRuntime.model,
-      displayName: "Codex CLI (existing OAuth session)"
+      displayName: apiKey ? "Codex CLI (API key)" : "Codex CLI (existing OAuth session)"
     };
   }
   const providerId = resolveReviewRegistryProviderId(config);
@@ -2141,7 +2144,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       try {
         const priorComments = await github.listPullReviewComments(repo, pull.number);
         priorThreadEvidence.commentsRead = priorComments.length;
-        const isOwn = (comment: (typeof priorComments)[number]) => github.isBotAuthoredComment(comment);
+        const identity = await github.postingIdentity();
+        const isOwn = (comment: (typeof priorComments)[number]) => isAuthoredBy(comment.user, identity);
         priorThreadEvidence.ownRoots = priorComments.filter((comment) => comment.in_reply_to_id == null && isOwn(comment)).length;
         answeredThreads = collectAnsweredThreads(priorComments, isOwn);
         priorThreadEvidence.answeredRoots = answeredThreads.length;
