@@ -24,11 +24,16 @@ is marked ready for review, or when an OWNER, MEMBER, or COLLABORATOR comments
 It never checks out PR code into the workflow job. NeonDiff fetches the diff and
 uses its confined review checkout; repository contents remain untrusted input.
 For most repositories, use the
-[`electricsheephq/neondiff-action@v1`](https://github.com/electricsheephq/neondiff-action)
-GitHub Action, which wraps this workflow; the workflow below does the same with
-the versioned CLI directly. In 1.1.0 a run that posts no review fails the job,
-for example a skipped outside-contributor review or a head that moved before
-the job started ([#1218](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1218)).
+[`electricsheephq/neondiff-action`](https://github.com/electricsheephq/neondiff-action)
+GitHub Action, which wraps this workflow. Pin it to a release commit, as this
+repository pins every external action:
+`uses: electricsheephq/neondiff-action@982aaa354930f9d8d69893797ae59e95ec5d4c7f # v1.0.0`
+(`@v1` follows later 1.x releases instead). The workflow below does the same
+with the versioned CLI directly. In 1.1.0 a run that posts no review fails the
+job, for example `/neondiff review` on a draft PR (comment events carry no
+draft state, so the workflow cannot filter them), a skipped outside-contributor
+review, or a head that moved before the job started
+([#1218](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1218)).
 
 ```yaml
 name: NeonDiff review
