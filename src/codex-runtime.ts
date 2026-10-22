@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
@@ -286,13 +286,47 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
   const gitDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
     cwd, env, encoding: "utf8", timeout: 30_000
   });
-  if (!gitDir.error && gitDir.status === 0 && gitDir.stdout.trim()) roots.push(realpathSync(gitDir.stdout.trim()));
+  if (!gitDir.error && gitDir.status === 0 && gitDir.stdout.trim()) {
+    const commonDir = realpathSync(gitDir.stdout.trim());
+    assertGitConfigHasNoCredentials(commonDir, [...roots, commonDir], env);
+    roots.push(commonDir);
+  }
   const codexHome = env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex");
   const codexHomeReal = existsSync(codexHome) ? realpathSync(codexHome) : codexHome;
   if (roots.some((root) => codexHomeReal === root || codexHomeReal.startsWith(`${root}/`))) {
     throw new Error("codex_runtime_read_confinement_unavailable: a readable root would expose CODEX_HOME");
   }
   return { command, readableRoots: [...new Set(roots)] };
+}
+
+/**
+ * Granting the git common dir makes its config files readable to the model. An operator's own
+ * checkout can hold a token there (an `actions/checkout` extraheader, or a remote URL with
+ * credentials), so such a checkout gets no checkout reads at all (#1196).
+ */
+export function assertGitConfigHasNoCredentials(commonDir: string, readableRoots: string[], env: NodeJS.ProcessEnv): void {
+  const worktreesDir = join(commonDir, "worktrees");
+  const files = [join(commonDir, "config"), ...(existsSync(worktreesDir)
+    ? readdirSync(worktreesDir).map((name) => join(worktreesDir, name, "config.worktree")) : [])].filter((file) => existsSync(file));
+  for (const file of files) {
+    const listed = spawnSync("git", ["config", "--file", file, "--null", "--list"], { env, encoding: "utf8", timeout: 30_000 });
+    if (listed.error || listed.status !== 0) {
+      throw new Error("codex_runtime_read_confinement_unavailable: could not read the checkout's git config");
+    }
+    for (const entry of listed.stdout.split("\0").filter(Boolean)) {
+      const separator = entry.indexOf("\n");
+      const key = (separator < 0 ? entry : entry.slice(0, separator)).toLowerCase();
+      const value = separator < 0 ? "" : entry.slice(separator + 1);
+      const userinfo = /^([a-z][a-z0-9+.-]*):\/\/([^/@\s]*)@/i.exec(value);
+      const credentialUrl = userinfo !== null && (/^https?$/i.test(userinfo[1]!) || userinfo[2]!.includes(":"));
+      const include = /^include(if\..*)?\.path$/.test(key)
+        ? resolve(dirname(file), value.replace(/^~(?=\/)/, env.HOME ?? homedir())) : undefined;
+      if (key.endsWith(".extraheader") || credentialUrl
+        || (include !== undefined && readableRoots.some((root) => include === root || include.startsWith(`${root}/`)))) {
+        throw new Error("codex_runtime_read_confinement_unavailable: the checkout's git config holds credentials");
+      }
+    }
+  }
 }
 
 /** Oldest Codex CLI tested with the named permission profiles that confined checkout reads use. */

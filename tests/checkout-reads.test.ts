@@ -214,6 +214,41 @@ describe("checkout reads", () => {
       expect(resolveTrustedCodexPath("codex", join(top, "work"), { PATH: `${join(top, "WORK", "bin")}:${bin}` })).toBe(join(bin, "codex"));
     }
   });
+  it("refuses checkout reads when the checkout's git config holds credentials", () => {
+    const top = realpathSync(root());
+    const bin = join(top, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "codex"), "#!/bin/sh\n");
+    chmodSync(join(bin, "codex"), 0o755);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: top, stdio: "pipe" });
+    git("init", "-q", "repo");
+    writeFileSync(join(top, "repo", "f.txt"), "x\n");
+    git("-C", "repo", "add", "f.txt");
+    git("-C", "repo", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "init");
+    const env = { PATH: `${bin}:${process.env.PATH}`, HOME: join(top, "home") };
+    const resolveRoots = () => resolveCodexReadConfinement(join(top, "repo"), "codex", env);
+    const config = (...args: string[]) => git("-C", "repo", "config", ...args);
+    expect(resolveRoots().readableRoots).toContain(join(top, "repo", ".git"));
+    for (const url of ["https://github.com/o/r.git", "ssh://git@github.com/o/r.git", "git@github.com:o/r.git"]) {
+      config("remote.origin.url", url);
+      expect(() => resolveRoots()).not.toThrow();
+    }
+    for (const url of ["https://x-access-token:fixture@github.com/o/r.git", "https://fixturetoken@github.com/o/r.git", "ssh://user:pw@host/r.git"]) {
+      config("remote.origin.url", url);
+      expect(() => resolveRoots()).toThrow("holds credentials");
+    }
+    config("remote.origin.url", "https://github.com/o/r.git");
+    config("http.https://github.com/.extraheader", "AUTHORIZATION: basic fixture");
+    expect(() => resolveRoots()).toThrow("holds credentials");
+    expect(resolveCheckoutReadsStatus({ checkoutReads: true, cwd: join(top, "repo"), cliPath: "codex" }, {
+      readVersion: () => "codex-cli 0.163.0", resolveReadConfinement: () => resolveRoots()
+    }).status).toBe("unavailable:confinement");
+    config("--unset", "http.https://github.com/.extraheader");
+    config("include.path", "creds.inc");
+    expect(() => resolveRoots()).toThrow("holds credentials");
+    config("include.path", join(top, "outside.inc"));
+    expect(() => resolveRoots()).not.toThrow();
+  }, 30_000);
   it.each([true, false])("passes read confinement to Codex only when checkoutReads=%s", async checkoutReads => {
     const cwd = root();
     let args: string[] = [];
