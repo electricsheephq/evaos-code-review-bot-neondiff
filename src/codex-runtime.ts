@@ -258,6 +258,62 @@ export function resolveCodexReadConfinement(cwd: string, cliPath: string, env: N
   return { command, readableRoots: [...new Set(roots)] };
 }
 
+/** Oldest Codex CLI tested with the named permission profiles that confined checkout reads use. */
+export const CODEX_CHECKOUT_READS_MIN_VERSION = "0.163.0";
+
+export type CheckoutReadsStatus = "disabled" | "enabled" | "unavailable:codex_version" | "unavailable:confinement";
+
+/** Parses `codex --version` output such as `codex-cli 0.163.0`. */
+export function parseCodexCliVersion(output: string): [number, number, number] | undefined {
+  const match = /\b(\d+)\.(\d+)\.(\d+)\b/.exec(output);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
+}
+
+export function codexCliVersionAtLeast(version: [number, number, number], minimum: string): boolean {
+  const floor = parseCodexCliVersion(minimum)!;
+  for (let index = 0; index < 3; index += 1) {
+    if (version[index] !== floor[index]) return version[index] > floor[index];
+  }
+  return true;
+}
+
+// Only successful reads are cached, so a CLI installed after startup is picked up on the next review.
+const codexCliVersionCache = new Map<string, string>();
+
+function readCodexCliVersion(cliPath: string, env: NodeJS.ProcessEnv): string | undefined {
+  const cached = codexCliVersionCache.get(cliPath);
+  if (cached !== undefined) return cached;
+  const result = spawnSync(cliPath, ["--version"], { env, encoding: "utf8", timeout: 30_000 });
+  if (result.error || result.status !== 0 || !parseCodexCliVersion(result.stdout)) return undefined;
+  codexCliVersionCache.set(cliPath, result.stdout);
+  return result.stdout;
+}
+
+/**
+ * Decides once per review whether confined checkout reads can run. When they cannot (an older
+ * Codex CLI without permission profiles, or no safe read roots), the review falls back to the
+ * diff-only invocation instead of failing under `--strict-config`.
+ */
+export function resolveCheckoutReadsStatus(input: { checkoutReads?: boolean; cwd: string; cliPath: string }, dependencies: {
+  readVersion?: (cliPath: string, env: NodeJS.ProcessEnv) => string | undefined;
+  resolveReadConfinement?: typeof resolveCodexReadConfinement;
+} = {}): { status: CheckoutReadsStatus; detail?: string } {
+  if (input.checkoutReads !== true) return { status: "disabled" };
+  const env = buildCodexRuntimeEnv(process.env);
+  const output = (dependencies.readVersion ?? readCodexCliVersion)(input.cliPath, env);
+  const version = output === undefined ? undefined : parseCodexCliVersion(output);
+  if (!version) return { status: "unavailable:codex_version", detail: "could not read `codex --version`" };
+  if (!codexCliVersionAtLeast(version, CODEX_CHECKOUT_READS_MIN_VERSION)) {
+    return { status: "unavailable:codex_version", detail: `Codex CLI ${version.join(".")} is older than ${CODEX_CHECKOUT_READS_MIN_VERSION}` };
+  }
+  try {
+    (dependencies.resolveReadConfinement ?? resolveCodexReadConfinement)(input.cwd, input.cliPath, env);
+  } catch (error) {
+    return { status: "unavailable:confinement", detail: redactSecrets(error instanceof Error ? error.message : String(error)) };
+  }
+  return { status: "enabled" };
+}
+
 function checkoutReadPermissionArgs(readableRoots: string[]): string[] {
   const entries = [":minimal", ":workspace_roots", ...readableRoots].map((root) => `${JSON.stringify(root)}="read"`);
   return [
