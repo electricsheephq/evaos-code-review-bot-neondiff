@@ -18,14 +18,23 @@ NeonDiff license; unknown or unreadable visibility fails closed. The npm CLI
 1.0.x requires API-backed activation for every repository.
 
 Paid licenses are flat, with no per-seat pricing: Solo is $9/mo or $90/yr for
-one developer, and Team is $290/yr per GitHub organization. Each license
-activates one review worker machine; every developer whose pull requests that
-worker reviews is covered. Solo plans include
+one developer, and Team is $290/yr per GitHub organization. One license covers
+one GitHub organization or user account and activates one review worker machine;
+every developer whose pull requests that worker reviews is covered. Solo plans include
 a 7-day trial, Team plans include a 30-day trial, and existing subscribers keep
 their current price. Legacy lifetime licenses remain honored for existing
 holders but are no longer sold. Licenses do not include hosted model credits,
 unlimited SaaS inference, or bundled provider tokens: you bring your own
 provider key or local model.
+
+## Local Development Exemption
+
+`review-local` is a local development tool that posts nothing and needs no activation,
+including for a private checkout: it reviews a local diff without GitHub calls.
+This explicit exemption supports local development without granting GitHub
+review posting or self-hosted worker entitlement. You bring your own OpenAI
+API key or Codex login on your own machine; NeonDiff never pays for or proxies
+model calls.
 
 ## Allowed Without A Paid License
 
@@ -127,15 +136,15 @@ Use:
 
 Avoid:
 
-- "open source"
-- "MIT licensed"
-- "Apache licensed"
-- "free for private repositories"
-- "free for all commercial use"
-- "hosted review SaaS"
-- "enterprise-ready"
-- "production-ready"
-- "CodeRabbit parity" unless the eval gate for that exact claim passes
+- Do not describe NeonDiff as "open source"
+- Do not claim "MIT licensed"
+- Do not claim "Apache licensed"
+- Do not claim "free for private repositories"
+- Do not claim "free for all commercial use"
+- Do not claim "hosted review SaaS"
+- Do not claim "enterprise-ready"
+- Do not claim "production-ready"
+- Do not claim "CodeRabbit parity" unless the eval gate for that exact claim passes
 
 ## Attribution And Provenance
 

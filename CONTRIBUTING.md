@@ -104,8 +104,8 @@ Agents should read [AGENTS.md](AGENTS.md) before editing this repository.
 ## Pull Request Expectations
 
 - Preserve source-available beta wording unless #104 is updated with approved license text.
-- Preserve mandatory API-backed activation for private, internal, and commercial
-  repository work, and fail closed on unknown visibility; the "no free-use bypass"
+- Preserve mandatory API-backed activation for private, internal, and unknown-visibility
+  repository work (including commercial non-public code); the "no free-use bypass"
   rule protects the PRIVATE-entitlement boundary. From 1.1.0, review of
   repositories that GitHub reports as public is free with no license key through
   the GitHub Action and `neondiff review-pr --ci` (product decision 2026-10-22 —

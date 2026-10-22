@@ -16,7 +16,7 @@ function runGuardWith(readmePrefix: string, transform?: (text: string, path: str
     if (transform) writeFileSync(join(root, path), transform(readFileSync(path, "utf8"), path));
     else copyFileSync(path, join(root, path));
   }
-  // Prepend: the guard exempts matches with boundary words ("not", "never", ...) in the 12 lines before them.
+  // Prepend fixtures without replacing the required canonical claims.
   const readme = readFileSync(join(root, "README.md"), "utf8");
   writeFileSync(join(root, "README.md"), `${readmePrefix}\n\n${readme}`);
   return spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
@@ -74,4 +74,35 @@ describe("public claims guard", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/missing required public boundary .*1\\\.0\\\.x/);
   });
+});
+
+// Lane B items 5 and 6: unrelated disclaimers never scope another sentence.
+it.each(["Do not misstate policy.\n\n\n\n", "Do not misstate policy. "])("rejects private-free claims after an unrelated disclaimer: %s", (prefix) => {
+  expect(runGuardWith(`${prefix}NeonDiff is free for private repositories.`).status).toBe(1);
+});
+it.each([
+  "From NeonDiff 1.1.0, all public repositories are free everywhere, including daemon and local review-pr.",
+  "NeonDiff is free for open source.",
+  "Public repos are free.",
+  "Free review for public repositories.",
+  "Public repos are free. Use the GitHub Action and `neondiff review-pr --ci`."
+])("rejects an unscoped public-free paraphrase: %s", (claim) => {
+  expect(runGuardWith(claim).status).toBe(1);
+});
+it.each([
+  "Public repos are free through `neondiff review-pr --ci`.",
+  "Free review for public repositories through the GitHub Action.",
+  "NeonDiff is free for open source through `neondiff review-pr --ci`.",
+  "NeonDiff is not free for private repositories.",
+  "Avoid: \"free for private repositories\""
+])("allows scoped or explicitly disallowed copy: %s", (claim) => {
+  expect(runGuardWith(claim).status).toBe(0);
+});
+// Review of lane B: the canonical claim keeps both surfaces and no exemption; a trailing negation exempts nothing.
+it.each([
+  "From 1.1.0, review of repositories that GitHub reports as public is free on every surface, so you never need a license.",
+  "From 1.1.0, review of repositories that GitHub reports as public is free in the Mac app and the GitHub Action.",
+  "Public repositories are free everywhere and never need a license."
+])("rejects a broad public-free claim despite negation or a single surface: %s", (claim) => {
+  expect(runGuardWith(claim).status).toBe(1);
 });

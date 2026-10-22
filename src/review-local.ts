@@ -39,8 +39,20 @@ export function parseLocalDiff(diff: string): PullFilePatch[] {
     const metadata = hunk < 0 ? lines : lines.slice(0, hunk);
     // Git ends an unquoted ---/+++ name that contains a space with a tab.
     const headerPath = (prefix: string) => metadata.find(x => x.startsWith(prefix))?.slice(4).replace(/^([^"].*)\t$/, "$1");
-    const old = gitPath(headerPath("--- ") ?? header[1]!);
-    const next = gitPath(headerPath("+++ ") ?? header[2]!);
+    let oldHeader = header[1]!, nextHeader = header[2]!;
+    // Unquoted equal names can themselves contain " b/"; split at the midpoint.
+    const rest = lines[0]!.slice("diff --git ".length), length = (rest.length - 5) / 2;
+    if (rest.startsWith("a/") && Number.isInteger(length)) {
+      const name = rest.slice(2, 2 + length);
+      if (rest === `a/${name} b/${name}`) { oldHeader = `a/${name}`; nextHeader = `b/${name}`; }
+    }
+    const metadataPath = (side: "from" | "to") => {
+      const line = metadata.find(x => x.startsWith(`rename ${side} `) || x.startsWith(`copy ${side} `));
+      return line === undefined ? undefined : gitPath(line.slice(line.indexOf(` ${side} `) + side.length + 2));
+    };
+    const oldMeta = metadataPath("from"), nextMeta = metadataPath("to");
+    const old = headerPath("--- ") !== undefined ? gitPath(headerPath("--- ")!) : oldMeta !== undefined ? `a/${oldMeta}` : gitPath(oldHeader);
+    const next = headerPath("+++ ") !== undefined ? gitPath(headerPath("+++ ")!) : nextMeta !== undefined ? `b/${nextMeta}` : gitPath(nextHeader);
     const filename = (next === "/dev/null" ? old : next).slice(2);
     const patch = hunk < 0 ? "" : lines.slice(hunk).join("\n");
     return { filename, patch, patchComplete: true,
@@ -114,6 +126,9 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   // Decided once, as in the worker: without a supported Codex CLI or confinement the review falls back to diff-only.
   const readsStatus = resolveCheckoutReadsStatus({ checkoutReads: runtime.checkoutReads, cwd: repoPath, cliPath: runtime.cliPath });
   const checkoutReads = readsStatus.status === "enabled";
+  if (checkoutReads && git("status", "--porcelain=v1", "--untracked-files=all").trim()) {
+    throw new Error("review-local --checkout-reads requires a clean checkout (commit/stash or use a detached worktree)");
+  }
   if (readsStatus.status.startsWith("unavailable:")) console.warn(`[checkout-reads] ${readsStatus.status}: ${readsStatus.detail ?? "unavailable"}; running a diff-only review`);
   console.log(`model=${runtime.model} effort=${runtime.reasoningEffort} checkout_reads=${checkoutReads}`);
   const diffPath = input("diff-file", "RB_DIFF");

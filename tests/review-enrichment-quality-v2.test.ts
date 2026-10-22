@@ -419,3 +419,11 @@ describe("review and issue-enrichment quality v2", () => {
     })).toBe(false);
   });
 });
+
+it.each([
+  "Review this pull request for every real defect",
+  "Use P2 for real defects with limited impact"
+])("rejects a standalone recall instruction echo: %s", (echo) => {
+  expect(() => assertPublicReviewOutputSafe(echo, reviewPromptForbiddenFragments()))
+    .toThrow("public_review_config_leak_rejected");
+});

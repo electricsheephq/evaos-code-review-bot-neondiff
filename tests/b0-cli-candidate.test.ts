@@ -113,6 +113,7 @@ describe("B0 access-controlled CLI candidate", () => {
       "docs/providers.md",
       "docs/license-boundary.md",
       "docs/pricing.md",
+      "docs/review-local.md",
       "docs/schema/neondiff-config.schema.json",
       "docs/systemd.md",
       "systemd/neondiff.service.example",
