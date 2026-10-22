@@ -45,9 +45,12 @@ jobs:
         id: route
         with:
           script: |
-            const tag = context.payload.release?.tag_name ?? '';
+            // A manual dispatch names its tag in inputs; 1.1.0+ must never reach the legacy publisher.
+            const tag = context.eventName === 'workflow_dispatch'
+              ? context.payload.inputs?.tag ?? ''
+              : context.payload.release?.tag_name ?? '';
             const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
-            const lean = context.eventName === 'release' && match &&
+            const lean = (context.eventName === 'release' || context.eventName === 'workflow_dispatch') && match &&
               (BigInt(match[1]) > 1n || (BigInt(match[1]) === 1n && BigInt(match[2]) >= 1n));
             if (lean) core.notice('handled by release-npm.yml');
             core.setOutput('legacy', !lean);

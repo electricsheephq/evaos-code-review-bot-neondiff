@@ -23,6 +23,14 @@ export function verifyLeanPack(packPath, tarballPath, version) {
   return pack;
 }
 
+export function isNewerStableVersion(candidate, version) {
+  const parts = (value) => (/^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(value)) ?? []).slice(1).map(Number);
+  const [left, right] = [parts(candidate), parts(version)];
+  if (left.length !== 3 || right.length !== 3) return false;
+  for (let index = 0; index < 3; index += 1) if (left[index] !== right[index]) return left[index] > right[index];
+  return false;
+}
+
 export function classifyLeanRelease(tag, release, annotation) {
   return /^v\d+\.\d+\.\d+$/.test(tag) && isLeanReleaseVersion(tag) &&
     release.tag_name === tag && release.draft === false && release.prerelease === false &&
@@ -79,8 +87,14 @@ export async function publishLeanRelease(pack, tarball, run = npm, wait = (ms) =
   const audit = JSON.parse(required(["audit", "signatures", "--json", "--include-attestations"], { cwd }).stdout);
   ensure(Array.isArray(audit.invalid) && audit.invalid.length === 0 && Array.isArray(audit.missing) && audit.missing.length === 0 &&
     audit.verified?.some((item) => item.name === "neondiff" && item.version === pack.version && item.attestations), "neondiff signature/attestation was not verified");
-  required(["dist-tag", "add", identity, "latest"]);
-  await poll(["view", "neondiff", "dist-tags.latest", "--json", "--prefer-online"], pack.version);
+  // A retry of an older release must never move latest backward.
+  const latest = scalar(required(["view", "neondiff", "dist-tags.latest", "--json", "--prefer-online"]));
+  if (isNewerStableVersion(latest, pack.version)) {
+    console.log(`::notice::npm latest is ${latest}, newer than ${pack.version}; latest stays unchanged`);
+  } else {
+    required(["dist-tag", "add", identity, "latest"]);
+    await poll(["view", "neondiff", "dist-tags.latest", "--json", "--prefer-online"], pack.version);
+  }
   const cleanup = run(["dist-tag", "rm", "neondiff", "next"]);
   if (cleanup.status !== 0) console.error("next cleanup failed; latest was verified (best effort)");
   const tags = JSON.parse(required(["view", "neondiff", "dist-tags", "--json", "--prefer-online"]).stdout);

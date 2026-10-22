@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { isLeanReleaseVersion } from "../src/release-version.js";
 import { readPublicReleaseManifestStatus } from "../src/release-status.js";
 // @ts-expect-error Repository scripts run directly under Node 26.
-import { classifyLeanRelease, publishLeanRelease } from "../scripts/release-npm.mjs";
+import { classifyLeanRelease, isNewerStableVersion, publishLeanRelease } from "../scripts/release-npm.mjs";
 
 describe("lean npm release routing", () => {
   it("keeps 1.0.6 ledger-gated and exempts 1.1.0 without claiming publication", () => {
@@ -35,14 +35,15 @@ describe("lean npm release routing", () => {
 
   it.each([
     ["release", "v1.0.6", true], ["release", "v1.1.0", false],
-    ["release", "v2.0.0", false], ["workflow_dispatch", "v1.1.0", true]
+    ["release", "v2.0.0", false], ["workflow_dispatch", "v1.1.0", false],
+    ["workflow_dispatch", "v1.0.6", true], ["workflow_dispatch", "v2.3.4", false]
   ])("routes legacy %s %s", (eventName, tag, expected) => {
     const workflow = parse(readFileSync(".github/workflows/publish-npm.yml", "utf8"));
     const script = workflow.jobs.release_route.steps[0].with.script;
     const outputs: Record<string, boolean> = {};
     const notices: string[] = [];
     new Function("context", "core", script)(
-      { eventName, payload: { release: { tag_name: tag } } },
+      { eventName, payload: eventName === "release" ? { release: { tag_name: tag } } : { inputs: { tag } } },
       { setOutput: (key: string, value: boolean) => { outputs[key] = value; }, notice: (value: string) => notices.push(value) }
     );
     expect(outputs.legacy).toBe(expected);
@@ -54,6 +55,26 @@ describe("lean npm release routing", () => {
 
 describe("lean npm publication sequence", () => {
   const pack = { name: "neondiff", version: "1.1.0", shasum: "a".repeat(40), integrity: "sha512-fixture" };
+  it.each([
+    ["1.2.0", "1.1.0", true], ["1.1.0", "1.1.0", false], ["1.0.6", "1.1.0", false],
+    ["1.10.0", "1.9.0", true], ["2.0.0-rc.1", "1.1.0", false], [undefined, "1.1.0", false]
+  ])("isNewerStableVersion(%s, %s) = %s", (candidate, version, expected) => {
+    expect(isNewerStableVersion(candidate, version)).toBe(expected);
+  });
+  it("never moves latest backward when an older release is retried", async () => {
+    const calls: string[] = [];
+    const run = (args: string[]) => {
+      calls.push(args.join(" "));
+      const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist-tags.latest" ? "1.2.0" :
+        args[2] === "dist-tags" ? { latest: "1.2.0", next: "1.1.0" } :
+        args[2] === "dist.attestations.url" ? "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@1.1.0" :
+        args[0] === "audit" ? { invalid: [], missing: [], verified: [{ name: "neondiff", version: "1.1.0", attestations: {} }] } : {};
+      return { status: 0, stdout: JSON.stringify(value), stderr: "" };
+    };
+    await publishLeanRelease(pack, "fixture.tgz", run, async () => {}, () => 0);
+    expect(calls).not.toContain("dist-tag add neondiff@1.1.0 latest");
+    expect(calls.some((call) => call.startsWith("publish "))).toBe(false);
+  });
   it.each([false, true])("verifies bytes and attestation before promotion (existing=%s)", async (existing) => {
     const calls: string[] = [];
     let clock = 0;
