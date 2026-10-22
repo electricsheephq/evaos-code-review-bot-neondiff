@@ -42,6 +42,11 @@ export function classifyLeanRelease(tag, release, annotation) {
     !hasDesktopOnlyMarker(annotation);
 }
 
+// Only an annotated tag can carry the desktop-only marker, so a publishable lean tag must be one.
+export function requireAnnotatedLeanTag(eligible, tagType) {
+  ensure(!eligible || tagType === "tag", "lean npm release tags must be annotated (git tag -a); a lightweight tag cannot carry the desktop-only marker");
+}
+
 function npm(args, options = {}) {
   const result = spawnSync("npm", [...args, "--fetch-retries=0", "--fetch-timeout=25000"], {
     encoding: "utf8", timeout: 120_000, ...options
@@ -85,6 +90,7 @@ export async function publishLeanRelease(pack, tarball, run = npm, wait = (ms) =
     required(["publish", resolve(tarball), "--provenance", "--access", "public", "--tag", "next"]);
   }
   await poll(["view", identity, "dist.shasum", "--json", "--prefer-online"], pack.shasum);
+  ensure(scalar(required(["view", identity, "dist.integrity", "--json", "--prefer-online"])) === pack.integrity, "npm integrity differs from packed integrity");
   const provenanceUrl = scalar(required(["view", identity, "dist.attestations.url", "--json", "--prefer-online"]));
   ensure(provenanceUrl === `https://registry.npmjs.org/-/npm/v1/attestations/${identity}`, "missing npm provenance URL");
   const cwd = mkdtempSync(join(tmpdir(), "neondiff-signatures-"));
@@ -122,9 +128,10 @@ async function main() {
   if (mode === "classify") {
     const event = json(process.env.GITHUB_EVENT_PATH);
     const release = process.env.GITHUB_EVENT_NAME === "release" ? event.release : JSON.parse(execFileSync("gh", ["api", `repos/${process.env.GITHUB_REPOSITORY}/releases/tags/${tag}`], { encoding: "utf8", timeout: 30_000 }));
-    let annotation = "";
-    if (git("cat-file", "-t", tag) === "tag") annotation = execFileSync("git", ["cat-file", "tag", tag], { encoding: "utf8" }).split("\n\n").slice(1).join("\n\n");
+    const tagType = git("cat-file", "-t", tag);
+    const annotation = tagType === "tag" ? execFileSync("git", ["cat-file", "tag", tag], { encoding: "utf8" }).split("\n\n").slice(1).join("\n\n") : "";
     const eligible = classifyLeanRelease(tag, release, annotation);
+    requireAnnotatedLeanTag(eligible, tagType);
     output("publish", eligible);
     if (!eligible) { console.log("::notice::Not a stable lean npm release; skipping"); return; }
     ensure(json("package.json").version === tag.slice(1), "package version does not match tag");
@@ -148,7 +155,7 @@ async function main() {
     const fixture = (args) => {
       console.log(`dry-run: npm ${args.join(" ")}`);
       let value;
-      if (args[0] === "view") value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist-tags.latest" ? pack.version : args[2] === "dist-tags" ? { latest: pack.version } : `https://registry.npmjs.org/-/npm/v1/attestations/neondiff@${pack.version}`;
+      if (args[0] === "view") value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist.integrity" ? pack.integrity : args[2] === "dist-tags.latest" ? pack.version : args[2] === "dist-tags" ? { latest: pack.version } : `https://registry.npmjs.org/-/npm/v1/attestations/neondiff@${pack.version}`;
       if (args[0] === "audit") value = { invalid: [], missing: [], verified: [{ name: "neondiff", version: pack.version, attestations: {} }] };
       return { status: 0, stdout: JSON.stringify(value ?? {}), stderr: "" };
     };

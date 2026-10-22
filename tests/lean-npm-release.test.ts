@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { isLeanReleaseVersion } from "../src/release-version.js";
 import { readPublicReleaseManifestStatus } from "../src/release-status.js";
 // @ts-expect-error Repository scripts run directly under Node 26.
-import { classifyLeanRelease, hasDesktopOnlyMarker, isNewerStableVersion, publishLeanRelease } from "../scripts/release-npm.mjs";
+import { classifyLeanRelease, hasDesktopOnlyMarker, isNewerStableVersion, publishLeanRelease, requireAnnotatedLeanTag } from "../scripts/release-npm.mjs";
 
 describe("lean npm release routing", () => {
   it("keeps 1.0.6 ledger-gated and exempts 1.1.0 without claiming publication", () => {
@@ -64,7 +64,7 @@ describe("lean npm publication sequence", () => {
   const fixtureRun = (calls: string[], tags: Record<string, string>, published = true) => (args: string[]) => {
     calls.push(args.join(" "));
     if (args[2] === "dist.shasum" && !published) return { status: 1, stdout: "", stderr: "E404" };
-    const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist-tags.latest" ? tags.latest :
+    const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist.integrity" ? pack.integrity : args[2] === "dist-tags.latest" ? tags.latest :
       args[2] === "dist-tags" ? tags :
       args[2] === "dist.attestations.url" ? "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@1.1.0" :
       args[0] === "audit" ? { invalid: [], missing: [], verified: [{ name: "neondiff", version: "1.1.0", attestations: {} }] } : {};
@@ -85,6 +85,19 @@ describe("lean npm publication sequence", () => {
       .rejects.toThrow(/release tag ref/);
     expect(calls.some((call) => call.startsWith("publish "))).toBe(false);
   });
+  it("refuses a publishable lean release on a lightweight tag", () => {
+    expect(() => requireAnnotatedLeanTag(true, "commit")).toThrow(/must be annotated/);
+    expect(() => requireAnnotatedLeanTag(true, "tag")).not.toThrow();
+    expect(() => requireAnnotatedLeanTag(false, "commit")).not.toThrow();
+  });
+  it("refuses promotion when the registry integrity differs from the packed integrity", async () => {
+    const calls: string[] = [];
+    let clock = 0;
+    const base = fixtureRun(calls, { latest: "1.0.6" });
+    const run = (args: string[]) => args[2] === "dist.integrity" ? (calls.push(args.join(" ")), { status: 0, stdout: JSON.stringify("sha512-other"), stderr: "" }) : base(args);
+    await expect(publishLeanRelease(pack, "fixture.tgz", run, async (ms: number) => { clock += ms; }, () => clock)).rejects.toThrow(/integrity/);
+    expect(calls.some((call) => call.startsWith("dist-tag add"))).toBe(false);
+  });
   it("honours the desktop-only marker on every lean stable tag", () => {
     const marker = "NeonDiff-Release-Class: desktop-only";
     expect(hasDesktopOnlyMarker(`Notes\n${marker}\n`)).toBe(true);
@@ -98,7 +111,10 @@ describe("lean npm publication sequence", () => {
   it("keeps 1.1.0+ release events of the legacy workflow out of the shared publish group", () => {
     const legacy = parse(readFileSync(".github/workflows/publish-npm.yml", "utf8"));
     const lean = parse(readFileSync(".github/workflows/release-npm.yml", "utf8"));
-    expect(lean.concurrency.group).toBe("publish-npm-neondiff");
+    expect(lean.concurrency.group).toContain("github.event_name == 'workflow_dispatch'");
+    expect(lean.concurrency.group).toContain("!startsWith(github.event.release.tag_name, 'v1.0.')");
+    expect(lean.concurrency.group).toContain("!github.event.release.prerelease");
+    expect(lean.concurrency.group).toContain("&& 'publish-npm-neondiff' || format('release-npm-route-{0}', github.run_id)");
     expect(legacy.concurrency.group).toContain("!startsWith(github.event.release.tag_name, 'v1.0.')");
     expect(legacy.concurrency.group).toContain("format('publish-npm-route-{0}', github.run_id)");
     expect(legacy.concurrency.group).toContain("|| 'publish-npm-neondiff'");
@@ -107,7 +123,7 @@ describe("lean npm publication sequence", () => {
     const calls: string[] = [];
     const run = (args: string[]) => {
       calls.push(args.join(" "));
-      const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist-tags.latest" ? "1.2.0" :
+      const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist.integrity" ? pack.integrity : args[2] === "dist-tags.latest" ? "1.2.0" :
         args[2] === "dist-tags" ? { latest: "1.2.0", next: "1.1.0" } :
         args[2] === "dist.attestations.url" ? "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@1.1.0" :
         args[0] === "audit" ? { invalid: [], missing: [], verified: [{ name: "neondiff", version: "1.1.0", attestations: {} }] } : {};
@@ -127,7 +143,7 @@ describe("lean npm publication sequence", () => {
       if (args[2] === "dist.shasum" && ++lookups === 1 && !existing) return { status: 1, stdout: "", stderr: "E404" };
       if (args[2] === "dist.shasum" && lookups === 2) return { status: 1, stdout: "", stderr: "temporary registry failure" };
       if (command === "dist-tag rm neondiff next") return { status: 1, stdout: "", stderr: "cleanup failure" };
-      const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist-tags.latest" ? pack.version :
+      const value = args[2] === "dist.shasum" ? pack.shasum : args[2] === "dist.integrity" ? pack.integrity : args[2] === "dist-tags.latest" ? pack.version :
         args[2] === "dist-tags" ? { latest: "1.1.0", next: "1.1.0" } :
         args[2] === "dist.attestations.url" ? "https://registry.npmjs.org/-/npm/v1/attestations/neondiff@1.1.0" :
         args[0] === "audit" ? { invalid: [], missing: [], verified: [{ name: "neondiff", version: "1.1.0", attestations: {} }] } : {};

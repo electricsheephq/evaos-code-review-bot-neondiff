@@ -19,7 +19,9 @@ permissions:
   checks: read
 
 concurrency:
-  group: publish-npm-neondiff
+  # Only runs that can publish join the shared npm group. Routing-only release events
+  # (1.0.x, prereleases, build metadata) get their own group, so they never replace a pending publisher.
+  group: ${{ (github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'v0.') && !startsWith(github.event.release.tag_name, 'v1.0.') && !contains(github.event.release.tag_name, '-') && !contains(github.event.release.tag_name, '+') && !github.event.release.prerelease)) && 'publish-npm-neondiff' || format('release-npm-route-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
