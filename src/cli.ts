@@ -134,7 +134,7 @@ import { aggregateCalibrationLabels, writeCalibrationAggregatePacket } from "./c
 import { runCalibrationPromotion } from "./calibration-promote.js";
 import { writePrecisionBadgeEndpoint } from "./precision-badge.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
-import { isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns } from "./worker.js";
+import { createPublicRelatedContextCoverage, isSuccessfulRetryStatus, retryFailedHead, retryProviderCooldowns, visibilityFromRepositorySummary } from "./worker.js";
 import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
@@ -1174,7 +1174,8 @@ async function main(): Promise<void> {
     };
     applyRuntimeGitHubCredentials(githubConfig);
     const github = new GitHubApi(githubConfig);
-    if (!await repositoryContentCovered(github, repo, commandAdmission)) throw new Error("A Solo or Team license is required for this repository.");
+    const visibility = visibilityFromRepositorySummary(await github.getRepo(repo));
+    if (!commandAdmission || !authorizeAdmissionForVisibility(commandAdmission, visibility).ok) throw new Error("A Solo or Team license is required for this repository.");
     const pull = await github.getPull(repo, pullNumber);
     const result = await buildGitHubRelatedContextPacket({
       repo,
@@ -1190,7 +1191,9 @@ async function main(): Promise<void> {
         ...(args["include-cross-repo-refs"] ? { includeCrossRepoRefs: parseBooleanArg(args["include-cross-repo-refs"], "--include-cross-repo-refs") } : {})
       },
       reader: github,
-      repositoryCovered: (refRepo) => repositoryContentCovered(github, refRepo, commandAdmission),
+      repositoryCovered: visibility === "public" ? createPublicRelatedContextCoverage(github, repo)
+        : (refRepo) => repositoryContentCovered(github, refRepo, commandAdmission),
+      concealUncheckedRepositories: visibility === "public",
       generatedAt
     });
     if (args["output-dir"]) {
