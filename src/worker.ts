@@ -2685,7 +2685,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
 async function resolveScopedReviewAdmission(config: BotConfig, github: GitHubApi, repo: string): Promise<ProductionLicenseAdmission> {
   const visibility = visibilityFromRepositorySummary(await github.getRepo(repo));
-  const machineId = await activateCiLicenseForReview(config, repo, visibility);
+  const machineId = await activateCiLicenseForReview(config, visibility);
   const result = await requireActiveProductionLicense({ operation: "review_cycle", config: config.license!, repo, visibility, machineId });
   if (!result.ok) throw new Error(`license ${result.decision.status}: ${result.decision.detail}`);
   return result.admission;

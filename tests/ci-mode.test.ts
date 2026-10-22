@@ -141,12 +141,20 @@ describe("CI owner license admission", () => {
 
   function apiDouble() {
     let seatOwner: string | undefined;
+    let boundRepo: string | undefined;
     const requests: { path: string; repo: string; machineId: string }[] = [];
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       const path = new URL(String(url)).pathname;
       requests.push({ path, repo: body.repo, machineId: body.machineId });
-      if (path.endsWith("/activate") && (!seatOwner || seatOwner === body.machineId)) seatOwner = body.machineId;
+      // Mirrors the license service: an activation that named a repo refuses a different repo.
+      if (path.endsWith("/activate") && seatOwner === body.machineId && boundRepo && body.repo && boundRepo !== body.repo) {
+        return new Response(JSON.stringify({ status: "scope_mismatch", detail: "license activation is already bound to a different repository" }), { status: 409 });
+      }
+      if (path.endsWith("/activate") && (!seatOwner || seatOwner === body.machineId)) {
+        seatOwner = body.machineId;
+        boundRepo ??= body.repo;
+      }
       if (seatOwner !== body.machineId) return new Response(JSON.stringify({ status: "seat_exhausted", detail: fakeKey }), { status: 409 });
       return new Response(JSON.stringify({ status: "active", repoVisibilityScope: "all", privateRepoAllowed: true, updateEntitlement: true }));
     });
@@ -196,7 +204,8 @@ describe("CI owner license admission", () => {
     }
     expect(requests.map((r) => r.path)).toEqual(["/v1/license/activate", "/v1/license/validate", "/v1/license/activate", "/v1/license/validate"]);
     expect(new Set(requests.map((r) => r.machineId))).toEqual(new Set([ciLicenseMachineId({ GITHUB_REPOSITORY_OWNER_ID: "123" })]));
-    expect(requests.map((r) => r.repo)).toEqual(["owner/first", "owner/first", "renamed/second", "renamed/second"]);
+    // Owner-scoped activation names no repo, so a second repository under the same owner is admitted.
+    expect(requests.map((r) => r.repo)).toEqual([undefined, "owner/first", undefined, "renamed/second"]);
     const other = fixture("other/repo", "124");
     expect(await rejectedReview(other.options)).toContain(conflict);
     expect(requests.map((r) => r.path).slice(4)).toEqual(["/v1/license/activate"]);

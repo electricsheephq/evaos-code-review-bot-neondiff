@@ -17,9 +17,14 @@ export function ciLicenseMachineId(env: NodeJS.ProcessEnv = process.env): string
   return createHash("sha256").update("neondiff-ci:owner:" + ownerId).digest("base64url");
 }
 
-/** Called once at scoped admission, before checkout, providers, or review posting. */
+/**
+ * Called once at scoped admission, before checkout, providers, or review posting.
+ * Activation is owner-scoped: it omits `repo`, since the license API binds an
+ * activation to the first repository it names and would refuse every later
+ * repository under the same owner.
+ */
 export async function activateCiLicenseForReview(
-  config: BotConfig, repo: string, visibility: "public" | "private" | "unknown", fetchImpl?: typeof fetch
+  config: BotConfig, visibility: "public" | "private" | "unknown", fetchImpl?: typeof fetch
 ): Promise<string | undefined> {
   if (!ciMachineIds.has(config) || visibility === "public") return undefined;
   const license = resolveProductionLicensePolicy(config.license!);
@@ -29,7 +34,7 @@ export async function activateCiLicenseForReview(
   if (!machineId) throw new Error("CI license activation requires a positive integer GITHUB_REPOSITORY_OWNER_ID");
   const licenseKey = readProductionFileLicenseSecret(license.keyPath);
   if (!licenseKey) throw new Error(missingKey);
-  const activated = await callLicenseApi({ config: license, path: "/v1/license/activate", licenseKey, repo, machineId, fetchImpl });
+  const activated = await callLicenseApi({ config: license, path: "/v1/license/activate", licenseKey, machineId, fetchImpl });
   if (!activated.ok) {
     if (activated.status === "scope_mismatch") {
       throw new Error("this license is active for a different GitHub organization or account; deactivate it there or use another license");
