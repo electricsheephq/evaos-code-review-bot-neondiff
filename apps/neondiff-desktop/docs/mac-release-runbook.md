@@ -24,6 +24,14 @@ Resolve construction inputs and credentials first; collect artifact verification
 and accepted promotion evidence afterward. Manual copy, source reset, rebuild, LaunchAgent
 restart, database edit, or ad hoc feed mutation is not a supported substitute.
 
+## Lean beta path
+
+The **beta** channel follows the lean release checklist. Its steps are in
+[`docs/beta-release-runbook.md`, "Desktop (Mac) beta"](../../../docs/beta-release-runbook.md#desktop-mac-beta).
+For the beta channel, the product and release manager's lean plan supersedes the
+#610 ceremony and the #895 transition gate below. Those still apply to a stable
+(GA) channel.
+
 ## Release State Gates
 
 Keep these release states independent. Passing one state never implies the next
