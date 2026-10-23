@@ -645,12 +645,25 @@ when a docs file is not warranted:
 - provider cooldown rows:
 - public manifest:
 
+## Notes
+
+- What changed:
+- What did not change:
+- Open follow-ups:
+```
+
 ## Desktop (Mac) beta
 
 The lean release checklist in [`release-governance.md`](release-governance.md) replaces the #610
 ceremony and the #895 transition gate for the Desktop **beta** channel.
 `apps/neondiff-desktop/docs/mac-release-runbook.md` stays the reference for a
 stable channel. This path was first used for `1.1.0-beta.90`.
+
+**0. Before the tag.** This is the [Pre-Release Gate](release-governance.md#pre-release-gate) as it applies to a Desktop beta:
+- The source commit is on `main`, and its required checks (`Build, test, and package`, `Swift desktop gate`) are green.
+- No open review thread on the PRs it ships is merge-blocking.
+- The release notes (the GitHub release body) are drafted. They name the source SHA, the PRs shipped, the validation run, and the rollback. For a Desktop beta they serve as the `docs/releases/<version>.md` packet.
+- The public-release manifest's license and checkout proofs gate npm and stable releases, not the Desktop beta channel.
 
 **1. Identity.**
 - Validators accept only `1.1.0-beta.N`. By convention the build is 11004 + N (beta.90 is build 11094); nothing enforces the formula, so check it by hand. Builds must only increase.
@@ -688,7 +701,7 @@ sign "$B/Autoupdate"
 sign "$B/Updater.app"
 sign "$APP/Contents/Frameworks/Sparkle.framework"
 sign "$APP"
-codesign --verify --deep --strict --verbose=2 $APP
+codesign --verify --deep --strict --verbose=2 "$APP"
 ```
 
 **4. Notarize, staple, verify.**
@@ -699,6 +712,7 @@ codesign --verify --deep --strict --verbose=2 $APP
 **5. Package and sign the update.**
 - Re-zip the **stapled** app as `NeonDiff-1.1.0-beta.N-build<B>-macOS.zip`. The zip sent to Apple has no ticket.
 - Record `shasum -a 256` and the byte length.
+- Check the signing key first. `sign_update --verify` checks against the keychain key's own public half, so on its own it cannot catch a key that differs from the app's. `.build/artifacts/sparkle/Sparkle/bin/generate_keys -p` must print exactly the app's `SUPublicEDKey` (`/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist"`). If they differ, stop: existing clients would reject the update.
 - Run `.build/artifacts/sparkle/Sparkle/bin/sign_update <zip>`, which reads the private key from the login keychain, then `sign_update --verify <zip> <signature>`.
 - Extract the zip and run `spctl` on the extracted app.
 
@@ -713,17 +727,11 @@ codesign --verify --deep --strict --verbose=2 $APP
 - Over 24 h, compare posted reviews in `processed_reviews` with the previous beta's 24 h rate.
 
 **8. Publish.**
-- In `website-neon-diff-agent`, prepend the new `<item>` (with `sparkle:edSignature` and `length`) to `public/updates/beta/appcast.xml`, and update `MAC_RELEASE_METADATA.beta` in `src/lib/paid-beta-release-gate.ts`.
+- In the website repository, `electricsheephq/website-neon-diff-agent` (renamed from `neon-diff-agent-website`, which still redirects; check `git remote get-url origin`), prepend the new `<item>` (with `sparkle:edSignature` and `length`) to `public/updates/beta/appcast.xml`, and update `MAC_RELEASE_METADATA.beta` in `src/lib/paid-beta-release-gate.ts`.
 - Merge, then publish the site.
 - Dispatch `paid-beta-public-download-canary.yml`. It does a clean install on macOS 14, 15 and 26 and checks the feed, signature and team ID.
+- Once the release and the appcast item are public, dispatch `desktop-accepted-release-packet.yml` from `main` with `release_tag=v1.1.0-beta.N`. It writes the beta's accepted packet and the artifact-source attestation, and needs the declaration from step 1 on `main`.
 
 **Rollback.**
 - Locally: move the rollback app back and kickstart the agent.
 - If the feed has already moved: Sparkle 2 does not downgrade, and a bundle's build is part of its signed bytes, so old bytes cannot be re-signed "at a higher build". Instead, build the previous source at a new, higher build, run it through steps 2–6, and publish that item.
-
-## Notes
-
-- What changed:
-- What did not change:
-- Open follow-ups:
-```
