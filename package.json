@@ -73,7 +73,7 @@
     "stripe": "^22.3.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.12",
     "yaml": "^2.9.0"
   },
   "dependencies": {

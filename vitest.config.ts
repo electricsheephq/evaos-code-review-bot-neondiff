@@ -5,10 +5,8 @@ export default defineConfig({
     globals: true,
     include: ["tests/**/*.test.ts"],
     pool: "threads",
-    poolOptions: {
-      threads: {
-        singleThread: true
-      }
-    }
+    // Vitest 4 replacement for `poolOptions.threads.singleThread: true`.
+    maxWorkers: 1,
+    isolate: false
   }
 });
