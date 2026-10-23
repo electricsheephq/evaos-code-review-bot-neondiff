@@ -26,6 +26,8 @@ let publicOnlyEnrichmentNoticeLogged = false;
 // At most one issue-enrichment pass per daemon process. Cycles never await it, so a pass that runs several
 // model analyses cannot hold PR discovery open; a cycle that finds a pass in flight skips its own start.
 let issueEnrichmentPassInFlight: { cycle: number; promise: Promise<void> } | undefined;
+// A pass may still use its source-snapshot worktree, so a due cleanup waits (sticky) for a cycle with no pass in flight.
+let worktreeCleanupPending = false;
 
 /** Settles once the in-flight issue-enrichment pass (if any) has ended; never rejects. */
 export function waitForIssueEnrichmentPass(): Promise<void> {
@@ -126,7 +128,12 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     recordHeartbeatImpl(event, error, runId, reviewLane);
   };
 
-  if (input.worktreeCleanupDue === true) {
+  if (input.worktreeCleanupDue === true) worktreeCleanupPending = true;
+  if (worktreeCleanupPending && issueEnrichmentPassInFlight) {
+    stdout(formatDaemonLog({ event: "daemon_worktree_cleanup_deferred", cycle: input.cycle, dryRun: input.dryRun,
+      startedCycle: issueEnrichmentPassInFlight.cycle }));
+  } else if (worktreeCleanupPending) {
+    worktreeCleanupPending = false;
     try {
       const cleanup = (input.cleanupReviewWorktreesImpl ?? cleanupReviewWorktreesFromConfig)({
         configPath: input.configPath,

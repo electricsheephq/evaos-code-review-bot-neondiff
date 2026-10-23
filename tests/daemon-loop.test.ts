@@ -204,6 +204,51 @@ describe("daemon cycle resilience", () => {
     });
   });
 
+  it("defers a due worktree cleanup while an enrichment pass is in flight and runs it on the first clear cycle", async () => {
+    const stdout: string[] = [];
+    const calls: string[] = [];
+    let releaseIssue!: () => void;
+    const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
+    const cycle = (number: number, worktreeCleanupDue: boolean, issueEnrichmentEnabled = true) => runDaemonCycleImpl({
+      cycle: number, dryRun: false, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+      reviewSchedulerEnabled: true, issueEnrichmentEnabled, worktreeCleanupDue, admitDaemonCycleImpl: async () => undefined,
+      cleanupReviewWorktreesImpl: () => { calls.push(`cleanup:${number}`); return emptyCleanupSummary(); },
+      runOnceImpl: async () => successfulRunOnceResult(),
+      issueEnrichmentCycleImpl: async () => { calls.push(`pass:${number}`); await issueBarrier; return successfulIssueEnrichmentCycleResult(); },
+      recordHeartbeatImpl: () => undefined, stdout: (line) => stdout.push(line), stderr: () => undefined
+    });
+    try {
+      await cycle(31, false);
+      await cycle(32, true);
+      await cycle(33, false);
+      expect(calls).toEqual(["pass:31"]);
+      expect(stdout.map((line) => JSON.parse(line)).filter((event) => event.event === "daemon_worktree_cleanup_deferred")).toEqual([
+        expect.objectContaining({ cycle: 32, dryRun: false, startedCycle: 31 }),
+        expect.objectContaining({ cycle: 33, dryRun: false, startedCycle: 31 })
+      ]);
+    } finally {
+      releaseIssue();
+      await waitForIssueEnrichmentPass();
+    }
+    await cycle(34, false, false);
+    await cycle(35, false, false);
+    expect(calls).toEqual(["pass:31", "cleanup:34"]);
+  });
+
+  it("runs a due cleanup on its cycle, before that cycle starts a pass, when no pass is in flight", async () => {
+    const calls: string[] = [];
+    await runDaemonCycleImpl({
+      cycle: 36, dryRun: false, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+      reviewSchedulerEnabled: true, issueEnrichmentEnabled: true, worktreeCleanupDue: true, admitDaemonCycleImpl: async () => undefined,
+      cleanupReviewWorktreesImpl: () => { calls.push("cleanup"); return emptyCleanupSummary(); },
+      runOnceImpl: async () => successfulRunOnceResult(),
+      issueEnrichmentCycleImpl: async () => { calls.push("pass"); return successfulIssueEnrichmentCycleResult(); },
+      recordHeartbeatImpl: () => undefined, stdout: () => undefined, stderr: () => undefined
+    });
+    await waitForIssueEnrichmentPass();
+    expect(calls).toEqual(["cleanup", "pass"]);
+  });
+
   it("keeps the review cycle alive when worktree cleanup fails closed", async () => {
     const stderr: string[] = [];
     let reviewRan = false;
@@ -867,6 +912,10 @@ describe("daemon cycle resilience", () => {
     expect(stderr.join("\n")).not.toContain("ghp_fake_token");
   });
 });
+
+function emptyCleanupSummary() {
+  return { worktreesRoot: "/tmp/neondiff/runtime/worktrees", retentionMs: 7_200_000, checked: 0, deleted: 0, skipped: 0, errors: 0, outcomes: [] };
+}
 
 function successfulRunOnceResult() {
   return {
