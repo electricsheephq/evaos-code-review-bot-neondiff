@@ -1205,6 +1205,8 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
     workRoot: join(root, "work"),
     statePath: join(root, "state.sqlite"),
     evidenceDir: join(root, "evidence"),
+    // The public-repo author gate has its own suite (issue-enrichment-author-gate); these fixtures have no author identity.
+    reviewGate: { publicRepoAuthorGate: { mode: "off", allowedAssociations: ["OWNER", "MEMBER", "COLLABORATOR"], allowedLogins: [] } },
     codexRuntime: {
       enabled: true,
       cliPath: codexCliPath,

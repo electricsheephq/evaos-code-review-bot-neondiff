@@ -70,6 +70,7 @@ export interface GitHubRelatedIssueOrPull {
   pull_request?: unknown;
   body?: string | null;
   user?: { login?: string | null } | null;
+  author_association?: string | null;
   labels?: Array<{ name?: string | null } | string>;
   milestone?: { title?: string | null } | null;
 }

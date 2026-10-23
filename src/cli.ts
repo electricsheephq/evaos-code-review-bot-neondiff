@@ -7,7 +7,7 @@ import { readCiPullContext, buildCiConfig, findPostedCiReview } from "./ci-mode.
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
-import { runDaemonCycle, shouldExitDaemonAfterFailedCycle } from "./daemon.js";
+import { runDaemonCycle, shouldExitDaemonAfterFailedCycle, waitForIssueEnrichmentPass } from "./daemon.js";
 import {
   runLaunchdControlCommand,
   type LaunchctlResult
@@ -2572,11 +2572,14 @@ async function runRawDaemon(args: ParsedArgs): Promise<void> {
         && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
       configPath: args.config
     });
+    // Cycles do not await issue enrichment; an in-process exit lets the in-flight pass finish first. A killed
+    // process leaves its issue_enrichment_run_leases row, which the next acquire sweeps after leaseTtlMs.
     if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
       process.exitCode = 1;
+      await waitForIssueEnrichmentPass();
       return;
     }
-    if (runOnce) return;
+    if (runOnce) return waitForIssueEnrichmentPass();
     await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
   }
 }
