@@ -54,13 +54,15 @@ jobs:
             // npm package and are skipped too; other prerelease tags keep the legacy npm beta path.
             // A GitHub prerelease with those prefixes but no canonical N runs in its own concurrency group
             // (the group expression cannot check N), so it must not reach the legacy publisher: fail it.
+            // The prefix test ignores case like the group's startsWith(); N follows the Desktop identity
+            // validator (beta: 1-4 digits, rc: 1-16 digits).
             const tag = context.eventName === 'workflow_dispatch'
               ? context.payload.inputs?.tag ?? ''
               : context.payload.release?.tag_name ?? '';
             const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
             const desktopPrefix = context.eventName === 'release' &&
-              context.payload.release?.prerelease === true && /^v1\.1\.0-(beta|rc)\./.test(tag);
-            if (desktopPrefix && !/^v1\.1\.0-(beta|rc)\.[1-9][0-9]*$/.test(tag)) {
+              context.payload.release?.prerelease === true && /^v1\.1\.0-(beta|rc)\./i.test(tag);
+            if (desktopPrefix && !/^v1\.1\.0-(?:beta\.[1-9][0-9]{0,3}|rc\.[1-9][0-9]{0,15})$/.test(tag)) {
               core.setOutput('legacy', false);
               core.setFailed(`${tag} is not a Desktop prerelease tag (v1.1.0-beta.N or v1.1.0-rc.N); nothing was published`);
               return;

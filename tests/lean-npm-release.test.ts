@@ -42,6 +42,8 @@ describe("lean npm release routing", () => {
     ["release", "v1.2.0-beta.1", true], ["release", "v1.0.6-rc.1", true],
     ["release", "v1.1.0-beta.", "fail"], ["release", "v1.1.0-beta..90", "fail"],
     ["release", "v1.1.0-beta.0", "fail"], ["release", "v1.1.0-rc.01", "fail"],
+    ["release", "v1.1.0-beta.10000", "fail"], ["release", "v1.1.0-BETA.1", "fail"], ["release", "v1.1.0-Rc.2", "fail"],
+    ["release", "v1.1.0-beta.9999", false], ["release", "v1.1.0-rc.1234567890123456", false],
     ["release", "v1.1.0-beta.0", true, false], ["release", "v1.1.0+build", true]
   ] as [string, string, boolean | "fail", boolean?][])("routes legacy %s %s", (eventName, tag, expected, prerelease = tag.includes("-")) => {
     const workflow = parse(readFileSync(".github/workflows/publish-npm.yml", "utf8"));
