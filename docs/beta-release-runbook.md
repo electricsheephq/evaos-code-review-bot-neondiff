@@ -714,6 +714,7 @@ sign "$B/Updater.app"
 sign "$APP/Contents/Frameworks/Sparkle.framework"
 sign "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
+codesign -dv "$APP" 2>&1 | grep -qx 'TeamIdentifier=TC6MS3T6NN' && echo "team OK" || echo "STOP: not signed by team TC6MS3T6NN"
 ```
 
 **4. Notarize, staple, verify.** `OUT` is an evidence directory outside the checkout.
@@ -760,6 +761,8 @@ The release event also runs the npm workflows. `release-npm.yml` skips prereleas
 
 **7. Dogfood soak before the feed moves.**
 - Move the installed app aside as the rollback copy, `ditto` the extracted app into `/Applications`, then `launchctl kickstart -k gui/$UID/com.electricsheephq.evaos-code-review-bot` while the worker has no child processes.
+- Check that the soak exercises the new bytes. `launchctl print gui/$UID/com.electricsheephq.evaos-code-review-bot` must show `program = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop` with `--neondiff-worker-daemon`. A source-checkout or checksum-managed worker LaunchAgent keeps running the old worker, so switch it to the installed app first. Also check that `ps -o command= -p <pid>` shows that path.
+- Open the installed app (`open /Applications/NeonDiff.app`, from a clean environment) and check that it launches. Its main window must show the signed-in account and the bot's review state. Save a screenshot with the evidence.
 - Confirm a `daemon_heartbeat` row with `review_lane=active`.
 - Over 24 h, compare posted reviews in `processed_reviews` with the previous beta's 24 h rate.
 
