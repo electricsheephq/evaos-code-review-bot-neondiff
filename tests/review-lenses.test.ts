@@ -394,6 +394,7 @@ function tempEvidenceDir(): string {
 
 function inertIssueEnrichmentState() {
   return {
+    clearIssueEnrichmentAuthorGateSkip: () => false,
     getIssueEnrichmentRecord: () => undefined,
     recordIssueEnrichment: (input: RecordIssueEnrichmentInput) => ({
       repo: input.repo,

@@ -33,7 +33,8 @@ const issue = (number: number, association: string | undefined, body = "Acceptan
   user: { login: `author-${number}` }, ...(association ? { author_association: association } : {})
 });
 type Issue = ReturnType<typeof issue>;
-function github(issues: Issue[], repository: { private?: boolean; visibility?: string } = { private: false, visibility: "public" }, comments: unknown[] = []) {
+type Comment = { id: number; body?: string; user?: { login?: string }; author_association?: string };
+function github(issues: Issue[], repository: { private?: boolean; visibility?: string } = { private: false, visibility: "public" }, comments: Comment[] = []) {
   const byNumber = new Map(issues.map((entry) => [entry.number, entry]));
   return {
     getRepo: vi.fn(async () => ({ default_branch: "main", ...repository })),
