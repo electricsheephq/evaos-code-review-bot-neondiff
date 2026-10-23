@@ -664,6 +664,7 @@ stable channel. This path was first used for `1.1.0-beta.90`.
 - No open review thread on the PRs it ships is merge-blocking.
 - The release notes (the GitHub release body) are drafted. They name the source SHA, the PRs shipped, the validation run, and the rollback. For a Desktop beta they serve as the `docs/releases/<version>.md` packet.
 - The public-release manifest's license and checkout proofs gate npm and stable releases, not the Desktop beta channel.
+- An issue explicitly scopes this beta's live actions, as AGENTS.md requires: creating the GitHub prerelease (step 6), the dogfood worker's launchd restart (step 7) and the beta promotion (step 8). For beta.90 that issue is #1175.
 
 **1. Identity.**
 - Validators accept only `1.1.0-beta.N`. By convention the build is 11004 + N (beta.90 is build 11094); nothing enforces the formula, so check it by hand. Builds must only increase.
@@ -675,7 +676,8 @@ stable channel. This path was first used for `1.1.0-beta.90`.
   - Merge this PR before step 8.
 - Build from a clean, detached worktree at that commit, after `npm ci`.
 
-**2. Build.** Run steps 2 to 6 in one `bash` shell, so the variables carry over. (macOS's interactive `zsh` treats the `#` comments below as arguments.) Start from `apps/neondiff-desktop` in that worktree. The credential doctor exits non-zero if the signing, notary or Sparkle credentials are missing. Then check that the Sparkle public key is the pinned beta key.
+**2. Build.** This path uses the login keychain's notary profile (`neondiff-notary`) and Sparkle key. The credential doctor also accepts the `NEONDIFF_NOTARY_API_*` and `SPARKLE_ED_PRIVATE_KEY` environment variables, but the commands below do not use them, and they stop at notarization or at the key check if only those are set.
+Run steps 2 to 6 in one `bash` shell, so the variables carry over. (macOS's interactive `zsh` treats the `#` comments below as arguments.) Start from `apps/neondiff-desktop` in that worktree. The credential doctor exits non-zero if the signing, notary or Sparkle credentials are missing. Then check that the Sparkle public key is the pinned beta key.
 
 ```sh
 bash
@@ -741,8 +743,7 @@ if [ "$("$SPARKLE_BIN/generate_keys" -p)" = "$(/usr/libexec/PlistBuddy -c 'Print
   echo "Sparkle key OK"; "$SPARKLE_BIN/sign_update" "$ZIP"   # prints sparkle:edSignature="…" length="…"
 else echo "STOP: keychain Sparkle key differs from the app's SUPublicEDKey; do not sign or host"; fi
 "$SPARKLE_BIN/sign_update" --verify "$ZIP" "<edSignature>"
-mkdir "$OUT/extract-check" && ditto -x -k "$ZIP" "$OUT/extract-check"
-spctl -a -vv --type execute "$OUT/extract-check/NeonDiff.app"
+X="$(mktemp -d "$OUT/extract-check.XXXXXX")" && ditto -x -k "$ZIP" "$X" && spctl -a -vv --type execute "$X/NeonDiff.app"
 ```
 
 **6. Host.** The release notes from step 0 go in `--notes-file`.
