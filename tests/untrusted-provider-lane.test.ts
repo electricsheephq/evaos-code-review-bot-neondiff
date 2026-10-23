@@ -287,7 +287,7 @@ it("a 429 keeps the worker's rate-limit signal for the provider cooldown path", 
   const { classifyProviderError } = await import("../src/worker.js");
   vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () => new Response("slow down", { status: 429 })) as typeof fetch);
   const error = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(e => e);
-  expect(classifyProviderError(error).category).toBe("quota_or_rate_limit");
+  expect(classifyProviderError(error)).toMatchObject({ category: "request_rate_limit", cooldown: true });
 });
 
 it("a schema-feedback retry that rescued the output is reported as a degraded recovery", async () => {
