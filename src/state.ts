@@ -981,6 +981,18 @@ export class ReviewStateStore {
     return Number(result.changes) > 0;
   }
 
+  /** Removes only an issue-enrichment author-gate skip, so a later allowed decision can analyse the issue. */
+  clearIssueEnrichmentAuthorGateSkip(repo: string, issueNumber: number): boolean {
+    validateRepoIssue(repo, issueNumber);
+    const result = this.db
+      .prepare(
+        `delete from issue_enrichment_records
+         where repo = ? collate nocase and issue_number = ? and status = 'skipped' and reason = 'untrusted_author_public_repo'`
+      )
+      .run(repo, issueNumber);
+    return Number(result.changes) > 0;
+  }
+
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[] {
     const rows = this.db
       .prepare(

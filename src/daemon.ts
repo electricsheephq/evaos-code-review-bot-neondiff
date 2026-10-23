@@ -23,6 +23,14 @@ import {
 } from "./worktree-cleanup.js";
 
 let publicOnlyEnrichmentNoticeLogged = false;
+// At most one issue-enrichment pass per daemon process. Cycles never await it, so a pass that runs several
+// model analyses cannot hold PR discovery open; a cycle that finds a pass in flight skips its own start.
+let issueEnrichmentPassInFlight: { cycle: number; promise: Promise<void> } | undefined;
+
+/** Settles once the in-flight issue-enrichment pass (if any) has ended; never rejects. */
+export function waitForIssueEnrichmentPass(): Promise<void> {
+  return issueEnrichmentPassInFlight?.promise ?? Promise.resolve();
+}
 
 export type DaemonCycleResult =
   | { ok: true; result: RunOnceResult }
@@ -153,9 +161,9 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     reviewLane
   }));
 
-  const issueEnrichmentPromise = input.issueEnrichmentEnabled === true
-    ? runIssueEnrichmentLane({ input, admissions, stdout, stderr, recordHeartbeat, heartbeatRunId })
-    : Promise.resolve();
+  if (input.issueEnrichmentEnabled === true) {
+    startIssueEnrichmentPass({ input, admissions, stdout, stderr, recordHeartbeat, heartbeatRunId });
+  }
 
   if (reviewLane === "held") {
     stdout(formatDaemonLog({
@@ -164,7 +172,6 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       reason: "scoped_review_required"
     }));
-    await issueEnrichmentPromise;
     const result = emptyRunOnceResult();
     stdout(formatDaemonLog({
       event: "daemon_cycle_complete",
@@ -221,7 +228,6 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
         error: message
       }));
     }
-    await issueEnrichmentPromise;
     stdout(formatDaemonLog({
       event: "daemon_cycle_complete",
       cycle: input.cycle,
@@ -231,7 +237,6 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     recordHeartbeat("daemon_cycle_complete", undefined, heartbeatRunId);
     return { ok: true, result };
   } catch (error) {
-    await issueEnrichmentPromise;
     const message = error instanceof Error ? error.message : String(error);
     stderr(formatDaemonLog({
       event: "daemon_cycle_failed",
@@ -334,14 +339,39 @@ function summarizeWorktreeCleanup(cleanup: ReviewWorktreeCleanupSummary): Record
   };
 }
 
-async function runIssueEnrichmentLane(input: {
+interface IssueEnrichmentLaneInput {
   input: RunDaemonCycleOptions;
   admissions: DaemonCycleAdmissions | void;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
   recordHeartbeat: (event: DaemonHeartbeatEvent, error?: string, runId?: string) => void;
   heartbeatRunId: string;
-}): Promise<void> {
+}
+
+function startIssueEnrichmentPass(lane: IssueEnrichmentLaneInput): void {
+  if (issueEnrichmentPassInFlight) {
+    lane.stdout(formatDaemonLog({ event: "daemon_issue_enrichment_in_flight", cycle: lane.input.cycle,
+      dryRun: lane.input.dryRun, startedCycle: issueEnrichmentPassInFlight.cycle }));
+    return;
+  }
+  const pass = { cycle: lane.input.cycle, promise: Promise.resolve() };
+  issueEnrichmentPassInFlight = pass;
+  pass.promise = (async () => {
+    try {
+      await runIssueEnrichmentLane(lane);
+    } catch (error) {
+      // The lane logs its own failures; only a throwing logger or heartbeat lands here, and it is never left unhandled.
+      try {
+        lane.stderr(formatDaemonLog({ event: "daemon_issue_enrichment_failed", level: "error", cycle: lane.input.cycle,
+          dryRun: lane.input.dryRun, receipt: classifyIssueEnrichmentReceipt({ kind: "thrown", error }) }));
+      } catch { /* nowhere left to report */ }
+    } finally {
+      if (issueEnrichmentPassInFlight === pass) issueEnrichmentPassInFlight = undefined;
+    }
+  })();
+}
+
+async function runIssueEnrichmentLane(input: IssueEnrichmentLaneInput): Promise<void> {
   if (input.admissions && !input.admissions.issueEnrichment) {
     if (!publicOnlyEnrichmentNoticeLogged) {
       publicOnlyEnrichmentNoticeLogged = true;

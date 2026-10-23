@@ -7,6 +7,7 @@ import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
+import { DEFAULT_PUBLIC_REPO_AUTHOR_GATE } from "./public-repo-author-gate-defaults.js";
 import { resolveEnvAlias } from "./env-alias.js";
 import type { LicenseConfig } from "./license.js";
 import {
@@ -260,10 +261,7 @@ export interface PublicRepoAuthorGateConfig {
   allowedAssociations: string[];
   allowedLogins: string[];
 }
-export const DEFAULT_PUBLIC_REPO_AUTHOR_GATE: PublicRepoAuthorGateConfig = {
-  mode: "auto", allowedAssociations: ["OWNER", "MEMBER", "COLLABORATOR"],
-  allowedLogins: ["dependabot[bot]", "renovate[bot]"]
-};
+export { DEFAULT_PUBLIC_REPO_AUTHOR_GATE };
 
 export interface ReviewGateConfig {
   publicRepoAuthorGate?: PublicRepoAuthorGateConfig;

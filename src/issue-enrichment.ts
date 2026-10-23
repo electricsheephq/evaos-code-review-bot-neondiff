@@ -21,7 +21,15 @@ import {
   type IssueAnalysisPolicyContext
 } from "./issue-analysis.js";
 import { resolveCheckoutReadsStatus, type CodexReasoningEffort } from "./codex-runtime.js";
-import type { BotConfig } from "./config.js";
+import type { BotConfig, PublicRepoAuthorGateConfig } from "./config.js";
+import {
+  isAuthorBlockedOnPublicRepo,
+  isPublicRepoAuthorGateEnabled,
+  matchesTrustedAuthor,
+  visibilityFromRepositoryFlags,
+  type GateAuthorIdentity,
+  type RepositoryVisibility
+} from "./public-repo-author-gate.js";
 import {
   buildReviewLensPacket,
   type ReviewLensConfig,
@@ -288,10 +296,11 @@ type IssueEnrichmentComment = {
   created_at?: string | null;
   updated_at?: string | null;
   user?: { login?: string | null } | null;
+  author_association?: string | null;
 };
 
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
-  getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
+  getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string; private?: boolean; visibility?: string }>;
   listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
     event?: string;
     created_at?: string;
@@ -301,7 +310,11 @@ export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentComme
   getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
   listIssueComments?(repo: string, issueNumber: number): Promise<IssueEnrichmentComment[] | BoundedGithubList<IssueEnrichmentComment>>;
   listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueEnrichmentComment>>;
-  getIssueOrPull?(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined>;
+  getIssueOrPull?(
+    repo: string,
+    issueNumber: number,
+    options?: { tolerateUnreadable?: boolean }
+  ): Promise<GitHubRelatedIssueOrPull | undefined>;
 };
 type IssueEventResult = Awaited<ReturnType<NonNullable<IssueEnrichmentCycleGithub["listIssueLabelEvents"]>>>;
 
@@ -336,7 +349,8 @@ export type IssueEnrichmentScanReason =
   | "repo_max_comments_per_cycle"
   | "global_max_issues_per_cycle"
   | "global_max_comments_per_cycle"
-  | "burst_threshold_exceeded" | "persisted_defer_active" | "repository_blocked" | "event_history_unbounded";
+  | "burst_threshold_exceeded" | "persisted_defer_active" | "repository_blocked" | "event_history_unbounded"
+  | "untrusted_author_public_repo";
 
 export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
   return reason === "preservation_only_upstream_intake";
@@ -448,6 +462,8 @@ export async function buildIssueEvidenceContext(input: {
   defaultBranch: string;
   headSha: string;
   timeline?: IssueEventResult;
+  /** Set on a gated repository: matching comment authors are left out of the context and only counted. */
+  isUntrustedCommentAuthor?: (author: GateAuthorIdentity) => boolean;
 }): Promise<IssueAnalysisEvidenceContext> {
   const commentResult = input.github.listIssueCommentsForEnrichment
     ? await input.github.listIssueCommentsForEnrichment(input.repo, input.issue.number)
@@ -455,9 +471,15 @@ export async function buildIssueEvidenceContext(input: {
       ? await input.github.listIssueComments(input.repo, input.issue.number)
       : [];
   const { items: rawComments, rawCount: rawCommentCount, truncated: commentsTruncated } = unpackBoundedGithubList(commentResult);
-  const externalComments = rawComments.filter((comment) =>
+  const nonBotComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
+  const externalComments = input.isUntrustedCommentAuthor
+    ? nonBotComments.filter((comment) => !input.isUntrustedCommentAuthor!({
+        authorAssociation: comment.author_association, authorLogin: comment.user?.login
+      }))
+    : nonBotComments;
+  const omittedComments = nonBotComments.length - externalComments.length;
   const timelineResult = input.timeline ?? (input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
     : []);
@@ -466,7 +488,8 @@ export async function buildIssueEvidenceContext(input: {
   const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
   if (input.github.getIssueOrPull) {
     for (const number of linkedNumbers.slice(0, 20)) {
-      const linked = await input.github.getIssueOrPull(input.repo, number);
+      // Bare #N often names an item in another repository; a missing or unreadable one is not evidence.
+      const linked = await input.github.getIssueOrPull(input.repo, number, { tolerateUnreadable: true });
       if (!linked) continue;
       linkedItems.push({
         number: linked.number,
@@ -496,6 +519,9 @@ export async function buildIssueEvidenceContext(input: {
       label: boundedIssueContext(redactSecrets(event.label?.name ?? ""), 200)
     })),
     linkedItems,
+    ...(omittedComments > 0
+      ? { commentsOmitted: `${omittedComments} comment${omittedComments === 1 ? "" : "s"} from authors outside the trusted set ${omittedComments === 1 ? "was" : "were"} omitted` }
+      : {}),
     truncation: {
       comments: commentsTruncated || rawCommentCount > rawComments.length || externalComments.length > 50,
       timeline: timelineTruncated || rawTimelineCount > rawTimeline.length || rawTimeline.length > 200,
@@ -785,6 +811,7 @@ export async function runIssueEnrichmentCycle(input: {
     reviewLenses?: ReviewLensConfig;
     enrichment?: { maxSuggestions?: number };
     confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
+    reviewGate?: { publicRepoAuthorGate?: PublicRepoAuthorGateConfig };
   };
   state: Pick<
     ReviewStateStore,
@@ -793,7 +820,8 @@ export async function runIssueEnrichmentCycle(input: {
     "getIssueEnrichmentRepoWatermark" |
     "recordIssueEnrichmentRepoWatermark" |
     "tryAcquireIssueEnrichmentRunLease" |
-    "releaseIssueEnrichmentRunLease"
+    "releaseIssueEnrichmentRunLease" |
+    "clearIssueEnrichmentAuthorGateSkip"
   >;
   github: IssueEnrichmentCycleGithub;
   dryRun: boolean;
@@ -933,6 +961,25 @@ export async function runIssueEnrichmentCycle(input: {
 
     const sourceSnapshots = new Map<string, PreparedWorktree>();
     const defaultBranches = new Map<string, string>();
+    // One repository GET per repo per cycle, shared by the author gate and the source snapshot.
+    const repositoryMetadataByRepo = new Map<string, ReturnType<NonNullable<IssueEnrichmentCycleGithub["getRepo"]>>>();
+    const repositoryMetadata = (repo: string) => {
+      const key = repo.toLowerCase();
+      if (!repositoryMetadataByRepo.has(key)) repositoryMetadataByRepo.set(key, input.github.getRepo!(repo));
+      return repositoryMetadataByRepo.get(key)!;
+    };
+    const repositoryVisibility = async (repo: string): Promise<RepositoryVisibility> => {
+      if (!input.github.getRepo) return "unknown";
+      try { return visibilityFromRepositoryFlags(await repositoryMetadata(repo)); } catch { return "unknown"; }
+    };
+    // Same gate as PR review (reviewGate.publicRepoAuthorGate); unknown visibility is gated, private is exempt.
+    const authorGateEnabled = isPublicRepoAuthorGateEnabled(input.config);
+    const isIssueAuthorGated = async (repo: string, issue: GitHubRelatedIssueOrPull): Promise<boolean> => {
+      const author = { authorAssociation: issue.author_association, authorLogin: issue.user?.login };
+      if (!authorGateEnabled || matchesTrustedAuthor(input.config, author)) return false;
+      return isAuthorBlockedOnPublicRepo(input.config, author, await repositoryVisibility(repo), authorGateEnabled);
+    };
+    const authorGatedIssues = new Set<string>();
     if (shouldCollectModelEvidence) {
       if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
       if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
@@ -1000,13 +1047,21 @@ export async function runIssueEnrichmentCycle(input: {
           reader: {
             listIssuesForEnrichment: async (repo, options) => {
               const prepared = new Map<string, GitHubRelatedIssueOrPull>(), qualifyForMinimum = async (issue: GitHubRelatedIssueOrPull): Promise<boolean> => {
-                const key = issueKey(repo, issue.number), existing = input.force === true ? undefined : input.state.getIssueEnrichmentRecord(repo, issue.number);
+                const key = issueKey(repo, issue.number);
+                let existing = input.force === true ? undefined : input.state.getIssueEnrichmentRecord(repo, issue.number);
                 if (existing?.status === "skipped" && existing.reason === "event_history_unbounded" && existing.issueUpdatedAt === canonicalIssueUpdatedAt(issue, checkedAt)) {
                   prepared.set(key, issue); issuesByKey.set(key, issue); terminalEventHistoryIssues.add(key); return false;
+                }
+                const authorGated = await isIssueAuthorGated(repo, issue);
+                if (!authorGated && existing?.status === "skipped" && existing.reason === "untrusted_author_public_repo") {
+                  // As on the PR side (clearAuthorGateSkip): the gate decision can change, so its skip must not settle the issue.
+                  if (!input.dryRun) input.state.clearIssueEnrichmentAuthorGateSkip(repo, issue.number);
+                  existing = undefined;
                 }
                 const preview = previewIssue(repo, issue), override = canonicalIssueEnrichmentRepository(config, repo).override;
                 const sameIdentity = existing?.issueUpdatedAt === canonicalIssueUpdatedAt(issue, checkedAt), activeDeferred = existing?.status === "deferred" && Number.isFinite(Date.parse(existing.nextEligibleAt ?? "")) && Date.parse(existing.nextEligibleAt!) > Date.parse(checkedAt);
                 if (sameIdentity && existing?.status === "skipped") { prepared.set(key, issue); issuesByKey.set(key, issue); settledSkippedIssues.add(key); return false; }
+                if (authorGated) { prepared.set(key, issue); issuesByKey.set(key, issue); authorGatedIssues.add(key); return false; }
                 if (sameIdentity && activeDeferred) { prepared.set(key, issue); issuesByKey.set(key, issue); return false; }
                 const promotionNeedsEvents = preview.skipped && shouldDeferPreservationPreviewToPromotion(preview.reason) && Boolean(override?.promotionMaintainers?.length && input.github.getCollaboratorPermission); if (preview.skipped && !promotionNeedsEvents) { prepared.set(key, issue); issuesByKey.set(key, issue); return false; }
                 if (!shouldCollectModelEvidence && !promotionNeedsEvents) { prepared.set(key, issue); issuesByKey.set(key, issue); return true; }
@@ -1054,7 +1109,9 @@ export async function runIssueEnrichmentCycle(input: {
         };
     scanned.items = scanned.items.map((item) => terminalEventHistoryIssues.has(issueKey(item.repo, item.issueNumber))
       ? { ...item, action: "skipped" as const, reason: "event_history_unbounded" as const }
-      : item);
+      : authorGatedIssues.has(issueKey(item.repo, item.issueNumber))
+        ? { ...item, action: "skipped" as const, reason: "untrusted_author_public_repo" as const }
+        : item);
     const eventReadFailureItems = scanned.items.filter((item) => issueEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
     scanned.items = scanned.items.filter((item) => !issueEventReadFailures.has(issueKey(item.repo, item.issueNumber)));
     const combinedRepos = [...baselineRepos, ...scanned.repos];
@@ -1118,7 +1175,7 @@ export async function runIssueEnrichmentCycle(input: {
         const repoKey = item.repo.toLowerCase(), wasPrepared = sourceSnapshots.has(repoKey);
         try {
           if (!wasPrepared) {
-            const metadata = await input.github.getRepo!(item.repo), defaultBranch = metadata.default_branch?.trim();
+            const metadata = await repositoryMetadata(item.repo), defaultBranch = metadata.default_branch?.trim();
             if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${item.repo}`);
             sourceSnapshots.set(repoKey, await prepareBranchWorktree({
               repo: item.repo, branch: defaultBranch,
@@ -1127,8 +1184,12 @@ export async function runIssueEnrichmentCycle(input: {
             }));
             defaultBranches.set(repoKey, defaultBranch);
           }
+          const gatedVisibility = authorGateEnabled ? await repositoryVisibility(item.repo) : undefined;
           issueEvidenceContextByIssue.set(issueKey(item.repo, item.issueNumber), await buildIssueEvidenceContext({
             repo: item.repo, issue, github: input.github, defaultBranch: defaultBranches.get(repoKey)!, headSha: sourceSnapshots.get(repoKey)!.headSha,
+            ...(gatedVisibility && gatedVisibility !== "private"
+              ? { isUntrustedCommentAuthor: (author: GateAuthorIdentity) => isAuthorBlockedOnPublicRepo(input.config, author, gatedVisibility, true) }
+              : {}),
             ...(issueEventHistoryByIssue.get(issueKey(item.repo, item.issueNumber)) ? { timeline: issueEventHistoryByIssue.get(issueKey(item.repo, item.issueNumber))! } : {})
           }));
         } catch (error) {

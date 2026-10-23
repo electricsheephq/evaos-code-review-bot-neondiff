@@ -6,6 +6,7 @@ import {
   cleanupReviewWorktreesFromConfig,
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
+  waitForIssueEnrichmentPass,
   type RunDaemonCycleOptions
 } from "../src/daemon.js";
 import type { BotConfig } from "../src/config.js";
@@ -13,10 +14,15 @@ import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 import { requireActiveDaemonCycleAdmissions, type ProductionLicenseAdmission } from "../src/license-admission.js";
 import { ReviewStateStore } from "../src/state.js";
 
-const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
-  ...input,
-  admitDaemonCycleImpl: input.admitDaemonCycleImpl ?? (async () => undefined)
-});
+// Cycles no longer await issue enrichment; settle the detached pass so each test sees its own lane output.
+const runDaemonCycle = async (input: RunDaemonCycleOptions) => {
+  const result = await runDaemonCycleImpl({
+    ...input,
+    admitDaemonCycleImpl: input.admitDaemonCycleImpl ?? (async () => undefined)
+  });
+  await waitForIssueEnrichmentPass();
+  return result;
+};
 
 describe("daemon cycle resilience", () => {
   it("skips unlicensed enrichment once per process and warns once per public-only cycle", async () => {
@@ -141,6 +147,7 @@ describe("daemon cycle resilience", () => {
       stderr: () => undefined
     });
 
+    await waitForIssueEnrichmentPass();
     expect(result.ok).toBe(true);
     expect(seen).toEqual([issueEnrichment, reviewDiscovery, reviewDiscovery]);
   });
@@ -718,13 +725,12 @@ describe("daemon cycle resilience", () => {
     ]));
   });
 
-  it("waits for issue-lane cleanup before returning a review failure", async () => {
+  it("returns a review failure without waiting for the issue lane", async () => {
     let releaseIssue!: () => void;
     const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
-    let issueStarted = false;
-    let cycleSettled = false;
+    let issueSettled = false;
 
-    const cycle = runDaemonCycle({
+    const result = await runDaemonCycleImpl({
       cycle: 12,
       dryRun: false,
       pilotRepos: [],
@@ -733,32 +739,98 @@ describe("daemon cycle resilience", () => {
       commandsEnabled: false,
       reviewSchedulerEnabled: true,
       issueEnrichmentEnabled: true,
+      admitDaemonCycleImpl: async () => undefined,
       runOnceImpl: async () => { throw new Error("review batch failed"); },
       issueEnrichmentCycleImpl: async () => {
-        issueStarted = true;
         await issueBarrier;
+        issueSettled = true;
         return successfulIssueEnrichmentCycleResult();
       },
       recordHeartbeatImpl: () => undefined,
       stdout: () => undefined,
       stderr: () => undefined
     });
-    void cycle.then(() => { cycleSettled = true; });
-
-    let startError: unknown;
-    try {
-      await vi.waitFor(() => expect(issueStarted).toBe(true), { timeout: 100 });
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(cycleSettled).toBe(false);
-    } catch (error) {
-      startError = error;
-    } finally {
-      releaseIssue();
-    }
-    const result = await cycle;
-    if (startError) throw startError;
 
     expect(result).toMatchObject({ ok: false, failureKind: "runtime_failure", error: "review batch failed" });
+    expect(issueSettled).toBe(false);
+    releaseIssue();
+    await waitForIssueEnrichmentPass();
+    expect(issueSettled).toBe(true);
+  });
+
+  it("does not hold the next cycle's review run behind a slow enrichment pass, and never overlaps passes", async () => {
+    const stdout: string[] = [];
+    let releaseIssue!: () => void;
+    const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
+    let active = 0, maxActive = 0, passes = 0;
+    const reviewRuns: number[] = [];
+    const heartbeats: string[] = [];
+    const cycle = (number: number, reviewLane: "active" | "held" = "active") => runDaemonCycleImpl({
+      cycle: number, dryRun: false, reviewLane, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+      reviewSchedulerEnabled: true, issueEnrichmentEnabled: true, admitDaemonCycleImpl: async () => undefined,
+      runOnceImpl: async () => { reviewRuns.push(number); return successfulRunOnceResult(); },
+      issueEnrichmentCycleImpl: async () => {
+        passes += 1; active += 1; maxActive = Math.max(maxActive, active);
+        try { if (passes === 1) await issueBarrier; return successfulIssueEnrichmentCycleResult(); } finally { active -= 1; }
+      },
+      recordHeartbeatImpl: (event) => { heartbeats.push(event); },
+      stdout: (line) => stdout.push(line), stderr: () => undefined
+    });
+
+    expect((await cycle(1)).ok).toBe(true);
+    expect((await cycle(2)).ok).toBe(true);
+    expect((await cycle(3, "held")).ok).toBe(true);
+    expect(reviewRuns).toEqual([1, 2]);
+    expect(passes).toBe(1);
+    expect(heartbeats.filter((event) => event === "daemon_cycle_complete")).toHaveLength(3);
+    const events = stdout.map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.event === "daemon_issue_enrichment_in_flight")).toEqual([
+      expect.objectContaining({ cycle: 2, startedCycle: 1 }),
+      expect.objectContaining({ cycle: 3, startedCycle: 1 })
+    ]);
+    expect(events.some((event) => event.event === "daemon_issue_enrichment" && event.phase === "complete")).toBe(false);
+
+    releaseIssue();
+    await waitForIssueEnrichmentPass();
+    expect((await cycle(4)).ok).toBe(true);
+    await waitForIssueEnrichmentPass();
+    expect(passes).toBe(2);
+    expect(maxActive).toBe(1);
+    expect(stdout.map((line) => JSON.parse(line)).filter((event) => event.event === "daemon_issue_enrichment")
+      .map((event) => event.cycle)).toEqual([1, 4]);
+  });
+
+  it("logs a rejected detached pass without an unhandled rejection, even when the logger throws", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const stderr: string[] = [];
+      let rejectIssue!: (error: Error) => void;
+      const issueBarrier = new Promise<never>((_resolve, reject) => { rejectIssue = reject; });
+      const base = {
+        dryRun: false, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+        reviewSchedulerEnabled: true, issueEnrichmentEnabled: true, admitDaemonCycleImpl: async () => undefined,
+        runOnceImpl: async () => successfulRunOnceResult(), recordHeartbeatImpl: () => undefined, stdout: () => undefined
+      };
+      const result = await runDaemonCycleImpl({ ...base, cycle: 21, issueEnrichmentCycleImpl: () => issueBarrier,
+        stderr: (line) => stderr.push(line) });
+      expect(result.ok).toBe(true);
+      rejectIssue(new Error("late failure ghp_fake_token"));
+      await waitForIssueEnrichmentPass();
+      expect(stderr.map((line) => JSON.parse(line))).toEqual([expect.objectContaining({
+        event: "daemon_issue_enrichment_failed", level: "error", cycle: 21,
+        receipt: expect.objectContaining({ ok: false, code: "cycle_failed" })
+      })]);
+      expect(stderr.join("\n")).not.toContain("ghp_fake_token");
+
+      await runDaemonCycleImpl({ ...base, cycle: 22, issueEnrichmentCycleImpl: async () => { throw new Error("boom"); },
+        stderr: () => { throw new Error("logger down"); } });
+      await waitForIssueEnrichmentPass();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 
   it("keeps the daemon cycle healthy when issue enrichment fails", async () => {

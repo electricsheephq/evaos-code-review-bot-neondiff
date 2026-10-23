@@ -53,6 +53,8 @@ const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycl
     ...input,
     config: {
       ...input.config,
+      // The public-repo author gate has its own suite (issue-enrichment-author-gate); these fixtures have no author identity.
+      reviewGate: { ...input.config.reviewGate, publicRepoAuthorGate: { mode: "off", allowedAssociations: [], allowedLogins: [] } },
       codexRuntime: {
         enabled: true,
         cliPath: input.config.codexRuntime?.cliPath ?? "/Users/test/.local/bin/codex",

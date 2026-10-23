@@ -126,6 +126,8 @@ export interface IssueAnalysisEvidenceContext {
     title: string;
     labels: string[];
   }>;
+  /** Present only on a gated public repository: counts comments left out because of their author. */
+  commentsOmitted?: string;
   truncation: { comments: boolean; timeline: boolean; linkedItems: boolean };
 }
 
