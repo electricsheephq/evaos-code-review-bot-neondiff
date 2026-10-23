@@ -670,6 +670,8 @@ export function loadConfigFromObject(fromFile: unknown, configPath?: string): Bo
     if (skip.excludeRepos !== undefined) validateStringArray(skip.excludeRepos, "config.baseMergeOnlySkip.excludeRepos");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  // Set only by buildUntrustedProviderReviewConfig for one routed review; a config file cannot route every review.
+  delete merged.untrustedProviderLane;
   if (configPath) configFilePaths.set(merged, configPath);
   merged.github = { ...merged.github };
   merged.worktreeCleanup = { ...merged.worktreeCleanup! };

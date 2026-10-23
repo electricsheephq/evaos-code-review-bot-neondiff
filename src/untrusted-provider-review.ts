@@ -38,7 +38,8 @@ export async function runUntrustedProviderReview(input: {
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).split(key).join("[redacted-provider-key]");
     const category = classifyProviderAdapterError(message);
-    if (category === "auth") throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
+    // Decide auth from the status only: an upstream relay error body (e.g. a 503 quoting "403") stays retryable.
+    if (/endpoint returned (?:401|403) auth failure/.test(message)) throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
     // Keep transient failures retryable while discarding untrusted response/error text.
     throw new Error(`Untrusted author provider review failed (${category}).`);
   }

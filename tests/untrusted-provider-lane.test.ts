@@ -228,3 +228,56 @@ it("treats a DNS lookup failure as transient and an unsafe DNS answer as termina
   pin.mockRejectedValueOnce(new Error("Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."));
   await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toBeInstanceOf(UntrustedProviderUnavailable);
 });
+
+it("pinned transport opens a real socket on Node's family-autoselection lookup ({ all: true })", async () => {
+  // A real http server and no requestImpl: Node calls the pinned lookup itself. "localhost" (not an IP literal) forces the lookup.
+  const { createServer } = await import("node:http");
+  const server = createServer((req, res) => {
+    let body = ""; req.on("data", chunk => { body += chunk; });
+    req.on("end", () => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ echoed: body, method: req.method })); });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (server.address() as { port: number }).port;
+    const local = { ...provider, baseUrl: `http://localhost:${port}/v1`, capabilities: { ...provider.capabilities, local: true } } as providers.ProviderRegistryEntry;
+    const fetch = await providers.createPinnedProviderFetch({ baseUrl: local.baseUrl!, provider: local, dnsLookupImpl: async () => [{ address: "127.0.0.1", family: 4 }] });
+    const response = await fetch(`http://localhost:${port}/v1/chat/completions`, { method: "POST", body: "{\"ping\":1}" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ echoed: "{\"ping\":1}", method: "POST" });
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+it("pinned review socket waits for the review deadline, not the 30 s smoke default", async () => {
+  let timeout = 0;
+  const request = vi.fn((options, callback) => {
+    timeout = options.timeout;
+    const handle = new EventEmitter() as EventEmitter & { end: (body?: string) => void; destroy: () => void };
+    handle.destroy = vi.fn();
+    handle.end = () => { const res = new EventEmitter() as IncomingMessage; res.statusCode = 302; res.headers = {}; res.destroy = vi.fn() as IncomingMessage["destroy"]; callback(res); };
+    return handle;
+  });
+  const fetch = await providers.createPinnedProviderFetch({ baseUrl: provider.baseUrl, provider: provider as providers.ProviderRegistryEntry,
+    dnsLookupImpl: async () => [{ address: "93.184.216.34", family: 4 }], requestImpl: request });
+  await fetch("https://provider.example/v1/chat/completions", { method: "POST", body: "{}" });
+  expect(timeout).toBe(180_000);
+});
+
+it("only a 401/403 status is a terminal auth failure; an upstream error body quoting 403 stays retryable", async () => {
+  const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
+  const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
+  const reply = (status: number, body: string) => vi.spyOn(providers, "createPinnedProviderFetch")
+    .mockResolvedValueOnce((async () => new Response(body, { status })) as typeof fetch);
+  reply(503, '{"error":{"message":"Upstream provider returned 403 Forbidden"}}');
+  const relayed = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(error => error);
+  expect(relayed).toBeInstanceOf(Error); expect(relayed).not.toBeInstanceOf(UntrustedProviderUnavailable);
+  reply(429, '{"error":"unauthorized burst"}');
+  const throttled = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(error => error);
+  expect(throttled).not.toBeInstanceOf(UntrustedProviderUnavailable);
+  reply(401, '{"error":"invalid key"}');
+  await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toBeInstanceOf(UntrustedProviderUnavailable);
+});
+
+it("a config file cannot set the internal untrustedProviderLane marker", () => {
+  const cfg = loadConfigFromObject({ untrustedProviderLane: { providerId: "fixture" }, providers: { providers: { fixture: provider } } });
+  expect(cfg.untrustedProviderLane).toBeUndefined();
+});

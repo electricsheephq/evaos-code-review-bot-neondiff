@@ -2256,7 +2256,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       assertReviewApprovalRevisionCurrent({
         approvedRevision: input.configRevision,
         sourceConfigRevision: input.sourceConfigRevision,
-        useZCode: input.useZCode && !reviewConfig.codexRuntime?.enabled && !routedProviderId,
+        useZCode: input.useZCode && !config.codexRuntime?.enabled,
         zcodeAppConfigPath: config.zcode.appConfigPath
       });
     };

@@ -27,7 +27,7 @@ export interface ProviderSmokeRequestOptions {
   lookup?: (
     hostname: string,
     options: unknown,
-    callback: (error: NodeJS.ErrnoException | null, address: string, family: number) => void
+    callback: (error: NodeJS.ErrnoException | null, address: string | DnsLookupAddress[], family?: number) => void
   ) => void;
 }
 
@@ -521,6 +521,9 @@ export function openAICompatibleProviderTargetError(
   return undefined;
 }
 
+// Matches the OpenAI-compatible adapter's review deadline; a non-streaming completion can take longer than the smoke default.
+const PROVIDER_REVIEW_DEFAULT_TIMEOUT_MS = 180_000;
+
 /** Validate and resolve once; every request uses this address and never follows redirects. */
 export async function createPinnedProviderFetch(target: {
   baseUrl: string; provider: ProviderRegistryEntry; dnsLookupImpl?: DnsLookupImpl; requestImpl?: ProviderSmokeRequestImpl;
@@ -541,7 +544,7 @@ export async function createPinnedProviderFetch(target: {
     const parsed = new URL(String(url));
     if (parsed.origin !== base.origin || parsed.username || parsed.password) throw new Error("Provider review transport target changed.");
     return fetchProviderModelsWithPinnedRequest(parsed.toString(), init,
-      { modelsUrl: parsed.toString(), remote: true, pinnedAddress: resolution.address }, target.provider.timeoutMs, target.requestImpl, 4 * 1024 * 1024);
+      { modelsUrl: parsed.toString(), remote: true, pinnedAddress: resolution.address }, target.provider.timeoutMs ?? PROVIDER_REVIEW_DEFAULT_TIMEOUT_MS, target.requestImpl, 4 * 1024 * 1024);
   }) as typeof fetch;
 }
 
@@ -770,10 +773,13 @@ async function fetchProviderModelsWithPinnedRequest(
     ...(target.pinnedAddress
       ? {
           servername: parsed.hostname,
-          lookup: (_hostname, _options, callback) => {
+          lookup: (_hostname, options, callback) => {
             // The socket target is the already-validated address; later DNS changes cannot
-            // alter the address used by this single smoke request.
-            callback(null, target.pinnedAddress!.address, target.pinnedAddress!.family);
+            // alter the address used by this single smoke request. Node's family autoselection
+            // (default since Node 20) asks for every address with { all: true } and expects a list.
+            const pinned = target.pinnedAddress!;
+            if ((options as { all?: boolean } | undefined)?.all) callback(null, [{ address: pinned.address, family: pinned.family }]);
+            else callback(null, pinned.address, pinned.family);
           }
         }
       : {})
