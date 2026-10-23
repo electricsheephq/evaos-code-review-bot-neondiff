@@ -288,6 +288,11 @@ it("a 429 keeps the worker's rate-limit signal for the provider cooldown path", 
   vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () => new Response("slow down", { status: 429 })) as typeof fetch);
   const error = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(e => e);
   expect(classifyProviderError(error)).toMatchObject({ category: "request_rate_limit", cooldown: true });
+  // The status decides, even when the untrusted 429 body names auth failures.
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () =>
+    new Response('{"error":"unauthorized burst: 403 forbidden"}', { status: 429 })) as typeof fetch);
+  const worded = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(e => e);
+  expect(classifyProviderError(worded)).toMatchObject({ category: "request_rate_limit", cooldown: true });
 });
 
 it("a schema-feedback retry that rescued the output is reported as a degraded recovery", async () => {
@@ -363,4 +368,17 @@ it("a 429 from the lane defers only the routed head and never sets the repositor
   const pull = { ...f.pull, number: 20, head: { ...f.pull.head, sha: "c".repeat(40) } };
   expect(recordProviderRateLimitCooldownIfNeeded({ config: f.cfg, state: f.state, repo: "org/repo", pull, error: new Error("provider rate limit") })).toBe(true);
   expect(f.state.getRepoProviderCooldown("org/repo")).toBeDefined();
+});
+
+it("scheduler discovery files a routed PR under the lane's provider, so its throttle never defers other reviews", async () => {
+  const f = fixture(); f.cfg.reviewScheduler!.enabled = true;
+  try {
+    const owner: PullRequestSummary = { ...f.pull, number: 2, authorAssociation: "OWNER", authorLogin: "owner", head: { ...f.pull.head, sha: "d".repeat(40) } };
+    await runScheduledCycleWithDeps({ config: f.cfg, state: f.state, github: { ...f.github, listOpenPulls: async () => [f.pull, owner] },
+      options: { dryRun: true }, reviewPullImpl: vi.fn(async () => "skipped_provider_cooldown" as const), licenseAdmission: testLicenseAdmission });
+    const providerFor = (pullNumber: number) => f.state.listReviewQueueJobs({}).find(job => job.pullNumber === pullNumber)?.providerId;
+    expect(providerFor(1)).toBe("fixture");
+    expect(providerFor(2)).not.toBe("fixture");
+    expect(providerFor(2)).toBeDefined();
+  } finally { f.state.close(); }
 });

@@ -1,4 +1,4 @@
-import { isRoutedToUntrustedProvider, isPublicRepoAuthorBlocked, visibilityFromPullSummary } from "./public-repo-author-gate.js";
+import { isRoutedToUntrustedProvider, isPublicRepoAuthorBlocked, untrustedAuthorReviewProviderId, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
@@ -245,7 +245,9 @@ export async function runScheduledCycleWithDeps(input: {
         state: input.state,
         repo,
         pull,
-        providerId,
+        // A routed untrusted-author PR runs on the lane's provider, so its throttle defers only that provider's jobs.
+        providerId: isRoutedToUntrustedProvider(config, pull, visibilityFromPullSummary(pull))
+          ? untrustedAuthorReviewProviderId(config) ?? providerId : providerId,
         now,
         dryRun: input.options.dryRun,
         reviewPullImpl: input.reviewPullImpl,

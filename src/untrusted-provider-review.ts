@@ -49,9 +49,10 @@ export async function runUntrustedProviderReview(input: {
     } };
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).split(key).join("[redacted-provider-key]");
-    const category = classifyProviderAdapterError(message);
-    // Decide auth from the adapter's leading status only: a relay body that quotes an upstream 401/403 stays retryable.
-    if (/^OpenAI-compatible chat completions endpoint returned (?:401|403) auth failure/.test(message)) throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
+    // Decide from the adapter's leading status first; the response body is untrusted and may quote other statuses or words.
+    const status = /^OpenAI-compatible chat completions endpoint returned (\d{3})\b/.exec(message)?.[1];
+    if (status === "401" || status === "403") throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
+    const category = status === "429" ? "throttle" : classifyProviderAdapterError(message);
     // The worker's cooldown path (classifyProviderError) keys on "rate limit"; keep that signal for a 429.
     if (category === "throttle") throw new Error(UNTRUSTED_PROVIDER_THROTTLE_MESSAGE);
     // Keep transient failures retryable while discarding untrusted response/error text.
