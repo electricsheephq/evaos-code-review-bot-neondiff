@@ -653,7 +653,7 @@ export function loadConfigFromObject(fromFile: unknown, configPath?: string): Bo
   if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.publicRepoAuthorGate !== undefined) {
     const gate = fromFile.reviewGate.publicRepoAuthorGate;
     validatePublicRepoAuthorGateConfig(isRecord(gate) ? { ...DEFAULT_PUBLIC_REPO_AUTHOR_GATE, ...gate } : gate,
-      "config.reviewGate.publicRepoAuthorGate", fromFile.providers as ProviderRegistryConfig | undefined);
+      "config.reviewGate.publicRepoAuthorGate", undefined, false);
   }
   if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.priorThreadSuppression !== undefined) {
     const gate = fromFile.reviewGate.priorThreadSuppression;
@@ -1013,7 +1013,8 @@ function validatePriorThreadSuppressionConfig(value: unknown, label: string): vo
   validateBoolean(value.enabled, `${label}.enabled`);
 }
 
-function validatePublicRepoAuthorGateConfig(value: unknown, label: string, providers?: ProviderRegistryConfig): void {
+// Before the merge only the shape is checked; the provider cross-reference runs on the merged registry in validateConfig.
+function validatePublicRepoAuthorGateConfig(value: unknown, label: string, providers?: ProviderRegistryConfig, crossReference = true): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   for (const key of Object.keys(value)) {
     if (!["mode", "allowedAssociations", "allowedLogins", "untrustedAuthorReview"].includes(key)) throw new Error(`${label} has unknown key "${key}"`);
@@ -1024,10 +1025,12 @@ function validatePublicRepoAuthorGateConfig(value: unknown, label: string, provi
       throw new Error(`${label}.untrustedAuthorReview must contain only mode and providerId`);
     if (lane.mode !== "skip" && lane.mode !== "provider") throw new Error(`${label}.untrustedAuthorReview.mode must be skip or provider`);
     if (lane.providerId !== undefined) validateNonEmptyString(lane.providerId, `${label}.untrustedAuthorReview.providerId`);
-    if (lane.mode === "provider") {
-      const entry = typeof lane.providerId === "string" ? providers?.providers?.[lane.providerId] : undefined;
-      if (!entry?.enabled || entry.adapter !== "openai-compatible" || entry.authMode !== "api-key-env" || !entry.apiKeyEnv || !entry.baseUrl || !entry.model)
-        throw new Error(`${label}.untrustedAuthorReview.providerId must name an enabled openai-compatible api-key-env provider with apiKeyEnv, baseUrl and model`);
+    if (lane.mode === "provider" && typeof lane.providerId !== "string") throw new Error(`${label}.untrustedAuthorReview.providerId is required when mode is provider`);
+    if (lane.mode === "provider" && crossReference) {
+      const entry = providers?.providers?.[lane.providerId as string];
+      if (!entry?.enabled || entry.adapter !== "openai-compatible" || entry.authMode !== "api-key-env" || !entry.apiKeyEnv || !entry.baseUrl || !entry.model
+        || entry.capabilities?.review !== true || entry.capabilities?.jsonOutput !== true)
+        throw new Error(`${label}.untrustedAuthorReview.providerId must name an enabled openai-compatible api-key-env provider with apiKeyEnv, baseUrl, model and the review and jsonOutput capabilities`);
       let url: URL;
       try { url = new URL(entry.baseUrl); } catch { throw new Error(`${label}.untrustedAuthorReview provider baseUrl must be a valid URL`); }
       if (url.protocol !== "https:" && !(url.protocol === "http:" && entry.capabilities?.local && isLoopbackProviderBaseUrl(entry.baseUrl)))

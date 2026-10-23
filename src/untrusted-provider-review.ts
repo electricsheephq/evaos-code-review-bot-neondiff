@@ -28,11 +28,15 @@ export async function runUntrustedProviderReview(input: {
       env, fetchImpl, pinnedTransport: true }).execute({ fixtureId: "untrusted-author-review", providerId, prompt: input.prompt, model: provider.model, adapterId: "openai-compatible" });
     const completedAt = new Date();
     const parsed = JSON.parse(output.text);
+    // A schema-feedback retry that rescued the output is a degraded recovery, as for the other runtimes.
+    const evidence = output.rawEvidence as { schemaRetries?: unknown } | undefined;
+    const schemaRetries = typeof evidence?.schemaRetries === "number" ? evidence.schemaRetries : 0;
+    const attempts = 1 + schemaRetries;
     const { findings, dropped } = parseFindings(parsed);
     return { findings, droppedFromSchema: dropped, summary: parsed.summary === undefined ? emptyReviewModelSummary("Configured provider returned no structured summary.") : parseReviewModelSummary(parsed, findings.length),
-      rawResponse: output.text, attempts: 1, degradedRecovery: false, runtime: {
+      rawResponse: output.text, attempts, degradedRecovery: attempts > 1, runtime: {
       provider: providerId, model: provider.model, startedAt: startedAt.toISOString(), completedAt: completedAt.toISOString(),
-      latencyMs: completedAt.getTime() - startedAt.getTime(), providerAttempts: 1,
+      latencyMs: completedAt.getTime() - startedAt.getTime(), providerAttempts: attempts,
       notes: ["Runtime: openai-compatible; configured provider review with no repository or tool access."]
     } };
   } catch (error) {
@@ -40,6 +44,8 @@ export async function runUntrustedProviderReview(input: {
     const category = classifyProviderAdapterError(message);
     // Decide auth from the status only: an upstream relay error body (e.g. a 503 quoting "403") stays retryable.
     if (/endpoint returned (?:401|403) auth failure/.test(message)) throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
+    // The worker's cooldown path (classifyProviderError) keys on "rate limit"; keep that signal for a 429.
+    if (category === "throttle") throw new Error("Untrusted author provider review failed (throttle): provider rate limit.");
     // Keep transient failures retryable while discarding untrusted response/error text.
     throw new Error(`Untrusted author provider review failed (${category}).`);
   }

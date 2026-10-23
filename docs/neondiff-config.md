@@ -454,9 +454,10 @@ and elapsed milliseconds. This evidence does not establish live posting or cost.
 Opt in to tool-less reviews of otherwise blocked PRs with
 `reviewGate.publicRepoAuthorGate.untrustedAuthorReview: { "mode": "provider", "providerId": "your-provider" }`.
 Absent or `mode: "skip"` preserves the skip. The selected enabled provider must use
-`adapter: "openai-compatible"`, `authMode: "api-key-env"`, `apiKeyEnv`, a model and an HTTPS
-base URL (local loopback HTTP is allowed with `capabilities.local: true`). Its terms must
-allow automated use. The model has no file or tool access: it sees the diff, PR text
+`adapter: "openai-compatible"`, `authMode: "api-key-env"`, `apiKeyEnv`, a model, the `review` and
+`jsonOutput` capabilities and an HTTPS base URL (local loopback HTTP is allowed with
+`capabilities.local: true`). Its terms must allow automated use. Outside authors can trigger these
+reviews, so set a spend limit on the provider key; a 429 follows the normal provider cooldown. The model has no file or tool access: it sees the diff, PR text
 and NeonDiff's existing restricted-review context packets, excluding repo wiki and checkout access.
 Keys come from the configured environment variable at review time; unavailable targets or auth
 record `untrusted_author_provider_unavailable` once per head. Use `review-local --untrusted-author true`

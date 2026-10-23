@@ -281,3 +281,34 @@ it("a config file cannot set the internal untrustedProviderLane marker", () => {
   const cfg = loadConfigFromObject({ untrustedProviderLane: { providerId: "fixture" }, providers: { providers: { fixture: provider } } });
   expect(cfg.untrustedProviderLane).toBeUndefined();
 });
+
+it("a 429 keeps the worker's rate-limit signal for the provider cooldown path", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  const { classifyProviderError } = await import("../src/worker.js");
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () => new Response("slow down", { status: 429 })) as typeof fetch);
+  const error = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(e => e);
+  expect(classifyProviderError(error).category).toBe("quota_or_rate_limit");
+});
+
+it("a schema-feedback retry that rescued the output is reported as a degraded recovery", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  const replies = ["invalid", '{"findings":[]}'];
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: replies.shift() } }] }))) as typeof fetch);
+  const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture"); config.providers!.providers.fixture!.retrySchemaFeedbackMax = 2;
+  expect(await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }))
+    .toMatchObject({ attempts: 2, degradedRecovery: true, runtime: { providerAttempts: 2 } });
+});
+
+it("validates the routed provider against the merged registry and requires review and jsonOutput", () => {
+  const gate = { mode: "on", untrustedAuthorReview: { mode: "provider", providerId: "openai-compatible" } };
+  // A partial override of the built-in openai-compatible entry inherits adapter, authMode and capabilities from the defaults.
+  const merged = loadConfigFromObject({ reviewGate: { publicRepoAuthorGate: gate },
+    providers: { providers: { "openai-compatible": { enabled: true, baseUrl: "https://provider.example/v1", model: "fixture-model", apiKeyEnv: "FIXTURE_PROVIDER_KEY" } } } });
+  expect(merged.reviewGate?.publicRepoAuthorGate?.untrustedAuthorReview?.providerId).toBe("openai-compatible");
+  for (const capabilities of [{ ...provider.capabilities, review: false }, { ...provider.capabilities, jsonOutput: false }]) {
+    expect(() => loadConfigFromObject({ reviewGate: { publicRepoAuthorGate: { mode: "on", untrustedAuthorReview: { mode: "provider", providerId: "fixture" } } },
+      providers: { providers: { fixture: { ...provider, capabilities } } } })).toThrow("review and jsonOutput");
+  }
+  expect(() => loadConfigFromObject({ reviewGate: { publicRepoAuthorGate: { mode: "on", untrustedAuthorReview: { mode: "provider" } } } })).toThrow("providerId is required");
+});
