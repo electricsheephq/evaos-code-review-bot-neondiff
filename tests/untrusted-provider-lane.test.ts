@@ -400,3 +400,15 @@ it("retries a fast transient provider failure in-run but not a gateway timeout",
   await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toThrow("provider review failed");
   expect(pin).toHaveBeenCalledOnce();
 });
+
+it("a 429 inside a chunked routed review reaches the head cooldown path unwrapped", async () => {
+  const { UNTRUSTED_PROVIDER_THROTTLE_MESSAGE } = await import("../src/untrusted-provider-review.js");
+  const f = fixture();
+  const fetch = vi.fn(async () => new Response("slow down", { status: 429 }));
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue(fetch as typeof globalThis.fetch);
+  try {
+    await expect(reviewPull({ config: f.cfg, github: f.github, state: f.state, repo: "org/repo", pull: f.pull, dryRun: true,
+      useZCode: true, providerApiKeys: { fixture: "fixture" }, licenseAdmission: testLicenseAdmission })).rejects.toThrow(UNTRUSTED_PROVIDER_THROTTLE_MESSAGE);
+    expect(fetch).toHaveBeenCalledOnce(); // The first chunk's throttle stops the review; later chunks are not sent.
+  } finally { f.state.close(); }
+});

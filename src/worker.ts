@@ -4790,7 +4790,8 @@ async function runChunkedZCodeReview(input: {
         : disabledZCodeReviewResult(input.config);
     } catch (error) {
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
-      if (error instanceof UntrustedProviderUnavailable) throw error;
+      // The lane's terminal and throttle outcomes must reach reviewPull's handlers (skip record / head cooldown) unwrapped.
+      if (error instanceof UntrustedProviderUnavailable || isUntrustedProviderThrottle(error)) throw error;
       const failure = new Error(`context_budget_chunk_provider_failure chunk=${chunk.index}: ${message}`);
       writeRedactedJson(join(chunkDir, "review-error.json"), {
         repo: input.repo,
