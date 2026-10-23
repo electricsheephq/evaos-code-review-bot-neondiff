@@ -6,6 +6,8 @@ import { emptyReviewModelSummary, parseReviewModelSummary } from "./zcode.js";
 import { parseFindings } from "./findings.js";
 
 export class UntrustedProviderUnavailable extends Error {}
+/** A fast transport failure (DNS, connection, 5xx other than a gateway timeout); retried in-run because a failed head is not requeued. */
+class UntrustedProviderTransient extends Error {}
 
 /** A 429 from this lane defers only the routed head; the repository-wide provider cooldown stays for the main runtime. */
 export const UNTRUSTED_PROVIDER_THROTTLE_MESSAGE = "Untrusted author provider review failed (throttle): provider rate limit.";
@@ -13,10 +15,23 @@ export function isUntrustedProviderThrottle(error: unknown): boolean {
   return (error instanceof Error ? error.message : String(error)).includes(UNTRUSTED_PROVIDER_THROTTLE_MESSAGE);
 }
 
-/** Shared by PR and local review; the provider receives only the prompt, never a checkout or tools. */
-export async function runUntrustedProviderReview(input: {
+type UntrustedProviderReviewInput = {
   config: BotConfig; prompt: string; providerApiKeys?: Record<string, string>; lcmReviewAssessment?: boolean;
-}) {
+};
+
+/** Shared by PR and local review; the provider receives only the prompt, never a checkout or tools. */
+export async function runUntrustedProviderReview(input: UntrustedProviderReviewInput) {
+  const { transientRetryAttempts, transientRetryBaseDelayMs, transientRetryMaxDelayMs } = input.config.providerCooldown;
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await runUntrustedProviderReviewOnce(input); }
+    catch (error) {
+      if (!(error instanceof UntrustedProviderTransient) || attempt > transientRetryAttempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(transientRetryMaxDelayMs, transientRetryBaseDelayMs * 2 ** (attempt - 1))));
+    }
+  }
+}
+
+async function runUntrustedProviderReviewOnce(input: UntrustedProviderReviewInput) {
   const providerId = input.config.untrustedProviderLane!.providerId;
   const provider = input.config.providers!.providers[providerId]!;
   const env = input.providerApiKeys ? { [provider.apiKeyEnv!]: input.providerApiKeys[providerId] } : process.env;
@@ -26,7 +41,7 @@ export async function runUntrustedProviderReview(input: {
   try { fetchImpl = await createPinnedProviderFetch({ baseUrl: provider.baseUrl!, provider }); }
   catch (error) {
     // A lookup that failed or timed out is transient and retried; an unsafe or invalid target is terminal for the head.
-    if (/DNS lookup (?:timed out|failed)/.test(error instanceof Error ? error.message : "")) throw new Error("Untrusted author provider DNS lookup failed (transient).");
+    if (/DNS lookup (?:timed out|failed)/.test(error instanceof Error ? error.message : "")) throw new UntrustedProviderTransient("Untrusted author provider DNS lookup failed (transient).");
     throw new UntrustedProviderUnavailable("Untrusted author provider target/DNS validation failed.");
   }
   const startedAt = new Date();
@@ -55,7 +70,11 @@ export async function runUntrustedProviderReview(input: {
     const category = status === "429" ? "throttle" : classifyProviderAdapterError(message);
     // The worker's cooldown path (classifyProviderError) keys on "rate limit"; keep that signal for a 429.
     if (category === "throttle") throw new Error(UNTRUSTED_PROVIDER_THROTTLE_MESSAGE);
-    // Keep transient failures retryable while discarding untrusted response/error text.
-    throw new Error(`Untrusted author provider review failed (${category}).`);
+    // Discard untrusted response/error text. Fast transport failures are retried above; a timeout already spent its budget.
+    const failure = `Untrusted author provider review failed (${category}).`;
+    if ((status !== undefined && status.startsWith("5") && status !== "504") || (status === undefined && category === "network")) {
+      throw new UntrustedProviderTransient(failure);
+    }
+    throw new Error(failure);
   }
 }

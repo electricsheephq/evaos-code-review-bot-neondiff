@@ -5,7 +5,7 @@ import { isRoutedToUntrustedProvider, buildUntrustedProviderReviewConfig } from 
 export const provider = { enabled: true, adapter: "openai-compatible", authMode: "api-key-env", apiKeyEnv: "FIXTURE_PROVIDER_KEY",
   baseUrl: "https://provider.example/v1", model: "fixture-model", capabilities: { review: true, jsonOutput: true, local: false, streaming: false } };
 export function laneConfig() {
-  return loadConfigFromObject({ codexRuntime: { enabled: true },
+  return loadConfigFromObject({ codexRuntime: { enabled: true }, providerCooldown: { transientRetryBaseDelayMs: 1, transientRetryMaxDelayMs: 1 },
     reviewGate: { publicRepoAuthorGate: { mode: "on", untrustedAuthorReview: { mode: "provider", providerId: "fixture" } }, selfConsistency: { enabled: true } },
     providers: { providers: { fixture: provider } } });
 }
@@ -221,10 +221,13 @@ it("treats a DNS lookup failure as transient and an unsafe DNS answer as termina
   const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
   const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
   const pin = vi.spyOn(providers, "createPinnedProviderFetch");
-  pin.mockRejectedValueOnce(new Error("Remote OpenAI-compatible smoke DNS lookup timed out."));
+  pin.mockRejectedValue(new Error("Remote OpenAI-compatible smoke DNS lookup timed out."));
   const transient = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(error => error);
   expect(transient).toBeInstanceOf(Error);
   expect(transient).not.toBeInstanceOf(UntrustedProviderUnavailable);
+  // A failed head is not requeued, so a transient lookup failure is retried in-run with the configured budget.
+  expect(pin).toHaveBeenCalledTimes(config.providerCooldown.transientRetryAttempts + 1);
+  pin.mockClear();
   pin.mockRejectedValueOnce(new Error("Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."));
   await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toBeInstanceOf(UntrustedProviderUnavailable);
 });
@@ -266,7 +269,7 @@ it("only a 401/403 status is a terminal auth failure; an upstream error body quo
   const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
   const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
   const reply = (status: number, body: string) => vi.spyOn(providers, "createPinnedProviderFetch")
-    .mockResolvedValueOnce((async () => new Response(body, { status })) as typeof fetch);
+    .mockResolvedValue((async () => new Response(body, { status })) as typeof fetch);
   reply(503, '{"error":{"message":"Upstream provider returned 403 Forbidden"}}');
   const relayed = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(error => error);
   expect(relayed).toBeInstanceOf(Error); expect(relayed).not.toBeInstanceOf(UntrustedProviderUnavailable);
@@ -343,7 +346,7 @@ it("lets a schema-constrained provider return the summary and, for lcm-x, the re
 
 it("anchors the terminal auth check to the adapter's own status, not an upstream message inside a 5xx body", async () => {
   const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
-  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () =>
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue((async () =>
     new Response("OpenAI-compatible chat completions endpoint returned 403 auth failure: upstream", { status: 502 })) as typeof fetch);
   const relayed = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture",
     providerApiKeys: { fixture: "fixture" } }).catch(error => error);
@@ -381,4 +384,19 @@ it("scheduler discovery files a routed PR under the lane's provider, so its thro
     expect(providerFor(2)).not.toBe("fixture");
     expect(providerFor(2)).toBeDefined();
   } finally { f.state.close(); }
+});
+
+it("retries a fast transient provider failure in-run but not a gateway timeout", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
+  const replies = [new Response("upstream down", { status: 503 }), new Response(JSON.stringify({ choices: [{ message: { content: '{"findings":[]}' } }] }))];
+  const pin = vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue((async () => replies.shift()!) as typeof fetch);
+  // Transport retries are not output degradation: attempts still count schema-repair draws only.
+  expect(await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }))
+    .toMatchObject({ findings: [], attempts: 1, degradedRecovery: false });
+  expect(pin).toHaveBeenCalledTimes(2);
+  pin.mockClear();
+  pin.mockResolvedValue((async () => new Response("gateway timeout", { status: 504 })) as typeof fetch);
+  await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toThrow("provider review failed");
+  expect(pin).toHaveBeenCalledOnce();
 });
