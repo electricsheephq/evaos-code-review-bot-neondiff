@@ -14,6 +14,20 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+## [1.1.1] - docs/releases/v1.1.1.md
+
+### Fixed
+
+- `review-pr --ci` exits 0 on a normal skip: a notice for a draft, a moved
+  head or a closed pull request, and a warning when restricted review is
+  unavailable. License-gate skips, failures and heads marked processed only in
+  local state still exit 1.
+- The secret-rule differential test allows a cold Swift compile (240 s).
+
+### Docs
+
+- The CI runner guide installs 1.1.1 and pins `neondiff-action` v1.0.1.
+
 ## [1.1.0] - docs/releases/v1.1.0.md
 
 ### Added

@@ -658,8 +658,8 @@ describe("beta release status", () => {
         setupPath: "docs/SETUP.md",
         releaseNotesPath: "docs/releases/v1.0.4.md",
         changelogPath: "CHANGELOG.md",
-        changelogHeadVersion: "1.1.0",
-        changelogReleaseNotesPath: "docs/releases/v1.1.0.md"
+        changelogHeadVersion: "1.1.1",
+        changelogReleaseNotesPath: "docs/releases/v1.1.1.md"
       },
       licenseApi: {
         ok: false,

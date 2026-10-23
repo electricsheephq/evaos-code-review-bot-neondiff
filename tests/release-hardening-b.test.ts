@@ -30,7 +30,7 @@ it("item 2: documents an actionable CI workflow without checking out PR code", (
   for (const step of job.steps.filter((s: { uses?: string }) => s.uses)) expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
   expect(job.steps.find((s: { with?: object }) => s.with)?.with["node-version"]).toBe(26);
   expect(yaml).toContain("npm install -g @openai/codex@0.163.0");
-  expect(yaml).toContain("npx --yes neondiff@1.1.0 review-pr --ci");
+  expect(yaml).toContain("npx --yes neondiff@1.1.1 review-pr --ci");
   expect(yaml).toContain("install -m 600 /dev/null");
   expect(yaml).toContain("NEONDIFF_LICENSE_KEY_FILE");
   expect(yaml).toContain("secrets.OPENAI_API_KEY");

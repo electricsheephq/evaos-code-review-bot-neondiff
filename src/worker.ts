@@ -275,6 +275,7 @@ export interface RunOnceOptions {
 }
 
 export interface RunOnceResult {
+  scopedStatus?: ReviewPullResult | "failed";
   reposScanned: number;
   pullsSeen: number;
   reviewed: number;
@@ -535,6 +536,21 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
         });
         continue;
       }
+      if (options.pullNumber && options.ciConfig && options.expectedHeadSha && pulls[0] &&
+          pulls[0].head.sha !== options.expectedHeadSha) {
+        // In CI the expected head comes from the triggering event; a head that moved before the job
+        // started is a superseded run. Nothing is reviewed or posted; it is recorded as a stale-head skip.
+        result.scopedPull = {
+          repo,
+          pullNumber: pulls[0].number,
+          headSha: pulls[0].head.sha,
+          title: pulls[0].title,
+          url: pulls[0].html_url
+        };
+        result.pullsSeen += 1;
+        applyReviewPullResultToRunOnceResult(result, "skipped_stale_head");
+        continue;
+      }
       if (options.pullNumber) {
         assertExpectedReviewPrHead({
           repo,
@@ -616,6 +632,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             error,
             preserveExistingDryRun: preserveApprovedDryRun
           })) {
+            if (result.scopedPull) result.scopedStatus = "skipped_provider_cooldown";
             result.skippedProviderCooldown += 1;
             continue;
           }
@@ -627,6 +644,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             error,
             preserveExistingDryRun: preserveApprovedDryRun
           });
+          if (result.scopedPull) result.scopedStatus = "failed";
           result.failed += 1;
           continue;
         }
@@ -640,6 +658,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
 }
 
 export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, status: ReviewPullResult): void {
+  if (result.scopedPull) result.scopedStatus = status;
   switch (status) {
     case "reviewed":
       result.reviewed += 1;

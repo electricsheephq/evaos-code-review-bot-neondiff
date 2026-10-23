@@ -2,6 +2,15 @@ import { redactSecrets } from "./secrets.js";
 import type { ProductionLicenseAdmission } from "./license-admission.js";
 import { runOnce, type RunOnceOptions, type RunOnceResult } from "./worker.js";
 
+// Not skipped_processed: outside Actions the CI state can persist and record a failed attempt. A head
+// CI already reviewed exits 0 before the run, from its GitHub review receipt.
+const NORMAL_CI_SKIP_STATUSES = new Set<RunOnceResult["scopedStatus"]>([
+  "skipped_draft", "skipped_stale_head", "skipped_closed",
+  "skipped_base_merge_only", "skipped_finishing_touch_draft",
+  "untrusted_author_restricted_unavailable", "untrusted_author_public_repo",
+  "skipped_command_stop", "skipped_command_explain"
+]);
+
 const STRUCTURED_SECRET_VALUE_PATTERN =
   /(\b(?:api[_-]?key|token|secret|password|cookie|session)\b["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/=-]{16,}/gi;
 
@@ -46,12 +55,14 @@ export function buildRunOnceCliReport(input: {
   repo?: string;
   pullNumber?: number;
   commandName?: "run-once" | "review-pr";
+  ci?: boolean;
 }): RunOnceCliReport {
   const commandName = input.commandName ?? "run-once";
   return {
     ok: runOnceCliExitCode(input.result, {
       dryRun: input.dryRun,
-      commandName
+      commandName,
+      ci: input.ci
     }) === 0,
     command: commandName,
     dryRun: input.dryRun,
@@ -71,6 +82,7 @@ export function runOnceCliExitCode(
   input: {
     dryRun?: boolean;
     commandName?: "run-once" | "review-pr";
+    ci?: boolean;
   } = {}
 ): 0 | 1 {
   const scopedLiveDidNotPost =
@@ -78,8 +90,12 @@ export function runOnceCliExitCode(
     !input.dryRun &&
     Boolean(result.scopedPull) &&
     result.reviewed !== 1;
+  const normalCiSkip = input.ci === true &&
+    result.failed === 0 &&
+    (result.skippedLicenseGate ?? 0) === 0 &&
+    NORMAL_CI_SKIP_STATUSES.has(result.scopedStatus);
   return result.failed > 0 ||
-    scopedLiveDidNotPost ||
+    (scopedLiveDidNotPost && !normalCiSkip) ||
     (!input.dryRun && Boolean(result.scopedPull) && (result.skippedLicenseGate ?? 0) > 0)
     ? 1
     : 0;
@@ -94,6 +110,7 @@ export async function runOnceCliCommand(input: {
   runOnceImpl?: (options: RunOnceOptions) => Promise<RunOnceResult>;
   admitImpl?: () => Promise<ProductionLicenseAdmission>;
   commandName?: "run-once" | "review-pr";
+  ci?: boolean;
 }): Promise<RunOnceCliCommandResult> {
   let result: RunOnceResult;
   try {
@@ -144,14 +161,16 @@ export async function runOnceCliCommand(input: {
     useZCode: input.options.useZCode ?? true,
     repo: input.options.repo,
     pullNumber: input.options.pullNumber,
-    commandName: input.commandName
+    commandName: input.commandName,
+    ci: input.ci
   });
   return {
     report,
     output: serializeRunOnceCliReport(report),
     exitCode: runOnceCliExitCode(result, {
       dryRun: input.options.dryRun,
-      commandName: input.commandName ?? "run-once"
+      commandName: input.commandName ?? "run-once",
+      ci: input.ci
     })
   };
 }
