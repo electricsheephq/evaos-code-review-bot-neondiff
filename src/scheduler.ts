@@ -1,4 +1,4 @@
-import { isPublicRepoAuthorBlocked, visibilityFromPullSummary } from "./public-repo-author-gate.js";
+import { isRoutedToUntrustedProvider, isPublicRepoAuthorBlocked, untrustedAuthorReviewProviderId, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
@@ -245,7 +245,9 @@ export async function runScheduledCycleWithDeps(input: {
         state: input.state,
         repo,
         pull,
-        providerId,
+        // A routed untrusted-author PR runs on the lane's provider, so its throttle defers only that provider's jobs.
+        providerId: isRoutedToUntrustedProvider(config, pull, visibilityFromPullSummary(pull))
+          ? untrustedAuthorReviewProviderId(config) ?? providerId : providerId,
         now,
         dryRun: input.options.dryRun,
         reviewPullImpl: input.reviewPullImpl,
@@ -1645,7 +1647,7 @@ async function syncReviewStatusComment(input: {
   onStatusCommentFailure?: () => void;
   now?: Date;
 }): Promise<void> {
-  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
+  if ((isPublicRepoAuthorBlocked(input.config, input.pull) && !isRoutedToUntrustedProvider(input.config, input.pull, visibilityFromPullSummary(input.pull))) || !isReviewStatusCommentGithub(input.github)) return;
   const result = await postReviewStatusComment({
     enabled: input.config.reviewStatusComment?.enabled ?? false,
     dryRun: input.dryRun,
@@ -1821,6 +1823,7 @@ function reviewResultStatusCommentState(
     case "skipped_base_merge_only":
       return undefined;
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
     case "skipped_draft":
     case "skipped_canary":
@@ -2021,6 +2024,7 @@ function readinessStateForReviewResult(
       return "closed";
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
     case "skipped_draft":
     case "skipped_canary":
@@ -2067,6 +2071,7 @@ function readinessReasonForReviewResult(
     case "skipped_base_merge_only":
       return "base_merge_only";
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
       return status;
     case "skipped_draft":
@@ -2285,6 +2290,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
       return;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
     case "skipped_draft":
     case "skipped_canary":
@@ -2438,6 +2444,7 @@ function updateQueueJobAfterReviewStatus(input: {
       return;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
       // Terminal: a leasable blocked job would be re-leased every cycle. If the gate later allows
       // the head, discovery enqueues a fresh job after this terminal one.
@@ -2722,6 +2729,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       break;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
       result.skippedPolicy += 1;
       result.queue.staleRetired += 1;

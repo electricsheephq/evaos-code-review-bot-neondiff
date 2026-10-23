@@ -179,3 +179,28 @@ it("permits ignored files with reads and dirty files with diff-only review", asy
   await runReviewLocal({ ...args(), "checkout-reads": "false" });
   expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: false }), expect.any(Object));
 });
+
+it("untrusted-author requires the provider mode before any CLI invocation", async () => {
+  await expect(runReviewLocal({ ...args(), "untrusted-author": "true" })).rejects.toThrow("untrustedAuthorReview.mode=provider");
+  expect(runCodexReview).not.toHaveBeenCalled(); expect(resolveCheckoutReadsStatus).not.toHaveBeenCalled();
+});
+it("untrusted-author uses the shared provider path without a Codex probe or tools", async () => {
+  const providers = await import("../src/providers.js");
+  const fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"findings":[],"summary":"Fixture review completed."}' } }] })));
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue(fetch as typeof globalThis.fetch);
+  const config = join(root, "provider.json");
+  fs.writeFileSync(config, JSON.stringify({ codexRuntime: { enabled: false, contextWindowTokens: 1 }, reviewGate: { publicRepoAuthorGate: {
+    untrustedAuthorReview: { mode: "provider", providerId: "fixture" } } }, providers: { providers: { fixture: {
+    enabled: true, adapter: "openai-compatible", authMode: "api-key-env", apiKeyEnv: "FIXTURE_LOCAL_KEY", model: "fixture-model",
+    baseUrl: "https://provider.example/v1", capabilities: { review: true, jsonOutput: true, local: false, streaming: false }
+  } } } }));
+  vi.stubEnv("FIXTURE_LOCAL_KEY", "fixture-local-key");
+  try {
+    await runReviewLocal({ ...args(), config, "untrusted-author": "true", "keep-evidence": "true", "evidence-dir": root });
+    expect(runCodexReview).not.toHaveBeenCalled(); expect(resolveCheckoutReadsStatus).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledOnce(); const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe("fixture-model"); expect(body).not.toHaveProperty("tools"); expect(body).not.toHaveProperty("functions");
+    expect(JSON.stringify(body)).not.toContain("read-only checkout of");
+    expect(JSON.parse(fs.readFileSync(args().out, "utf8"))).toEqual([]);
+  } finally { vi.unstubAllEnvs(); }
+});

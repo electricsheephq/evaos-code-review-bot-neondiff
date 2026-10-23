@@ -73,8 +73,11 @@ export interface ProviderRuntimeAdapter {
 export interface OpenAICompatibleReviewAdapterOptions {
   providerId: string;
   provider: ProviderRegistryEntry;
+  pinnedTransport?: boolean;
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
+  /** Overrides the findings-only response schema, for callers whose prompt asks for more top-level fields. */
+  responseSchema?: object;
 }
 
 export interface ProviderAdapterFixtureEvidence {
@@ -208,12 +211,13 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const env = options.env ?? process.env;
       const baseUrl = provider.baseUrl;
       if (!baseUrl) throw new Error("OpenAI-compatible provider requires baseUrl for review execution.");
-      const targetError = openAICompatibleProviderTargetError(baseUrl, provider, "review");
+      const targetError = openAICompatibleProviderTargetError(baseUrl, provider, "review", { pinnedTransport: options.pinnedTransport });
       if (targetError) throw new Error(targetError);
 
       const apiKey = resolveOpenAICompatibleApiKey(provider, env);
       const timeout = createAbortSignal(provider.timeoutMs);
-      const structuredOutput = buildStructuredOutputRequestFields(provider);
+      const responseSchema = options.responseSchema ?? REVIEW_FINDINGS_JSON_SCHEMA;
+      const structuredOutput = buildStructuredOutputRequestFields(provider, responseSchema);
       const schemaFeedbackMax = resolveSchemaFeedbackRetryMax(provider);
       const schemaFeedbackErrors: string[] = [];
       const schemaEvidenceErrors: string[] = [];
@@ -233,7 +237,8 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
               prompt: input.prompt,
               structuredOutput,
               schemaFeedbackErrors,
-              schemaFeedbackErrorLimit: schemaFeedbackMax
+              schemaFeedbackErrorLimit: schemaFeedbackMax,
+              responseSchema
             }))
           });
 
@@ -297,6 +302,7 @@ function buildOpenAICompatibleReviewRequestBody(input: {
   structuredOutput: { requestFields: Record<string, unknown> };
   schemaFeedbackErrors: readonly string[];
   schemaFeedbackErrorLimit: number;
+  responseSchema?: object;
 }): Record<string, unknown> {
   return {
     model: input.model,
@@ -314,13 +320,14 @@ function buildOpenAICompatibleReviewRequestBody(input: {
       },
       ...(input.schemaFeedbackErrors.length === 0 ? [] : [{
         role: "user",
-        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors, input.schemaFeedbackErrorLimit)
+        content: buildSchemaFeedbackRetryPrompt(input.schemaFeedbackErrors, input.schemaFeedbackErrorLimit, input.responseSchema)
       }])
     ]
   };
 }
 
-function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[], maxSchemaErrors: number): string {
+function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[], maxSchemaErrors: number,
+  responseSchema: object = REVIEW_FINDINGS_JSON_SCHEMA): string {
   const schemaErrorLimit = Math.max(1, Math.min(maxSchemaErrors, SCHEMA_FEEDBACK_RETRY_MAX));
   const recentDistinctErrors = [...new Set(schemaErrors)].slice(-schemaErrorLimit);
   return [
@@ -329,7 +336,7 @@ function buildSchemaFeedbackRetryPrompt(schemaErrors: readonly string[], maxSche
     ...recentDistinctErrors.map((schemaError) => `- ${schemaError}`),
     `Return only a JSON object matching ${REVIEW_FINDINGS_JSON_SCHEMA_NAME}.`,
     "Canonical schema:",
-    JSON.stringify(REVIEW_FINDINGS_JSON_SCHEMA)
+    JSON.stringify(responseSchema)
   ].join("\n");
 }
 
@@ -434,7 +441,7 @@ function buildOpenAICompatibleResponseEvidence(status: number, parsed: Record<st
   };
 }
 
-function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
+function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry, schema: object = REVIEW_FINDINGS_JSON_SCHEMA): {
   requestFields: Record<string, unknown>;
   evidenceMode: string;
 } {
@@ -457,7 +464,7 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
             json_schema: {
               name: REVIEW_FINDINGS_JSON_SCHEMA_NAME,
               strict: REVIEW_FINDINGS_JSON_SCHEMA_STRICT,
-              schema: REVIEW_FINDINGS_JSON_SCHEMA
+              schema
             }
           }
         },
@@ -468,7 +475,7 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
         requestFields: {
           response_format: {
             type: "json_schema",
-            schema: REVIEW_FINDINGS_JSON_SCHEMA
+            schema
           }
         },
         evidenceMode
@@ -477,7 +484,7 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
       return {
         requestFields: {
           structured_outputs: {
-            json: REVIEW_FINDINGS_JSON_SCHEMA
+            json: schema
           }
         },
         evidenceMode
@@ -485,14 +492,14 @@ function buildStructuredOutputRequestFields(provider: ProviderRegistryEntry): {
     case "vllm-guided-json":
       return {
         requestFields: {
-          guided_json: REVIEW_FINDINGS_JSON_SCHEMA
+          guided_json: schema
         },
         evidenceMode
       };
     case "ollama-format-json-schema":
       return {
         requestFields: {
-          format: REVIEW_FINDINGS_JSON_SCHEMA
+          format: schema
         },
         evidenceMode
       };

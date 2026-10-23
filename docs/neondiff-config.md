@@ -451,6 +451,22 @@ Untrusted PRs record `untrusted_author_public_repo` in local state and
 `codex-usage.json` with model, reasoning effort, tokens used (null when unavailable),
 and elapsed milliseconds. This evidence does not establish live posting or cost.
 
+Opt in to tool-less reviews of otherwise blocked PRs with
+`reviewGate.publicRepoAuthorGate.untrustedAuthorReview: { "mode": "provider", "providerId": "your-provider" }`.
+Absent or `mode: "skip"` preserves the skip. The selected enabled provider must use
+`adapter: "openai-compatible"`, `authMode: "api-key-env"`, `apiKeyEnv`, a model, the `review` and
+`jsonOutput` capabilities and an HTTPS base URL (local loopback HTTP is allowed with
+`capabilities.local: true`). Its terms must allow automated use. Outside authors can trigger these
+reviews, so set a spend limit on the provider key. A 429 from this provider defers the reviews queued on that
+provider (after the usual rate-limit cooldown); it does not pause reviews that run on other providers. Fast
+transient failures (DNS, connection, 5xx other than 504) are retried in-run. The model has no file
+or tool access: it sees the diff, PR text and NeonDiff's existing restricted-review context packets, excluding
+repo wiki and checkout access. It returns the same findings and summary shape as the Codex runtime (plus the
+review assessment on repositories that use one), so schema-constrained providers stay compatible.
+Keys come from the configured environment variable at review time; unavailable targets or auth
+record `untrusted_author_provider_unavailable` once per head. Use `review-local --untrusted-author true`
+to exercise the same provider execution path without posting.
+
 ## Codex checkout reads
 
 `codexRuntime.checkoutReads` is a boolean, default `true` from 1.1.0. Set it to

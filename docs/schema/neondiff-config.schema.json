@@ -118,6 +118,11 @@
           "properties": {
             "mode": { "type": "string", "enum": ["auto", "on", "off"], "default": "auto" },
             "allowedAssociations": { "type": "array", "items": { "enum": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"] }, "default": ["OWNER", "MEMBER", "COLLABORATOR"] },
+            "untrustedAuthorReview": {
+              "type": "object", "additionalProperties": false, "required": ["mode"],
+              "properties": { "mode": { "enum": ["skip", "provider"] }, "providerId": { "type": "string", "minLength": 1 } },
+              "if": { "properties": { "mode": { "const": "provider" } } }, "then": { "required": ["providerId"] }
+            },
             "allowedLogins": { "type": "array", "items": { "type": "string", "pattern": "^\\S(?:.*\\S)?$" }, "default": ["dependabot[bot]", "renovate[bot]"] }
           }
         },
