@@ -40,19 +40,27 @@ describe("lean npm release routing", () => {
     ["release", "v1.1.0-beta.90", false], ["release", "v1.1.0-rc.1", false],
     ["release", "v1.1.0-beta.90", true, false], ["workflow_dispatch", "v1.1.0-beta.90", true],
     ["release", "v1.2.0-beta.1", true], ["release", "v1.0.6-rc.1", true],
-    ["release", "v1.1.0-beta.", true], ["release", "v1.1.0-beta..90", true],
-    ["release", "v1.1.0-beta.0", true], ["release", "v1.1.0+build", true]
-  ] as [string, string, boolean, boolean?][])("routes legacy %s %s", (eventName, tag, expected, prerelease = tag.includes("-")) => {
+    ["release", "v1.1.0-beta.", "fail"], ["release", "v1.1.0-beta..90", "fail"],
+    ["release", "v1.1.0-beta.0", "fail"], ["release", "v1.1.0-rc.01", "fail"],
+    ["release", "v1.1.0-beta.0", true, false], ["release", "v1.1.0+build", true]
+  ] as [string, string, boolean | "fail", boolean?][])("routes legacy %s %s", (eventName, tag, expected, prerelease = tag.includes("-")) => {
     const workflow = parse(readFileSync(".github/workflows/publish-npm.yml", "utf8"));
     const script = workflow.jobs.release_route.steps[0].with.script;
     const outputs: Record<string, boolean> = {};
     const notices: string[] = [];
+    const failures: string[] = [];
     new Function("context", "core", script)(
       { eventName, payload: eventName === "release" ? { release: { tag_name: tag, prerelease } } : { inputs: { tag } } },
-      { setOutput: (key: string, value: boolean) => { outputs[key] = value; }, notice: (value: string) => notices.push(value) }
+      {
+        setOutput: (key: string, value: boolean) => { outputs[key] = value; },
+        notice: (value: string) => notices.push(value),
+        setFailed: (value: string) => failures.push(value)
+      }
     );
-    expect(outputs.legacy).toBe(expected);
-    expect(notices).toEqual(expected ? [] : ["handled by release-npm.yml"]);
+    // "fail": a malformed Desktop-prefixed prerelease runs outside the shared group, so it fails without publishing.
+    expect(outputs.legacy).toBe(expected === "fail" ? false : expected);
+    expect(failures).toEqual(expected === "fail" ? [`${tag} is not a Desktop prerelease tag (v1.1.0-beta.N or v1.1.0-rc.N); nothing was published`] : []);
+    expect(notices).toEqual(expected === false ? ["handled by release-npm.yml"] : []);
     expect(workflow.jobs.publish.needs).toBe("release_route");
     expect(workflow.jobs.publish.if).toContain("needs.release_route.outputs.legacy == 'true'");
   });

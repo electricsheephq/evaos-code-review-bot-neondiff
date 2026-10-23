@@ -29,7 +29,8 @@ on:
 concurrency:
   # A 1.1.0+ release event only runs the routing job here. Keep it out of the shared group so it can never
   # replace the pending release-npm.yml run (a group holds one pending run). Dispatches and 1.0.x stay serialized.
-  # Desktop prereleases (v1.1.0-beta.N / -rc.N) are routing-only too.
+  # GitHub prereleases tagged v1.1.0-beta.* / v1.1.0-rc.* are routing-only too: release_route skips a Desktop
+  # tag and fails any other tag with those prefixes, so no publisher runs outside the shared group.
   group: ${{ ((github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'v0.') && !startsWith(github.event.release.tag_name, 'v1.0.') && !contains(github.event.release.tag_name, '-') && !contains(github.event.release.tag_name, '+')) || (github.event_name == 'release' && github.event.release.prerelease && (startsWith(github.event.release.tag_name, 'v1.1.0-beta.') || startsWith(github.event.release.tag_name, 'v1.1.0-rc.')))) && format('publish-npm-route-{0}', github.run_id) || 'publish-npm-neondiff' }}
   cancel-in-progress: false
 
@@ -51,12 +52,20 @@ jobs:
             // A manual dispatch names its tag in inputs; 1.1.0+ must never reach the legacy publisher.
             // Desktop prereleases (v1.1.0-beta.N / v1.1.0-rc.N, published as GitHub prereleases) carry no
             // npm package and are skipped too; other prerelease tags keep the legacy npm beta path.
+            // A GitHub prerelease with those prefixes but no canonical N runs in its own concurrency group
+            // (the group expression cannot check N), so it must not reach the legacy publisher: fail it.
             const tag = context.eventName === 'workflow_dispatch'
               ? context.payload.inputs?.tag ?? ''
               : context.payload.release?.tag_name ?? '';
             const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
-            const desktopPrerelease = context.eventName === 'release' &&
-              context.payload.release?.prerelease === true && /^v1\.1\.0-(beta|rc)\.[1-9][0-9]*$/.test(tag);
+            const desktopPrefix = context.eventName === 'release' &&
+              context.payload.release?.prerelease === true && /^v1\.1\.0-(beta|rc)\./.test(tag);
+            if (desktopPrefix && !/^v1\.1\.0-(beta|rc)\.[1-9][0-9]*$/.test(tag)) {
+              core.setOutput('legacy', false);
+              core.setFailed(`${tag} is not a Desktop prerelease tag (v1.1.0-beta.N or v1.1.0-rc.N); nothing was published`);
+              return;
+            }
+            const desktopPrerelease = desktopPrefix;
             const lean = desktopPrerelease || ((context.eventName === 'release' || context.eventName === 'workflow_dispatch') && match &&
               (BigInt(match[1]) > 1n || (BigInt(match[1]) === 1n && BigInt(match[2]) >= 1n)));
             if (lean) core.notice('handled by release-npm.yml');
