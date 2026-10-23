@@ -457,8 +457,11 @@ Absent or `mode: "skip"` preserves the skip. The selected enabled provider must 
 `adapter: "openai-compatible"`, `authMode: "api-key-env"`, `apiKeyEnv`, a model, the `review` and
 `jsonOutput` capabilities and an HTTPS base URL (local loopback HTTP is allowed with
 `capabilities.local: true`). Its terms must allow automated use. Outside authors can trigger these
-reviews, so set a spend limit on the provider key; a 429 follows the normal provider cooldown. The model has no file or tool access: it sees the diff, PR text
-and NeonDiff's existing restricted-review context packets, excluding repo wiki and checkout access.
+reviews, so set a spend limit on the provider key. A 429 from this provider defers only that PR's review
+(after the usual rate-limit cooldown); it does not pause the repository's other reviews. The model has no file
+or tool access: it sees the diff, PR text and NeonDiff's existing restricted-review context packets, excluding
+repo wiki and checkout access. It returns the same findings and summary shape as the Codex runtime (plus the
+review assessment on repositories that use one), so schema-constrained providers stay compatible.
 Keys come from the configured environment variable at review time; unavailable targets or auth
 record `untrusted_author_provider_unavailable` once per head. Use `review-local --untrusted-author true`
 to exercise the same provider execution path without posting.
