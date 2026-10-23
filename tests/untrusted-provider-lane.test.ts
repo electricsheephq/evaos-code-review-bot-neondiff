@@ -312,3 +312,55 @@ it("validates the routed provider against the merged registry and requires revie
   }
   expect(() => loadConfigFromObject({ reviewGate: { publicRepoAuthorGate: { mode: "on", untrustedAuthorReview: { mode: "provider" } } } })).toThrow("providerId is required");
 });
+
+it("lets a schema-constrained provider return the summary and, for lcm-x, the review assessment", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  const bodies: Array<{ response_format?: { json_schema?: { schema?: { required?: string[]; properties?: Record<string, unknown> } } } }> = [];
+  const assessment = { verdict: "PASS", scope: "fixture", unresolved_findings: [], limitations: [], acceptance: "fixture" };
+  const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ findings: [], summary: { changedBehavior: [], invariants: [], evidence: [],
+      limitations: ["Fixture limitation."], noFindingRationale: "Fixture rationale." }, review_assessment: assessment }) } }] }));
+  });
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue(fetch as typeof globalThis.fetch);
+  const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
+  config.providers!.providers.fixture!.structuredOutputMode = "openai-json-schema";
+  const lcm = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" }, lcmReviewAssessment: true });
+  await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } });
+  const [lcmSchema, plainSchema] = bodies.map(body => body.response_format?.json_schema?.schema);
+  expect(lcmSchema?.required).toEqual(expect.arrayContaining(["findings", "summary", "review_assessment"]));
+  expect(lcmSchema?.properties).toHaveProperty("review_assessment");
+  expect(plainSchema?.required).toEqual(expect.arrayContaining(["findings", "summary"]));
+  expect(plainSchema?.properties).not.toHaveProperty("review_assessment");
+  // The worker's LCM acceptance marker is built from the raw response, so the assessment must survive normalization.
+  expect(JSON.parse(lcm.rawResponse).review_assessment).toEqual(assessment);
+});
+
+it("anchors the terminal auth check to the adapter's own status, not an upstream message inside a 5xx body", async () => {
+  const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () =>
+    new Response("OpenAI-compatible chat completions endpoint returned 403 auth failure: upstream", { status: 502 })) as typeof fetch);
+  const relayed = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture",
+    providerApiKeys: { fixture: "fixture" } }).catch(error => error);
+  expect(relayed).toBeInstanceOf(Error); expect(relayed).not.toBeInstanceOf(UntrustedProviderUnavailable);
+});
+
+it("a 429 from the lane defers only the routed head and never sets the repository-wide provider cooldown", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  const { recordProviderRateLimitCooldownIfNeeded } = await import("../src/worker.js");
+  const f = fixture();
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValueOnce((async () => new Response("slow down", { status: 429 })) as typeof fetch);
+  const laneError = await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture",
+    providerApiKeys: { fixture: "fixture" } }).catch(e => e);
+  // The chunked path rewraps the error with its chunk prefix; the scope must survive that.
+  for (const [index, error] of [laneError, new Error(`context_budget_chunk_provider_failure chunk=1: ${laneError.message}`)].entries()) {
+    const pull = { ...f.pull, number: 10 + index, head: { ...f.pull.head, sha: String(index).repeat(40) } };
+    expect(recordProviderRateLimitCooldownIfNeeded({ config: f.cfg, state: f.state, repo: "org/repo", pull, error })).toBe(true);
+    expect(f.state.getProcessedReview("org/repo", pull.number, pull.head.sha)?.error).toContain("provider_rate_limit_cooldown_until=");
+  }
+  expect(f.state.getRepoProviderCooldown("org/repo")).toBeUndefined();
+  // Control: the main runtime's own rate limit still cools down the repository.
+  const pull = { ...f.pull, number: 20, head: { ...f.pull.head, sha: "c".repeat(40) } };
+  expect(recordProviderRateLimitCooldownIfNeeded({ config: f.cfg, state: f.state, repo: "org/repo", pull, error: new Error("provider rate limit") })).toBe(true);
+  expect(f.state.getRepoProviderCooldown("org/repo")).toBeDefined();
+});

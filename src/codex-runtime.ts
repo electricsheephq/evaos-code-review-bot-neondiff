@@ -126,6 +126,17 @@ export const CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA = {
   }
 } as const;
 
+/** The review output schema: findings and summary, plus the lcm-x review assessment where that repository asks for it. */
+export function codexReviewOutputSchema(input: { checkoutReads: boolean; lcmReviewAssessment?: boolean }) {
+  const schema = input.checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
+  return input.lcmReviewAssessment ? {
+    ...schema,
+    required: [...schema.required, "review_assessment"],
+    properties: { ...schema.properties,
+      review_assessment: { anyOf: [LCM_REVIEW_ASSESSMENT_SCHEMA, { type: "null" }] } }
+  } : schema;
+}
+
 /** Detect-only: human-format output can imitate exec blocks; this is not execution proof. */
 export function parseCodexCommands(stderr: string, echoedPrompt?: string): {
   commands: Array<{ command: string; cwd: string | null; exitStatus: number | null; flagged: boolean }>;
@@ -546,7 +557,7 @@ export async function runCodexReview(input: {
   resolveReadConfinement?: typeof resolveCodexReadConfinement;
 } = {}): Promise<ZCodeReviewResult> {
   const checkoutReads = input.checkoutReads === true && !input.restrictTools;
-  const schema = checkoutReads ? CODEX_CHECKOUT_REVIEW_FINDINGS_JSON_SCHEMA : CODEX_REVIEW_FINDINGS_JSON_SCHEMA;
+  const schema = codexReviewOutputSchema({ checkoutReads, lcmReviewAssessment: input.lcmReviewAssessment });
   const droppedFromEvidence: DroppedFinding[] = [];
   const redactionReportPath = join(input.evidenceDir, "secret-redactions.json");
   // A retry of the same head reuses this evidence dir; a clean rerun must not inherit an old report.
@@ -560,12 +571,7 @@ export async function runCodexReview(input: {
       secretRedacted = true;
       writeSecureFileSync(redactionReportPath, `${JSON.stringify({ count: report.locations.length, ...report }, null, 2)}\n`);
     },
-    schema: input.lcmReviewAssessment ? {
-      ...schema,
-      required: [...schema.required, "review_assessment"],
-      properties: { ...schema.properties,
-        review_assessment: { anyOf: [LCM_REVIEW_ASSESSMENT_SCHEMA, { type: "null" }] } }
-    } : schema,
+    schema,
     parse: (parsed) => {
       const { findings, dropped } = parseFindings(parsed);
       if (dropped.length > 0) {

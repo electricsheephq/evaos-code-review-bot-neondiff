@@ -1,14 +1,21 @@
 import type { BotConfig } from "./config.js";
 import { classifyProviderAdapterError, createOpenAICompatibleReviewAdapter } from "./provider-adapters.js";
 import { createPinnedProviderFetch } from "./providers.js";
+import { codexReviewOutputSchema } from "./codex-runtime.js";
 import { emptyReviewModelSummary, parseReviewModelSummary } from "./zcode.js";
 import { parseFindings } from "./findings.js";
 
 export class UntrustedProviderUnavailable extends Error {}
 
+/** A 429 from this lane defers only the routed head; the repository-wide provider cooldown stays for the main runtime. */
+export const UNTRUSTED_PROVIDER_THROTTLE_MESSAGE = "Untrusted author provider review failed (throttle): provider rate limit.";
+export function isUntrustedProviderThrottle(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)).includes(UNTRUSTED_PROVIDER_THROTTLE_MESSAGE);
+}
+
 /** Shared by PR and local review; the provider receives only the prompt, never a checkout or tools. */
 export async function runUntrustedProviderReview(input: {
-  config: BotConfig; prompt: string; providerApiKeys?: Record<string, string>;
+  config: BotConfig; prompt: string; providerApiKeys?: Record<string, string>; lcmReviewAssessment?: boolean;
 }) {
   const providerId = input.config.untrustedProviderLane!.providerId;
   const provider = input.config.providers!.providers[providerId]!;
@@ -24,8 +31,9 @@ export async function runUntrustedProviderReview(input: {
   }
   const startedAt = new Date();
   try {
-    const output = await createOpenAICompatibleReviewAdapter({ provider, providerId,
-      env, fetchImpl, pinnedTransport: true }).execute({ fixtureId: "untrusted-author-review", providerId, prompt: input.prompt, model: provider.model, adapterId: "openai-compatible" });
+    // The shared prompt asks for a summary (and the lcm-x assessment); a schema-constrained provider must be allowed both.
+    const output = await createOpenAICompatibleReviewAdapter({ provider, providerId, env, fetchImpl, pinnedTransport: true,
+      responseSchema: codexReviewOutputSchema({ checkoutReads: false, lcmReviewAssessment: input.lcmReviewAssessment }) }).execute({ fixtureId: "untrusted-author-review", providerId, prompt: input.prompt, model: provider.model, adapterId: "openai-compatible" });
     const completedAt = new Date();
     const parsed = JSON.parse(output.text);
     // A schema-feedback retry that rescued the output is a degraded recovery, as for the other runtimes.
@@ -33,7 +41,7 @@ export async function runUntrustedProviderReview(input: {
     const schemaRetries = typeof evidence?.schemaRetries === "number" ? evidence.schemaRetries : 0;
     const attempts = 1 + schemaRetries;
     const { findings, dropped } = parseFindings(parsed);
-    return { findings, droppedFromSchema: dropped, summary: parsed.summary === undefined ? emptyReviewModelSummary("Configured provider returned no structured summary.") : parseReviewModelSummary(parsed, findings.length),
+    return { findings, droppedFromSchema: dropped, summary: parsed.summary == null ? emptyReviewModelSummary("Configured provider returned no structured summary.") : parseReviewModelSummary(parsed, findings.length),
       rawResponse: output.text, attempts, degradedRecovery: attempts > 1, runtime: {
       provider: providerId, model: provider.model, startedAt: startedAt.toISOString(), completedAt: completedAt.toISOString(),
       latencyMs: completedAt.getTime() - startedAt.getTime(), providerAttempts: attempts,
@@ -42,10 +50,10 @@ export async function runUntrustedProviderReview(input: {
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).split(key).join("[redacted-provider-key]");
     const category = classifyProviderAdapterError(message);
-    // Decide auth from the status only: an upstream relay error body (e.g. a 503 quoting "403") stays retryable.
-    if (/endpoint returned (?:401|403) auth failure/.test(message)) throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
+    // Decide auth from the adapter's leading status only: a relay body that quotes an upstream 401/403 stays retryable.
+    if (/^OpenAI-compatible chat completions endpoint returned (?:401|403) auth failure/.test(message)) throw new UntrustedProviderUnavailable("Untrusted author provider authentication failed.");
     // The worker's cooldown path (classifyProviderError) keys on "rate limit"; keep that signal for a 429.
-    if (category === "throttle") throw new Error("Untrusted author provider review failed (throttle): provider rate limit.");
+    if (category === "throttle") throw new Error(UNTRUSTED_PROVIDER_THROTTLE_MESSAGE);
     // Keep transient failures retryable while discarding untrusted response/error text.
     throw new Error(`Untrusted author provider review failed (${category}).`);
   }

@@ -169,7 +169,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
     for (const [index, chunk] of chunks.entries()) {
       if (git("rev-parse", "HEAD").trim() !== head) throw new Error("review-local head changed during review");
       const chunkDir = join(evidenceDir, `chunk-${index}`);
-      const result = untrusted ? await runUntrustedProviderReview({ config, prompt: promptForFiles(chunk) }) : await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
+      const result = untrusted ? await runUntrustedProviderReview({ config, prompt: promptForFiles(chunk), lcmReviewAssessment: isLcmReviewRepository(repo) }) : await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
         cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort, checkoutReads,
         timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes, lcmReviewAssessment: isLcmReviewRepository(repo) }, {
         captureWorktreeState: () => git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")

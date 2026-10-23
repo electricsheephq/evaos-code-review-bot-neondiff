@@ -1,4 +1,4 @@
-import { runUntrustedProviderReview, UntrustedProviderUnavailable } from "./untrusted-provider-review.js";
+import { isUntrustedProviderThrottle, runUntrustedProviderReview, UntrustedProviderUnavailable } from "./untrusted-provider-review.js";
 import { buildUntrustedProviderReviewConfig, isRoutedToUntrustedProvider, untrustedAuthorReviewProviderId, isPublicRepoAuthorBlocked, isUntrustedPublicAuthor, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -4043,11 +4043,15 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   const jitterMs = providerCooldownJitterMs(input.config, classification, retryAttempt);
   const durationMs = providerCooldownDurationMs(input.config, classification, retryAttempt, jitterMs);
   const cooldownUntil = new Date(now.getTime() + durationMs);
-  input.state.recordRepoProviderCooldown({
-    repo: input.repo,
-    cooldownUntil,
-    reason: classification.reason
-  });
+  // The untrusted-author lane uses its own provider: its 429 defers only this head (through the head's cooldown
+  // record below), never the repository's other reviews.
+  if (!isUntrustedProviderThrottle(input.error)) {
+    input.state.recordRepoProviderCooldown({
+      repo: input.repo,
+      cooldownUntil,
+      reason: classification.reason
+    });
+  }
   if (
     input.preserveExistingDryRun &&
     previous?.status === "skipped" &&
