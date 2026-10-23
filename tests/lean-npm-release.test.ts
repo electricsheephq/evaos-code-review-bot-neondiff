@@ -38,15 +38,17 @@ describe("lean npm release routing", () => {
     ["release", "v2.0.0", false], ["workflow_dispatch", "v1.1.0", false],
     ["workflow_dispatch", "v1.0.6", true], ["workflow_dispatch", "v2.3.4", false],
     ["release", "v1.1.0-beta.90", false], ["release", "v1.1.0-rc.1", false],
-    ["workflow_dispatch", "v1.1.0-beta.90", false], ["release", "v1.0.6-rc.1", true],
-    ["release", "v1.1.0+build", true], ["release", "v1.1.0-", true]
-  ])("routes legacy %s %s", (eventName, tag, expected) => {
+    ["release", "v1.1.0-beta.90", true, false], ["workflow_dispatch", "v1.1.0-beta.90", true],
+    ["release", "v1.2.0-beta.1", true], ["release", "v1.0.6-rc.1", true],
+    ["release", "v1.1.0-beta.", true], ["release", "v1.1.0-beta..90", true],
+    ["release", "v1.1.0-beta.0", true], ["release", "v1.1.0+build", true]
+  ] as [string, string, boolean, boolean?][])("routes legacy %s %s", (eventName, tag, expected, prerelease = tag.includes("-")) => {
     const workflow = parse(readFileSync(".github/workflows/publish-npm.yml", "utf8"));
     const script = workflow.jobs.release_route.steps[0].with.script;
     const outputs: Record<string, boolean> = {};
     const notices: string[] = [];
     new Function("context", "core", script)(
-      { eventName, payload: eventName === "release" ? { release: { tag_name: tag } } : { inputs: { tag } } },
+      { eventName, payload: eventName === "release" ? { release: { tag_name: tag, prerelease } } : { inputs: { tag } } },
       { setOutput: (key: string, value: boolean) => { outputs[key] = value; }, notice: (value: string) => notices.push(value) }
     );
     expect(outputs.legacy).toBe(expected);
@@ -120,6 +122,7 @@ describe("lean npm publication sequence", () => {
     expect(lean.concurrency.group).toContain("&& 'publish-npm-neondiff' || format('release-npm-route-{0}', github.run_id)");
     expect(legacy.concurrency.group).toContain("!startsWith(github.event.release.tag_name, 'v1.0.')");
     expect(legacy.concurrency.group).toContain("format('publish-npm-route-{0}', github.run_id)");
+    expect(legacy.concurrency.group).toContain("github.event.release.prerelease && (startsWith(github.event.release.tag_name, 'v1.1.0-beta.')");
     expect(legacy.concurrency.group).toContain("|| 'publish-npm-neondiff'");
   });
   it("never moves latest backward when an older release is retried", async () => {

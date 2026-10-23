@@ -29,7 +29,8 @@ on:
 concurrency:
   # A 1.1.0+ release event only runs the routing job here. Keep it out of the shared group so it can never
   # replace the pending release-npm.yml run (a group holds one pending run). Dispatches and 1.0.x stay serialized.
-  group: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'v0.') && !startsWith(github.event.release.tag_name, 'v1.0.') && !contains(github.event.release.tag_name, '-') && !contains(github.event.release.tag_name, '+') && format('publish-npm-route-{0}', github.run_id) || 'publish-npm-neondiff' }}
+  # Desktop prereleases (v1.1.0-beta.N / -rc.N) are routing-only too.
+  group: ${{ ((github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'v0.') && !startsWith(github.event.release.tag_name, 'v1.0.') && !contains(github.event.release.tag_name, '-') && !contains(github.event.release.tag_name, '+')) || (github.event_name == 'release' && github.event.release.prerelease && (startsWith(github.event.release.tag_name, 'v1.1.0-beta.') || startsWith(github.event.release.tag_name, 'v1.1.0-rc.')))) && format('publish-npm-route-{0}', github.run_id) || 'publish-npm-neondiff' }}
   cancel-in-progress: false
 
 permissions:
@@ -48,14 +49,16 @@ jobs:
         with:
           script: |
             // A manual dispatch names its tag in inputs; 1.1.0+ must never reach the legacy publisher.
-            // That includes 1.1.0+ prerelease tags such as Desktop betas (v1.1.0-beta.90), which
-            // release-npm.yml skips; 1.0.x prereleases stay on the legacy path.
+            // Desktop prereleases (v1.1.0-beta.N / v1.1.0-rc.N, published as GitHub prereleases) carry no
+            // npm package and are skipped too; other prerelease tags keep the legacy npm beta path.
             const tag = context.eventName === 'workflow_dispatch'
               ? context.payload.inputs?.tag ?? ''
               : context.payload.release?.tag_name ?? '';
-            const match = /^v(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/.exec(tag);
-            const lean = (context.eventName === 'release' || context.eventName === 'workflow_dispatch') && match &&
-              (BigInt(match[1]) > 1n || (BigInt(match[1]) === 1n && BigInt(match[2]) >= 1n));
+            const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag);
+            const desktopPrerelease = context.eventName === 'release' &&
+              context.payload.release?.prerelease === true && /^v1\.1\.0-(beta|rc)\.[1-9][0-9]*$/.test(tag);
+            const lean = desktopPrerelease || ((context.eventName === 'release' || context.eventName === 'workflow_dispatch') && match &&
+              (BigInt(match[1]) > 1n || (BigInt(match[1]) === 1n && BigInt(match[2]) >= 1n)));
             if (lean) core.notice('handled by release-npm.yml');
             core.setOutput('legacy', !lean);
 
