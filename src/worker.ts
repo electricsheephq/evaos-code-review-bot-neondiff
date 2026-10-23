@@ -1,4 +1,5 @@
-import { isPublicRepoAuthorBlocked, isUntrustedPublicAuthor, visibilityFromPullSummary } from "./public-repo-author-gate.js";
+import { runUntrustedProviderReview, UntrustedProviderUnavailable } from "./untrusted-provider-review.js";
+import { buildUntrustedProviderReviewConfig, isRoutedToUntrustedProvider, untrustedAuthorReviewProviderId, isPublicRepoAuthorBlocked, isUntrustedPublicAuthor, visibilityFromPullSummary } from "./public-repo-author-gate.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -231,11 +232,11 @@ function resolveReviewContextWindowTokens(config: BotConfig): number | undefined
 }
 
 function resolveReviewRegistryProviderId(config: BotConfig): string {
-  return config.providers?.defaultProviderId ?? config.zcode.providerId ?? "zcode-glm";
+  return config.untrustedProviderLane?.providerId ?? config.providers?.defaultProviderId ?? config.zcode.providerId ?? "zcode-glm";
 }
 
 function reviewContextBudgetMatchesExecutionProvider(config: BotConfig): boolean {
-  return config.codexRuntime?.enabled === true ||
+  return Boolean(config.untrustedProviderLane) || config.codexRuntime?.enabled === true ||
     config.providers?.defaultProviderId === config.zcode.providerId;
 }
 
@@ -367,6 +368,7 @@ export type ReviewPullResult =
   | "skipped_policy"
   | "skipped_base_merge_only"
   | "untrusted_author_public_repo"
+  | "untrusted_author_provider_unavailable"
   | "untrusted_author_restricted_unavailable"
   | "skipped_license_gate"
   | "skipped_command_stop"
@@ -392,6 +394,7 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_draft":
     case "skipped_canary":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -684,6 +687,7 @@ export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, stat
       return;
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
     case "skipped_policy":
       result.skippedPolicy += 1;
@@ -1119,7 +1123,7 @@ async function syncRetryReviewStatusComment(input: {
   status: RetryFailedHeadResult["status"];
   dryRun: boolean;
 }): Promise<void> {
-  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return;
+  if ((isPublicRepoAuthorBlocked(input.config, input.pull) && !isRoutedToUntrustedProvider(input.config, input.pull, visibilityFromPullSummary(input.pull))) || !isReviewStatusCommentGithub(input.github)) return;
   const processed = input.state.getProcessedReview(input.repo, input.pull.number, input.headSha);
   if (input.status === "skipped_base_merge_only" ||
     (input.status === "skipped_processed" && processed?.error === "base_merge_only")) {
@@ -1193,6 +1197,7 @@ function retryStatusCommentState(
     case "skipped_canary":
     case "skipped_base_merge_only":
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
     case "skipped_policy":
     case "skipped_license_gate":
@@ -1385,6 +1390,7 @@ function retryQueuePatchForStatus(input: {
     case "skipped_base_merge_only":
       return { state: "stale_retired", lastError: "base_merge_only", sessionJobState: "skipped", sessionProcessedStatus: "skipped" };
     case "untrusted_author_public_repo":
+    case "untrusted_author_provider_unavailable":
     case "untrusted_author_restricted_unavailable":
       // Terminal, matching the scheduler path: blocked_on_proof jobs are re-leased every cycle.
       return { state: "stale_retired", lastError: input.status,
@@ -1495,7 +1501,7 @@ export function restoreFailedRetryRowIfNeeded(input: {
   if (current?.status === "skipped" && current.error === "base_merge_only") return;
   if (current?.status === "failed") return;
   if (current?.status === "skipped"
-    && (current.error === "untrusted_author_public_repo" || current.error === "untrusted_author_restricted_unavailable")) return;
+    && (current.error === "untrusted_author_public_repo" || current.error === "untrusted_author_restricted_unavailable" || current.error === "untrusted_author_provider_unavailable")) return;
 
   const restoreAsProviderCooldown =
     input.retryTarget.previousStatus === "skipped" &&
@@ -1568,6 +1574,7 @@ export interface ReviewPullInput {
   explicitPullReview?: ExplicitPullReviewScope;
   dryRun: boolean;
   useZCode: boolean;
+  providerApiKeys?: Record<string, string>;
   configRevision?: string;
   sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
@@ -1583,14 +1590,17 @@ export function recordPublicRepoAuthorGateSkip(input: {
   config: BotConfig; state: ReviewStateStore; repo: string; pull: PullRequestSummary;
 }, visibility = visibilityFromPullSummary(input.pull)): boolean {
   const reason = "untrusted_author_public_repo";
-  const existing = getProcessedReviewIfAvailable(input.state, input.repo, input.pull.number, input.pull.head.sha);
+  let existing = getProcessedReviewIfAvailable(input.state, input.repo, input.pull.number, input.pull.head.sha);
   const alreadySkipped = existing?.status === "skipped" && existing.error === reason;
-  if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility)) {
+  const routed = isRoutedToUntrustedProvider(input.config, input.pull, visibility);
+  if (existing?.error === "untrusted_author_provider_unavailable" && !routed)
+    if (input.state.clearAuthorGateSkip(input.repo, input.pull.number, input.pull.head.sha, "untrusted_author_provider_unavailable")) existing = undefined;
+  if (!isPublicRepoAuthorBlocked(input.config, input.pull, visibility) || routed) {
     // The gate decision can change (mode, allowlist); a gate skip must not pin the head as processed.
     if (alreadySkipped) input.state.clearAuthorGateSkip(input.repo, input.pull.number, input.pull.head.sha);
     // Likewise a restricted-review skip once the author is trusted (a trusted review needs no confinement).
     if (existing?.status === "skipped" && existing.error === "untrusted_author_restricted_unavailable"
-      && !isUntrustedPublicAuthor(input.config, input.pull, visibility)) {
+      && (routed || !isUntrustedPublicAuthor(input.config, input.pull, visibility))) {
       input.state.clearAuthorGateSkip(input.repo, input.pull.number, input.pull.head.sha, "untrusted_author_restricted_unavailable");
     }
     return false;
@@ -1617,9 +1627,9 @@ export function recordPublicRepoAuthorGateSkip(input: {
 // A processed row keeps discovery from re-enqueueing the head on every poll; recordPublicRepoAuthorGateSkip
 // clears it once the author is trusted, and a new head is decided afresh.
 export function recordRestrictedReviewUnavailable(
-  state: ReviewStateStore, repo: string, pull: PullRequestSummary
-): "untrusted_author_restricted_unavailable" {
-  const reason = "untrusted_author_restricted_unavailable";
+  state: ReviewStateStore, repo: string, pull: PullRequestSummary,
+  reason: "untrusted_author_restricted_unavailable" | "untrusted_author_provider_unavailable" = "untrusted_author_restricted_unavailable"
+): "untrusted_author_restricted_unavailable" | "untrusted_author_provider_unavailable" {
   const existing = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   // A kept processed row (for example a posted review reached again by a manual command) keeps its readiness too.
   if (!existing || existing.status === "failed") {
@@ -1645,6 +1655,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const visibility = scopedAdmission
     ? visibilityFromRepositorySummary(await github.getRepo(repo))
     : visibilityFromPullSummary(pull);
+  const routedProviderId = isRoutedToUntrustedProvider(config, pull, visibility) ? untrustedAuthorReviewProviderId(config) : undefined;
   if (recordPublicRepoAuthorGateSkip({ config, state, repo, pull }, visibility)) return "untrusted_author_public_repo";
   const visibilityDecision = authorizeAdmissionForVisibility(
     input.licenseAdmission,
@@ -2001,12 +2012,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     // All main/chunk/ensemble calls share runConfiguredReview; severe/self-consistency
     // calls share resolveSelfConsistencyBackend. Reject either non-Codex route before any model call.
+    let reviewConfig = routedProviderId ? buildUntrustedProviderReviewConfig(config, routedProviderId) : config;
     const restrictTools = isUntrustedPublicAuthor(config, pull, visibility);
-    if (restrictTools && input.useZCode) {
-      const selfConsistency = config.reviewGate?.selfConsistency;
-      const unavailableBackend = !config.codexRuntime?.enabled
+    if (routedProviderId) writeRedactedJson(join(evidenceDir, "author-trust.json"), { restricted: true, reason: "untrusted_author_provider_lane", providerId: routedProviderId });
+    if (restrictTools && input.useZCode && !routedProviderId) {
+      const selfConsistency = reviewConfig.reviewGate?.selfConsistency;
+      const unavailableBackend = !reviewConfig.codexRuntime?.enabled
         ? `restricted review needs the Codex main review; configured provider=${config.zcode.providerId ?? "ZCode"} cannot be confined`
-        : selfConsistency?.enabled && !resolveSelfConsistencyBackend(config, selfConsistency).useCodex
+        : selfConsistency?.enabled && !resolveSelfConsistencyBackend(reviewConfig, selfConsistency).useCodex
           ? `restricted review needs a confinable Codex verifier; reviewGate.selfConsistency.provider=${selfConsistency.provider} cannot be confined`
           : undefined;
       if (unavailableBackend) {
@@ -2029,8 +2042,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     const proof = evaluateProofRequirements({ pull, validation });
     // Pin Codex only when this review can spawn it; no-provider dry runs work on hosts without Codex.
-    const reviewCliPath = config.codexRuntime?.enabled && input.useZCode
-      ? resolveTrustedCodexPath(config.codexRuntime.cliPath, config.workRoot) : config.codexRuntime?.cliPath;
+    const reviewCliPath = reviewConfig.codexRuntime?.enabled && input.useZCode
+      ? resolveTrustedCodexPath(reviewConfig.codexRuntime.cliPath, config.workRoot) : reviewConfig.codexRuntime?.cliPath;
     const worktree = await preparePullWorktree({
       repo,
       pullNumber: pull.number,
@@ -2151,15 +2164,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Decided once per review: every checkout-read site below reads reviewConfig, so the prompt,
     // schema, sandbox and citation checks all agree on the fallback.
     // Only a review that spawns Codex probes it: the probe runs the pinned binary, never a PATH lookup.
-    const checkoutReads = config.codexRuntime?.enabled && input.useZCode
-      ? resolveCheckoutReadsStatus({ checkoutReads: config.codexRuntime.checkoutReads, restrictTools, probeSandbox: true, cwd: worktree.path, cliPath: reviewCliPath!,
+    const checkoutReads = reviewConfig.codexRuntime?.enabled && input.useZCode
+      ? resolveCheckoutReadsStatus({ checkoutReads: reviewConfig.codexRuntime.checkoutReads, restrictTools, probeSandbox: true, cwd: worktree.path, cliPath: reviewCliPath!,
           sensitivePaths: { config: configFilePaths.get(config) ?? process.env.NEONDIFF_CONFIG,
             "private key": config.github.privateKeyPath, "state DB": config.statePath,
             // Both license paths: an inherited env file must not hide the configured key.
             "license key": process.env.NEONDIFF_LICENSE_KEY_FILE, "configured license key": config.license?.keyPath,
             evidence: config.evidenceDir } })
       : { status: "disabled" as const };
-    if (restrictTools && input.useZCode) {
+    if (restrictTools && input.useZCode && !routedProviderId) {
       const confined = checkoutReads.status === "enabled" && Boolean(checkoutReads.confinement);
       const reason = confined ? "untrusted_author_public_repo" : "untrusted_author_restricted_unavailable";
       writeRedactedJson(join(evidenceDir, "author-trust.json"), { restricted: true, reason,
@@ -2169,10 +2182,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         return recordRestrictedReviewUnavailable(state, repo, pull);
       }
     }
-    const reviewConfig: BotConfig = config.codexRuntime?.enabled
-      ? { ...config, codexRuntime: { ...config.codexRuntime, cliPath: reviewCliPath!, checkoutReads: !restrictTools && checkoutReads.status === "enabled",
+    reviewConfig = reviewConfig.codexRuntime?.enabled
+      ? { ...reviewConfig, codexRuntime: { ...reviewConfig.codexRuntime, cliPath: reviewCliPath!, checkoutReads: !restrictTools && checkoutReads.status === "enabled",
           restrictTools, ...(restrictTools ? { readConfinement: checkoutReads.confinement } : {}) } }
-      : config;
+      : reviewConfig;
     if (checkoutReads.status !== "disabled") writeRedactedJson(join(evidenceDir, "checkout-reads.json"), checkoutReads);
     if (checkoutReads.status.startsWith("unavailable:")) {
       console.warn(
@@ -2196,7 +2209,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const prompt = promptForFiles(reviewFiles);
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
-    const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
+    const settingsPreview = buildReviewSettingsPreview(reviewConfig, repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
@@ -2207,7 +2220,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const contextBudget = planContextBudget({
       prompt,
       files: reviewFiles,
-      contextWindowTokens: resolveReviewContextWindowTokens(config),
+      contextWindowTokens: resolveReviewContextWindowTokens(reviewConfig),
       config: config.contextBudget,
       buildPrompt: promptForFiles
     });
@@ -2243,13 +2256,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       assertReviewApprovalRevisionCurrent({
         approvedRevision: input.configRevision,
         sourceConfigRevision: input.sourceConfigRevision,
-        useZCode: input.useZCode && !config.codexRuntime?.enabled,
+        useZCode: input.useZCode && !reviewConfig.codexRuntime?.enabled && !routedProviderId,
         zcodeAppConfigPath: config.zcode.appConfigPath
       });
     };
     assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
       config: reviewConfig,
+      providerApiKeys: input.providerApiKeys,
       github,
       state,
       repo,
@@ -2315,7 +2329,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
     const zcodeResult = zcodeExecution.result;
-    if (restrictTools && input.useZCode) (zcodeResult.runtime.notes ??= []).push("Untrusted public author: shell tools and project docs disabled; diff-only review with confined reads.");
+    if (restrictTools && input.useZCode && !routedProviderId) (zcodeResult.runtime.notes ??= []).push("Untrusted public author: shell tools and project docs disabled; diff-only review with confined reads.");
     if (checkoutReads.status.startsWith("unavailable:") && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(`Checkout reads ${checkoutReads.status}; this was a diff-only review.`);
     }
@@ -2458,7 +2472,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           validation,
           proof,
           modelSummary: zcodeResult.summary,
-          provider: buildReviewProviderMetadata(config),
+          provider: buildReviewProviderMetadata(reviewConfig),
           postIssueComment: config.walkthrough.postIssueComment,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
@@ -2500,7 +2514,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       rawResponse: zcodeResult.rawResponse,
       secretRedacted: zcodeResult.secretRedacted === true,
       complete: contextBudget.mode === "within_budget" && zcodeResult.attempts === 1 &&
-        !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(config) &&
+        !zcodeResult.degradedRecovery && reviewContextBudgetMatchesExecutionProvider(reviewConfig) &&
         reviewFiles.length === files.length && lcmReviewFileInventoryIsComplete(files.length) &&
         lcmReviewPatchSetIsComplete(reviewFiles, config.zcode.maxPatchBytes),
       droppedFindingCount: zcodeResult.droppedFromSchema.length + (zcodeResult.droppedFromEvidence?.length ?? 0)
@@ -2748,12 +2762,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         validation,
         proof,
         modelSummary: zcodeResult.summary,
-        provider: buildReviewProviderMetadata(config),
+        provider: buildReviewProviderMetadata(reviewConfig),
         postIssueComment: config.walkthrough.postIssueComment,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
       // LCM review bodies must end with their terminal assessment marker, so they carry no footer.
-      if (!isLcmReviewRepository(repo)) plan.walkthrough.body = appendReviewAttribution(plan.walkthrough.body, buildReviewProviderMetadata(config).model);
+      if (!isLcmReviewRepository(repo)) plan.walkthrough.body = appendReviewAttribution(plan.walkthrough.body, buildReviewProviderMetadata(reviewConfig).model);
       assertReviewOutputSafe(plan.walkthrough.body);
     }
     if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
@@ -2805,7 +2819,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       event: plan.event,
       body: isLcmReviewRepository(repo)
         ? appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo)
-        : appendReviewAttribution(appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo), buildReviewProviderMetadata(config).model),
+        : appendReviewAttribution(appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo), buildReviewProviderMetadata(reviewConfig).model),
       comments
     });
     try {
@@ -2934,6 +2948,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
     }
     return manualReviewRequested ? "reviewed_command" : "reviewed";
+  } catch (error) {
+    if (error instanceof UntrustedProviderUnavailable) return recordRestrictedReviewUnavailable(state, repo, pull, "untrusted_author_provider_unavailable");
+    throw error;
   } finally {
     startShadowLeaves?.();
     if (ensembleEvidencePromise) await ensembleEvidencePromise;
@@ -3092,7 +3109,7 @@ async function postDirectReviewCompletedStatusComment(input: {
   processed: { reviewUrl?: string };
   now: Date;
 }): Promise<boolean> {
-  if (isPublicRepoAuthorBlocked(input.config, input.pull) || !isReviewStatusCommentGithub(input.github)) return false;
+  if ((isPublicRepoAuthorBlocked(input.config, input.pull) && !isRoutedToUntrustedProvider(input.config, input.pull, visibilityFromPullSummary(input.pull))) || !isReviewStatusCommentGithub(input.github)) return false;
   const result = await postReviewStatusComment({
     enabled: input.config.reviewStatusComment?.enabled ?? false,
     dryRun: input.dryRun,
@@ -4362,6 +4379,7 @@ async function applySelfConsistencyRecheck(input: {
   files: PullFilePatch[];
   worktreePath: string;
   evidenceDir: string;
+  providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
 }): Promise<{ comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string }> {
   const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
@@ -4563,6 +4581,7 @@ async function runReviewWithContextBudget(input: {
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
+  providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const plan = buildReviewEnsemblePlan(input.config.reviewEnsemble ?? { enabled: false, mode: "shadow" });
@@ -4684,6 +4703,7 @@ async function runSingleReviewWithContextBudget(input: {
   evidenceDir: string;
   authority?: "canonical" | "shadow";
   deferCanonicalFailureRecord?: boolean;
+  providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   if (input.contextBudget.mode === "chunk") {
@@ -4700,6 +4720,7 @@ async function runSingleReviewWithContextBudget(input: {
         worktreePath: input.worktreePath,
         prompt: input.prompt,
         evidenceDir: input.evidenceDir,
+        providerApiKeys: input.providerApiKeys,
         assertProviderConfigCurrent: input.assertProviderConfigCurrent
       })
     : disabledZCodeReviewResult(input.config);
@@ -4719,6 +4740,7 @@ async function runChunkedZCodeReview(input: {
   evidenceDir: string;
   authority?: "canonical" | "shadow";
   deferCanonicalFailureRecord?: boolean;
+  providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
@@ -4758,11 +4780,13 @@ async function runChunkedZCodeReview(input: {
             worktreePath: input.worktreePath,
             prompt,
             evidenceDir: chunkDir,
+            providerApiKeys: input.providerApiKeys,
             assertProviderConfigCurrent: input.assertProviderConfigCurrent
           })
         : disabledZCodeReviewResult(input.config);
     } catch (error) {
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
+      if (error instanceof UntrustedProviderUnavailable) throw error;
       const failure = new Error(`context_budget_chunk_provider_failure chunk=${chunk.index}: ${message}`);
       writeRedactedJson(join(chunkDir, "review-error.json"), {
         repo: input.repo,
@@ -4823,8 +4847,8 @@ async function runChunkedZCodeReview(input: {
       attempts,
       degradedRecovery,
       runtime: {
-        provider: input.config.codexRuntime?.enabled ? "codex-cli-oauth" : input.config.zcode.providerId,
-        model: input.config.codexRuntime?.enabled ? input.config.codexRuntime.model : input.config.zcode.model,
+        provider: input.config.untrustedProviderLane?.providerId ?? (input.config.codexRuntime?.enabled ? "codex-cli-oauth" : input.config.zcode.providerId),
+        model: input.config.untrustedProviderLane ? buildReviewProviderMetadata(input.config).model : input.config.codexRuntime?.enabled ? input.config.codexRuntime.model : input.config.zcode.model,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         latencyMs: completedAt.getTime() - startedAt.getTime(),
@@ -4845,10 +4869,10 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
     attempts: 0,
     degradedRecovery: false,
     runtime: {
-      provider: codexRuntime ? "codex-cli-oauth" : config.zcode.providerId,
-      model: codexRuntime?.model ?? config.zcode.model,
+      provider: config.untrustedProviderLane?.providerId ?? (codexRuntime ? "codex-cli-oauth" : config.zcode.providerId),
+      model: config.untrustedProviderLane ? buildReviewProviderMetadata(config).model : codexRuntime?.model ?? config.zcode.model,
       providerAttempts: 0,
-      notes: [codexRuntime
+      notes: [codexRuntime || config.untrustedProviderLane
         ? "Configured review execution disabled for this dry-run; provider latency and token usage were not measured."
         : "ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
     }
@@ -4861,8 +4885,10 @@ async function runConfiguredReview(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  if (input.config.untrustedProviderLane) return runUntrustedProviderReview(input);
   if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
   input.assertProviderConfigCurrent?.();
   const startedAt = new Date();
@@ -4904,6 +4930,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   const startedAt = new Date();

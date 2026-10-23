@@ -23,6 +23,11 @@ and `--agent` to select settings. Codex is enabled by default. Evidence uses a
 temporary directory; `--evidence-dir` selects its location and `--keep-evidence`
 preserves it. Settings print to stdout before execution.
 
+Use `--untrusted-author true` with `untrustedAuthorReview.mode: "provider"` to run
+the same provider execution as routed PR reviews. This disables Codex, checkout access,
+repo wiki and extra model draws; the operator still reads the local diff to build the prompt.
+The provider model and API-key environment variable come from that configured registry entry.
+
 When checkout reads are enabled, commit or stash tracked and untracked changes, or use a clean detached worktree at the review head; ignored files such as `node_modules` are allowed.
 
 For ReviewBench, use `review-local --reviewbench-env --format reviewbench`.

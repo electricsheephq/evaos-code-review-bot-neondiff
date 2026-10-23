@@ -970,7 +970,7 @@ export class ReviewStateStore {
     repo: string,
     pullNumber: number,
     headSha: string,
-    reason: "untrusted_author_public_repo" | "untrusted_author_restricted_unavailable" = "untrusted_author_public_repo"
+    reason: "untrusted_author_public_repo" | "untrusted_author_restricted_unavailable" | "untrusted_author_provider_unavailable" = "untrusted_author_public_repo"
   ): boolean {
     const result = this.db
       .prepare(

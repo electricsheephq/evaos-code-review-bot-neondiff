@@ -73,6 +73,7 @@ export interface ProviderRuntimeAdapter {
 export interface OpenAICompatibleReviewAdapterOptions {
   providerId: string;
   provider: ProviderRegistryEntry;
+  pinnedTransport?: boolean;
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
 }
@@ -208,7 +209,7 @@ export function createOpenAICompatibleReviewAdapter(options: OpenAICompatibleRev
       const env = options.env ?? process.env;
       const baseUrl = provider.baseUrl;
       if (!baseUrl) throw new Error("OpenAI-compatible provider requires baseUrl for review execution.");
-      const targetError = openAICompatibleProviderTargetError(baseUrl, provider, "review");
+      const targetError = openAICompatibleProviderTargetError(baseUrl, provider, "review", { pinnedTransport: options.pinnedTransport });
       if (targetError) throw new Error(targetError);
 
       const apiKey = resolveOpenAICompatibleApiKey(provider, env);

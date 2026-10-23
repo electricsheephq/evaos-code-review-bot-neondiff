@@ -2308,7 +2308,7 @@ async function main(): Promise<void> {
         scopedResult?.scopedPull && scopedResult.reviewed !== 1 && scopedResult.scopedStatus) {
       const { repo, pullNumber } = scopedResult.scopedPull;
       const status = scopedResult.scopedStatus;
-      console.error(status === "untrusted_author_restricted_unavailable"
+      console.error((status === "untrusted_author_restricted_unavailable" || status === "untrusted_author_provider_unavailable")
         ? `::warning::NeonDiff did not review ${repo}#${pullNumber}: ${status}`
         : `::notice::NeonDiff skipped ${repo}#${pullNumber}: ${status}`);
     }
@@ -3722,6 +3722,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       ...["repo", "pr-number", "title", "out", "agent", "config", "model", "reasoning-effort", "evidence-dir"].map(name => ({ name: `--${name}`, description: `Local review ${name}.` })),
       { name: "--format", description: "neondiff (default) or reviewbench." },
       { name: "--checkout-reads", description: "true or false; overrides config." },
+      { name: "--untrusted-author", description: "true uses the configured tool-less untrusted-author provider lane." },
       { name: "--keep-evidence", description: "Keep temporary review evidence (default false)." },
       { name: "--reviewbench-env", description: "Read inputs and settings from RB_* variables." }
     ]

@@ -7,7 +7,7 @@ import { runOnce, type RunOnceOptions, type RunOnceResult } from "./worker.js";
 const NORMAL_CI_SKIP_STATUSES = new Set<RunOnceResult["scopedStatus"]>([
   "skipped_draft", "skipped_stale_head", "skipped_closed",
   "skipped_base_merge_only", "skipped_finishing_touch_draft",
-  "untrusted_author_restricted_unavailable", "untrusted_author_public_repo",
+  "untrusted_author_provider_unavailable", "untrusted_author_restricted_unavailable", "untrusted_author_public_repo",
   "skipped_command_stop", "skipped_command_explain"
 ]);
 

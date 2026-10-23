@@ -20,7 +20,7 @@ export interface ProviderSmokeRequestOptions {
   hostname: string;
   port: string;
   path: string;
-  method: "GET";
+  method: string;
   headers: Record<string, string>;
   timeout: number;
   servername?: string;
@@ -34,7 +34,7 @@ export interface ProviderSmokeRequestOptions {
 export interface ProviderSmokeRequestHandle {
   on(event: "timeout", listener: () => void): ProviderSmokeRequestHandle;
   on(event: "error", listener: (error: Error) => void): ProviderSmokeRequestHandle;
-  end(): ProviderSmokeRequestHandle | void;
+  end(body?: string): ProviderSmokeRequestHandle | void;
   destroy(error?: Error): ProviderSmokeRequestHandle | void;
 }
 
@@ -484,7 +484,8 @@ type OpenAICompatibleTargetPurpose = "smoke" | "review";
 export function openAICompatibleProviderTargetError(
   baseUrl: string,
   provider: ProviderRegistryEntry,
-  purpose: OpenAICompatibleTargetPurpose
+  purpose: OpenAICompatibleTargetPurpose,
+  options: { pinnedTransport?: boolean } = {}
 ): string | undefined {
   const targetLabel = purpose === "review" ? "review target" : "smoke target";
   const operationLabel = purpose === "review" ? "review execution" : "smoke checks";
@@ -513,10 +514,35 @@ export function openAICompatibleProviderTargetError(
   if (isUnsafeSmokeHost(parsed.hostname)) {
     return `OpenAI-compatible ${targetLabel} must not point to private, link-local, loopback, or cloud metadata hosts.`;
   }
+  if (purpose === "review" && options.pinnedTransport && parsed.protocol === "https:") return undefined;
   if (!loopback) {
     return `Remote OpenAI-compatible ${operationLabel} ${disabledVerb} disabled until the transport can pin the validated DNS result.`;
   }
   return undefined;
+}
+
+/** Validate and resolve once; every request uses this address and never follows redirects. */
+export async function createPinnedProviderFetch(target: {
+  baseUrl: string; provider: ProviderRegistryEntry; dnsLookupImpl?: DnsLookupImpl; requestImpl?: ProviderSmokeRequestImpl;
+}): Promise<typeof fetch> {
+  const error = openAICompatibleProviderTargetError(target.baseUrl, target.provider, "review", { pinnedTransport: true });
+  if (error) throw new Error(error);
+  const base = new URL(target.baseUrl);
+  if (base.protocol !== "https:" && !(base.protocol === "http:" && target.provider.capabilities.local && isLoopbackHost(base.hostname)))
+    throw new Error("Provider review target must use HTTPS.");
+  const dnsLookup: DnsLookupImpl = target.dnsLookupImpl ?? defaultDnsLookup;
+  const local = isLoopbackHost(base.hostname) && target.provider.capabilities.local;
+  const resolution: { address?: DnsLookupAddress; error?: string } = local
+    ? { address: (await dnsLookup(base.hostname.replace(/^\[|\]$/g, ""), { all: true, verbatim: true }))[0] }
+    : await resolvePinnedRemoteSmokeAddress(base.hostname, dnsLookup, target.provider.timeoutMs);
+  if (local && resolution.address && !isLoopbackHost(resolution.address.address)) throw new Error("Provider local DNS target must be loopback.");
+  if (resolution.error || !resolution.address) throw new Error(resolution.error ?? "Provider review DNS validation failed.");
+  return (async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.origin !== base.origin || parsed.username || parsed.password) throw new Error("Provider review transport target changed.");
+    return fetchProviderModelsWithPinnedRequest(parsed.toString(), init,
+      { modelsUrl: parsed.toString(), remote: true, pinnedAddress: resolution.address }, target.provider.timeoutMs, target.requestImpl, 4 * 1024 * 1024);
+  }) as typeof fetch;
 }
 
 interface ProviderSmokeTarget {
@@ -726,7 +752,8 @@ async function fetchProviderModelsWithPinnedRequest(
   init: RequestInit,
   target: ProviderSmokeTarget,
   timeoutMs: number | undefined,
-  requestImpl?: ProviderSmokeRequestImpl
+  requestImpl?: ProviderSmokeRequestImpl,
+  maxResponseBytes = MAX_PROVIDER_SMOKE_RESPONSE_BYTES
 ): Promise<Response> {
   const parsed = new URL(url);
   const requestFn = parsed.protocol === "https:" ? httpsRequest : httpRequest;
@@ -737,7 +764,7 @@ async function fetchProviderModelsWithPinnedRequest(
     hostname: parsed.hostname,
     port: parsed.port,
     path: `${parsed.pathname}${parsed.search}`,
-    method: "GET",
+    method: init.method ?? "GET",
     headers: Object.fromEntries(headers.entries()),
     timeout: providerSmokeTimeoutMs(timeoutMs),
     ...(target.pinnedAddress
@@ -799,8 +826,8 @@ async function fetchProviderModelsWithPinnedRequest(
       response.on("data", (chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         totalBytes += buffer.byteLength;
-        if (totalBytes > MAX_PROVIDER_SMOKE_RESPONSE_BYTES) {
-          request?.destroy(new ProviderSmokeResponseTooLargeError());
+        if (totalBytes > maxResponseBytes) {
+          request?.destroy(maxResponseBytes === MAX_PROVIDER_SMOKE_RESPONSE_BYTES ? new ProviderSmokeResponseTooLargeError() : new Error("Provider review response exceeded byte limit."));
           return;
         }
         chunks.push(buffer);
@@ -840,7 +867,7 @@ async function fetchProviderModelsWithPinnedRequest(
       return;
     }
     init.signal?.addEventListener("abort", abort, { once: true });
-    request.end();
+    request.end(typeof init.body === "string" ? init.body : undefined);
   });
 }
 

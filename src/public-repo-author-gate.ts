@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildCodexRuntimeEnv } from "./codex-runtime.js";
-import type { PublicRepoAuthorGateConfig } from "./config.js";
+import type { BotConfig, PublicRepoAuthorGateConfig } from "./config.js";
 import { DEFAULT_PUBLIC_REPO_AUTHOR_GATE } from "./public-repo-author-gate-defaults.js";
 import type { PullRequestSummary } from "./types.js";
 
@@ -70,4 +70,21 @@ export function isPublicRepoAuthorBlocked(
   config: PublicRepoAuthorGateSettings, pull: PullRequestSummary, visibility = visibilityFromPullSummary(pull)
 ): boolean {
   return isAuthorBlockedOnPublicRepo(config, pull, visibility);
+}
+
+export function untrustedAuthorReviewProviderId(config: PublicRepoAuthorGateSettings): string | undefined {
+  const lane = config.reviewGate?.publicRepoAuthorGate?.untrustedAuthorReview;
+  return lane?.mode === "provider" ? lane.providerId : undefined;
+}
+
+export function isRoutedToUntrustedProvider(config: PublicRepoAuthorGateSettings, author: GateAuthorIdentity, visibility: RepositoryVisibility): boolean {
+  return isAuthorBlockedOnPublicRepo(config, author, visibility) && untrustedAuthorReviewProviderId(config) !== undefined;
+}
+
+export function buildUntrustedProviderReviewConfig(config: BotConfig, providerId: string): BotConfig {
+  return { ...config, untrustedProviderLane: { providerId },
+    codexRuntime: config.codexRuntime ? { ...config.codexRuntime, enabled: false } : undefined,
+    reviewGate: { ...config.reviewGate!, selfConsistency: { ...config.reviewGate?.selfConsistency, enabled: false } },
+    reviewEnsemble: { ...config.reviewEnsemble, enabled: false, mode: "shadow" }
+  };
 }

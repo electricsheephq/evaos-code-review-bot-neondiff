@@ -113,6 +113,7 @@ export interface BotConfig {
   license?: LicenseConfig;
   desktop?: DesktopConfig;
   providers?: ProviderRegistryConfig;
+  untrustedProviderLane?: { providerId: string };
   codexRuntime?: {
     enabled: boolean;
     checkoutReads?: boolean;
@@ -260,6 +261,7 @@ export interface PublicRepoAuthorGateConfig {
   mode: "auto" | "on" | "off";
   allowedAssociations: string[];
   allowedLogins: string[];
+  untrustedAuthorReview?: { mode: "skip" | "provider"; providerId?: string };
 }
 export { DEFAULT_PUBLIC_REPO_AUTHOR_GATE };
 
@@ -651,7 +653,7 @@ export function loadConfigFromObject(fromFile: unknown, configPath?: string): Bo
   if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.publicRepoAuthorGate !== undefined) {
     const gate = fromFile.reviewGate.publicRepoAuthorGate;
     validatePublicRepoAuthorGateConfig(isRecord(gate) ? { ...DEFAULT_PUBLIC_REPO_AUTHOR_GATE, ...gate } : gate,
-      "config.reviewGate.publicRepoAuthorGate");
+      "config.reviewGate.publicRepoAuthorGate", fromFile.providers as ProviderRegistryConfig | undefined);
   }
   if (isRecord(fromFile) && isRecord(fromFile.reviewGate) && fromFile.reviewGate.priorThreadSuppression !== undefined) {
     const gate = fromFile.reviewGate.priorThreadSuppression;
@@ -798,7 +800,7 @@ function validateConfig(config: BotConfig): void {
   config.confidenceCalibration = confidenceCalibration;
   const reviewGate = config.reviewGate ?? DEFAULT_CONFIG.reviewGate!;
   config.reviewGate = reviewGate;
-  validateReviewGateConfig(reviewGate, "config.reviewGate");
+  validateReviewGateConfig(reviewGate, "config.reviewGate", config.providers);
   const repoMemory = config.repoMemory ?? DEFAULT_CONFIG.repoMemory!;
   config.repoMemory = repoMemory;
   validateRepoMemoryConfig(repoMemory, "config.repoMemory");
@@ -962,12 +964,12 @@ function validatePublicCommandsConfig(value: unknown, label: string): void {
   validatePositiveInteger(value.cooldownMinutes, `${label}.cooldownMinutes`);
 }
 
-function validateReviewGateConfig(value: unknown, label: string): void {
+function validateReviewGateConfig(value: unknown, label: string, providers?: ProviderRegistryConfig): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   if (value.priorThreadSuppression !== undefined) {
     validatePriorThreadSuppressionConfig(value.priorThreadSuppression, `${label}.priorThreadSuppression`);
   }
-  if (value.publicRepoAuthorGate !== undefined) validatePublicRepoAuthorGateConfig(value.publicRepoAuthorGate, `${label}.publicRepoAuthorGate`);
+  if (value.publicRepoAuthorGate !== undefined) validatePublicRepoAuthorGateConfig(value.publicRepoAuthorGate, `${label}.publicRepoAuthorGate`, providers);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
   validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
   if (value.requestChangesConfidenceFloors !== undefined) {
@@ -1009,10 +1011,26 @@ function validatePriorThreadSuppressionConfig(value: unknown, label: string): vo
   validateBoolean(value.enabled, `${label}.enabled`);
 }
 
-function validatePublicRepoAuthorGateConfig(value: unknown, label: string): void {
+function validatePublicRepoAuthorGateConfig(value: unknown, label: string, providers?: ProviderRegistryConfig): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   for (const key of Object.keys(value)) {
-    if (!["mode", "allowedAssociations", "allowedLogins"].includes(key)) throw new Error(`${label} has unknown key "${key}"`);
+    if (!["mode", "allowedAssociations", "allowedLogins", "untrustedAuthorReview"].includes(key)) throw new Error(`${label} has unknown key "${key}"`);
+  }
+  const lane = value.untrustedAuthorReview;
+  if (lane !== undefined) {
+    if (!isRecord(lane) || Object.keys(lane).some(key => !["mode", "providerId"].includes(key)))
+      throw new Error(`${label}.untrustedAuthorReview must contain only mode and providerId`);
+    if (lane.mode !== "skip" && lane.mode !== "provider") throw new Error(`${label}.untrustedAuthorReview.mode must be skip or provider`);
+    if (lane.providerId !== undefined) validateNonEmptyString(lane.providerId, `${label}.untrustedAuthorReview.providerId`);
+    if (lane.mode === "provider") {
+      const entry = typeof lane.providerId === "string" ? providers?.providers?.[lane.providerId] : undefined;
+      if (!entry?.enabled || entry.adapter !== "openai-compatible" || entry.authMode !== "api-key-env" || !entry.apiKeyEnv || !entry.baseUrl || !entry.model)
+        throw new Error(`${label}.untrustedAuthorReview.providerId must name an enabled openai-compatible api-key-env provider with apiKeyEnv, baseUrl and model`);
+      let url: URL;
+      try { url = new URL(entry.baseUrl); } catch { throw new Error(`${label}.untrustedAuthorReview provider baseUrl must be a valid URL`); }
+      if (url.protocol !== "https:" && !(url.protocol === "http:" && entry.capabilities?.local && isLoopbackProviderBaseUrl(entry.baseUrl)))
+        throw new Error(`${label}.untrustedAuthorReview provider baseUrl must use HTTPS (local loopback HTTP is allowed)`);
+    }
   }
   if (!["auto", "on", "off"].includes(value.mode as string)) throw new Error(`${label}.mode must be auto, on, or off`);
   if (!Array.isArray(value.allowedAssociations) || value.allowedAssociations.some(

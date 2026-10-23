@@ -1,3 +1,5 @@
+import { buildUntrustedProviderReviewConfig, untrustedAuthorReviewProviderId } from "./public-repo-author-gate.js";
+import { runUntrustedProviderReview } from "./untrusted-provider-review.js";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -118,19 +120,24 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   const configPath = arg("config");
   const raw = configPath ? JSON.parse(readFileSync(configPath, "utf8")) : {};
   const model = input("model", "RB_CONFIG_MODEL"), effort = input("reasoning-effort", "RB_CONFIG_REASONING"), reads = input("checkout-reads", "RB_CONFIG_CHECKOUT_READS");
-  const config = loadConfigFromObject({ ...raw, codexRuntime: { enabled: true, ...raw.codexRuntime,
+  let config = loadConfigFromObject({ ...raw, codexRuntime: { enabled: true, ...raw.codexRuntime,
     ...(model ? { model } : {}), ...(effort ? { reasoningEffort: effort } : {}), ...(reads !== undefined ? { checkoutReads: boolean(reads, "checkout_reads") } : {}) } });
-  if (!config.codexRuntime?.enabled) throw new Error("review-local requires codexRuntime.enabled=true");
-  const runtime = config.codexRuntime;
+  const untrusted = boolean(arg("untrusted-author"), "--untrusted-author");
+  const providerId = untrustedAuthorReviewProviderId(config);
+  if (untrusted && !providerId) throw new Error("--untrusted-author requires untrustedAuthorReview.mode=provider");
+  if (untrusted) config = buildUntrustedProviderReviewConfig(config, providerId!);
+  if (!untrusted && !config.codexRuntime?.enabled) throw new Error("review-local requires codexRuntime.enabled=true");
+  const runtime = config.codexRuntime!;
+  const provider = untrusted ? config.providers!.providers[providerId!]! : undefined;
   const agent = arg("agent") ?? env.RB_AGENT ?? "neondiff";
   // Decided once, as in the worker: without a supported Codex CLI or confinement the review falls back to diff-only.
-  const readsStatus = resolveCheckoutReadsStatus({ checkoutReads: runtime.checkoutReads, probeSandbox: true, cwd: repoPath, cliPath: runtime.cliPath });
+  const readsStatus = untrusted ? { status: "disabled" as const } : resolveCheckoutReadsStatus({ checkoutReads: runtime.checkoutReads, probeSandbox: true, cwd: repoPath, cliPath: runtime.cliPath });
   const checkoutReads = readsStatus.status === "enabled";
   if (checkoutReads && git("status", "--porcelain=v1", "--untracked-files=all").trim()) {
     throw new Error("review-local --checkout-reads requires a clean checkout (commit/stash or use a detached worktree)");
   }
   if (readsStatus.status.startsWith("unavailable:")) console.warn(`[checkout-reads] ${readsStatus.status}: ${readsStatus.detail ?? "unavailable"}; running a diff-only review`);
-  console.log(`model=${runtime.model} effort=${runtime.reasoningEffort} checkout_reads=${checkoutReads}`);
+  console.log(`model=${provider?.model ?? runtime.model} effort=${untrusted ? "provider" : runtime.reasoningEffort} checkout_reads=${checkoutReads}`);
   const diffPath = input("diff-file", "RB_DIFF");
   const diffFiles = parseLocalDiff(diffPath ? readFileSync(diffPath, "utf8") : git("diff", "--no-ext-diff", "--no-textconv", "--no-color", `${base}...${head}`));
   // Use the configured profile when there is one; a repo missing from (or disabled in) the registry reviews under the default.
@@ -143,7 +150,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   const promptForFiles = (files: PullFilePatch[]) => buildReviewPrompt({ repo, pull, files, repoProfile: profile.profile,
     maxPatchBytes: config.zcode.maxPatchBytes, ...(checkoutReads ? { checkoutAccess: "shell_read_only" as const } : {}) });
   const prompt = promptForFiles(files);
-  const budget = planContextBudget({ prompt, files, contextWindowTokens: runtime.contextWindowTokens, config: config.contextBudget, buildPrompt: promptForFiles });
+  const budget = planContextBudget({ prompt, files, contextWindowTokens: untrusted ? provider?.contextWindowTokens : runtime.contextWindowTokens, config: config.contextBudget, buildPrompt: promptForFiles });
   if (budget.mode === "skip") throw new Error(`review-local ${budget.reason}`);
   const keep = boolean(arg("keep-evidence"), "--keep-evidence");
   const evidenceRoot = arg("evidence-dir") ? resolve(arg("evidence-dir")!) : tmpdir();
@@ -162,12 +169,13 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
     for (const [index, chunk] of chunks.entries()) {
       if (git("rev-parse", "HEAD").trim() !== head) throw new Error("review-local head changed during review");
       const chunkDir = join(evidenceDir, `chunk-${index}`);
-      const result = await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
+      const result = untrusted ? await runUntrustedProviderReview({ config, prompt: promptForFiles(chunk) }) : await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
         cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort, checkoutReads,
         timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes, lcmReviewAssessment: isLcmReviewRepository(repo) }, {
         captureWorktreeState: () => git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
       });
       findings.push(...result.findings.filter(f => chunk.some(file => file.filename === f.path)));
+      if (untrusted) { hasTokens = false; continue; }
       const usage = JSON.parse(readFileSync(join(chunkDir, "codex-usage.json"), "utf8"));
       if (typeof usage.tokensUsed === "number") totalTokens += usage.tokensUsed;
       else hasTokens = false;
