@@ -36,7 +36,10 @@ describe("lean npm release routing", () => {
   it.each([
     ["release", "v1.0.6", true], ["release", "v1.1.0", false],
     ["release", "v2.0.0", false], ["workflow_dispatch", "v1.1.0", false],
-    ["workflow_dispatch", "v1.0.6", true], ["workflow_dispatch", "v2.3.4", false]
+    ["workflow_dispatch", "v1.0.6", true], ["workflow_dispatch", "v2.3.4", false],
+    ["release", "v1.1.0-beta.90", false], ["release", "v1.1.0-rc.1", false],
+    ["workflow_dispatch", "v1.1.0-beta.90", false], ["release", "v1.0.6-rc.1", true],
+    ["release", "v1.1.0+build", true], ["release", "v1.1.0-", true]
   ])("routes legacy %s %s", (eventName, tag, expected) => {
     const workflow = parse(readFileSync(".github/workflows/publish-npm.yml", "utf8"));
     const script = workflow.jobs.release_route.steps[0].with.script;
