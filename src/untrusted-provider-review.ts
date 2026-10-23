@@ -56,7 +56,7 @@ async function runUntrustedProviderReviewOnce(input: UntrustedProviderReviewInpu
     const schemaRetries = typeof evidence?.schemaRetries === "number" ? evidence.schemaRetries : 0;
     const attempts = 1 + schemaRetries;
     const { findings, dropped } = parseFindings(parsed);
-    return { findings, droppedFromSchema: dropped, summary: parsed.summary == null ? emptyReviewModelSummary("Configured provider returned no structured summary.") : parseReviewModelSummary(parsed, findings.length),
+    return { findings, droppedFromSchema: dropped, summary: laneSummary(parsed, findings.length),
       rawResponse: output.text, attempts, degradedRecovery: attempts > 1, runtime: {
       provider: providerId, model: provider.model, startedAt: startedAt.toISOString(), completedAt: completedAt.toISOString(),
       latencyMs: completedAt.getTime() - startedAt.getTime(), providerAttempts: attempts,
@@ -77,4 +77,11 @@ async function runUntrustedProviderReviewOnce(input: UntrustedProviderReviewInpu
     }
     throw new Error(failure);
   }
+}
+
+// Findings are the review; a missing or malformed walkthrough summary degrades to an empty one instead of failing the head.
+function laneSummary(parsed: { summary?: unknown }, findingCount: number) {
+  if (parsed.summary == null) return emptyReviewModelSummary("Configured provider returned no structured summary.");
+  try { return parseReviewModelSummary(parsed, findingCount); }
+  catch { return emptyReviewModelSummary("Configured provider returned an invalid structured summary."); }
 }

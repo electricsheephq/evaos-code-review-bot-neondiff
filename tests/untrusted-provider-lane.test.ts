@@ -412,3 +412,11 @@ it("a 429 inside a chunked routed review reaches the head cooldown path unwrappe
     expect(fetch).toHaveBeenCalledOnce(); // The first chunk's throttle stops the review; later chunks are not sent.
   } finally { f.state.close(); }
 });
+
+it("keeps valid findings when the provider's summary is malformed", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue((async () => new Response(JSON.stringify({ choices: [{ message: { content:
+    JSON.stringify({ findings: [], summary: { changedBehavior: [], invariants: [], evidence: [], limitations: [], noFindingRationale: "x" } }) } }] }))) as typeof fetch);
+  expect(await runUntrustedProviderReview({ config: buildUntrustedProviderReviewConfig(laneConfig(), "fixture"), prompt: "fixture", providerApiKeys: { fixture: "fixture" } }))
+    .toMatchObject({ findings: [], summary: { limitations: [expect.stringContaining("invalid structured summary")] } });
+});
