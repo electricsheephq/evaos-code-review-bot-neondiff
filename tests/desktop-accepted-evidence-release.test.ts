@@ -209,7 +209,7 @@ describe("retained accepted Desktop evidence", () => {
     expect(workflowSource).toContain("contents/docs/releases/desktop/declarations/$SELECTED_PATH?ref=$GITHUB_SHA");
     const protectedIndexPath = "docs/releases/desktop/index.json";
     const protectedIndex = JSON.parse(readFileSync(protectedIndexPath, "utf8"));
-    expect(protectedIndex).toMatchObject({ status: "retained", currentPath: "v1.1.0-beta.87.json" });
+    expect(protectedIndex).toMatchObject({ status: "retained", currentPath: "v1.1.0-beta.90.json" });
     expect(protectedIndex.declarationPaths).toContain("v1.1.0-beta.87.json");
     expect(spawnSync(process.execPath, ["scripts/validate-desktop-release-declaration.mjs", "--index", protectedIndexPath], { cwd: process.cwd(), encoding: "utf8" }).status).toBe(0);
 

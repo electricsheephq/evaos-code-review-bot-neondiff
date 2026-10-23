@@ -645,6 +645,82 @@ when a docs file is not warranted:
 - provider cooldown rows:
 - public manifest:
 
+## Desktop (Mac) beta
+
+The lean release checklist in [`release-governance.md`](release-governance.md) replaces the #610
+ceremony and the #895 transition gate for the Desktop **beta** channel.
+`apps/neondiff-desktop/docs/mac-release-runbook.md` stays the reference for a
+stable channel. This path was first used for `1.1.0-beta.90`.
+
+**1. Identity.**
+- Validators accept only `1.1.0-beta.N`. By convention the build is 11004 + N (beta.90 is build 11094); nothing enforces the formula, so check it by hand. Builds must only increase.
+- Tag the release commit on `main` with an annotated tag (`git tag -a v1.1.0-beta.N <sha>`), push it (`git push origin v1.1.0-beta.N`), and check that `git ls-remote origin 'refs/tags/v1.1.0-beta.N^{}'` shows that commit. The download canary rejects lightweight tags.
+- Append `docs/releases/desktop/declarations/v1.1.0-beta.N.json`, with the previous beta as predecessor, and update `index.json`. Validate with `node scripts/validate-desktop-release-declaration.mjs`. The accepted-packet workflow needs the declaration.
+- Build from a clean, detached worktree at that commit, after `npm ci`.
+
+**2. Build.**
+
+```sh
+cd apps/neondiff-desktop
+export NEONDIFF_DESKTOP_VERSION=1.1.0-beta.N NEONDIFF_DESKTOP_BUILD=<11004+N>
+export NEONDIFF_SPARKLE_FEED_URL=https://www.neondiff.com/updates/beta/appcast.xml
+export NEONDIFF_SPARKLE_PUBLIC_ED_KEY="<SUPublicEDKey of the current beta app>"
+export NEONDIFF_DESKTOP_PAID_BETA_CONTRACT=paid-mac-beta-byo-v1 NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED=true
+export NEONDIFF_SPARKLE_REQUIRED=1
+script/build_and_run.sh release-build && script/build_and_run.sh release-bundle-check
+```
+
+The public key must hash to the value pinned in
+`desktop-accepted-release-packet.yml`.
+
+**3. Sign every nested binary, inside out, without `--deep`.** Apple rejects the
+app if Sparkle's helpers keep their stock signatures: it reports "not signed
+with a valid Developer ID certificate" and "no secure timestamp" for `Updater`,
+`Autoupdate`, `Downloader` and `Installer`. So:
+
+```sh
+APP=dist/NeonDiff.app; B="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+sign() { codesign --force --options runtime --timestamp --sign "$IDENTITY" "$@"; }
+sign --entitlements script/worker-runtime.entitlements.plist "$APP/Contents/Helpers/NeonDiffWorker"
+sign "$B/XPCServices/Installer.xpc"
+sign --preserve-metadata=entitlements "$B/XPCServices/Downloader.xpc"
+sign "$B/Autoupdate"
+sign "$B/Updater.app"
+sign "$APP/Contents/Frameworks/Sparkle.framework"
+sign "$APP"
+codesign --verify --deep --strict --verbose=2 $APP
+```
+
+**4. Notarize, staple, verify.**
+- `ditto -c -k --keepParent` → `xcrun notarytool submit --keychain-profile neondiff-notary --wait`.
+- If the status is `Invalid`, read it with `xcrun notarytool log <id>`.
+- Then `xcrun stapler staple`, `stapler validate`, and `spctl -a -vv --type execute`; spctl must report `Notarized Developer ID`.
+
+**5. Package and sign the update.**
+- Re-zip the **stapled** app as `NeonDiff-1.1.0-beta.N-build<B>-macOS.zip`. The zip sent to Apple has no ticket.
+- Record `shasum -a 256` and the byte length.
+- Run `.build/artifacts/sparkle/Sparkle/bin/sign_update <zip>`, which reads the private key from the login keychain, then `sign_update --verify <zip> <signature>`.
+- Extract the zip and run `spctl` on the extracted app.
+
+**6. Host.**
+- `gh release create v1.1.0-beta.N --prerelease --verify-tag <zip>`.
+- Download the asset and compare its checksum.
+- The release event also runs the npm workflows. `release-npm.yml` skips prereleases; see #1221 for `publish-npm.yml`.
+
+**7. Dogfood soak before the feed moves.**
+- Move the installed app aside as the rollback copy, `ditto` the extracted app into `/Applications`, then `launchctl kickstart -k gui/$UID/com.electricsheephq.evaos-code-review-bot` while the worker has no child processes.
+- Confirm a `daemon_heartbeat` row with `review_lane=active`.
+- Over 24 h, compare posted reviews in `processed_reviews` with the previous beta's 24 h rate.
+
+**8. Publish.**
+- In `website-neon-diff-agent`, prepend the new `<item>` (with `sparkle:edSignature` and `length`) to `public/updates/beta/appcast.xml`, and update `MAC_RELEASE_METADATA.beta` in `src/lib/paid-beta-release-gate.ts`.
+- Merge, then publish the site.
+- Dispatch `paid-beta-public-download-canary.yml`. It does a clean install on macOS 14, 15 and 26 and checks the feed, signature and team ID.
+
+**Rollback.**
+- Locally: move the rollback app back and kickstart the agent.
+- If the feed has already moved: Sparkle 2 does not downgrade, and a bundle's build is part of its signed bytes, so old bytes cannot be re-signed "at a higher build". Instead, build the previous source at a new, higher build, run it through steps 2–6, and publish that item.
+
 ## Notes
 
 - What changed:
