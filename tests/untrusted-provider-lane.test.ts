@@ -202,7 +202,7 @@ it("provider errors never expose the API key in thrown text or logs", async () =
   catch (error) { expect(String(error)).not.toContain(key); }
 });
 
-it("accepts the adapter's findings-only schema and makes one call even with schema retries configured", async () => {
+it("accepts the adapter's findings-only schema and keeps the provider's schema-repair retries", async () => {
   const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
   const fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"findings":[]}' } }] })));
   vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue(fetch as typeof globalThis.fetch);
@@ -213,5 +213,18 @@ it("accepts the adapter's findings-only schema and makes one call even with sche
   expect(fetch).toHaveBeenCalledOnce(); fetch.mockClear();
   fetch.mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: "invalid" } }] })));
   await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toThrow();
-  expect(fetch).toHaveBeenCalledOnce();
+  // One draw plus the two configured schema-repair retries; a weaker provider often fixes its JSON on feedback.
+  expect(fetch).toHaveBeenCalledTimes(3);
+});
+
+it("treats a DNS lookup failure as transient and an unsafe DNS answer as terminal", async () => {
+  const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
+  const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
+  const pin = vi.spyOn(providers, "createPinnedProviderFetch");
+  pin.mockRejectedValueOnce(new Error("Remote OpenAI-compatible smoke DNS lookup timed out."));
+  const transient = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } }).catch(error => error);
+  expect(transient).toBeInstanceOf(Error);
+  expect(transient).not.toBeInstanceOf(UntrustedProviderUnavailable);
+  pin.mockRejectedValueOnce(new Error("Remote OpenAI-compatible smoke DNS resolved to an unsafe private, link-local, loopback, or metadata address."));
+  await expect(runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } })).rejects.toBeInstanceOf(UntrustedProviderUnavailable);
 });

@@ -17,10 +17,14 @@ export async function runUntrustedProviderReview(input: {
   if (!key) throw new UntrustedProviderUnavailable("Missing API key for untrusted author provider.");
   let fetchImpl: typeof fetch;
   try { fetchImpl = await createPinnedProviderFetch({ baseUrl: provider.baseUrl!, provider }); }
-  catch { throw new UntrustedProviderUnavailable("Untrusted author provider target/DNS validation failed."); }
+  catch (error) {
+    // A lookup that failed or timed out is transient and retried; an unsafe or invalid target is terminal for the head.
+    if (/DNS lookup (?:timed out|failed)/.test(error instanceof Error ? error.message : "")) throw new Error("Untrusted author provider DNS lookup failed (transient).");
+    throw new UntrustedProviderUnavailable("Untrusted author provider target/DNS validation failed.");
+  }
   const startedAt = new Date();
   try {
-    const output = await createOpenAICompatibleReviewAdapter({ provider: { ...provider, retrySchemaFeedbackMax: 0 }, providerId,
+    const output = await createOpenAICompatibleReviewAdapter({ provider, providerId,
       env, fetchImpl, pinnedTransport: true }).execute({ fixtureId: "untrusted-author-review", providerId, prompt: input.prompt, model: provider.model, adapterId: "openai-compatible" });
     const completedAt = new Date();
     const parsed = JSON.parse(output.text);
