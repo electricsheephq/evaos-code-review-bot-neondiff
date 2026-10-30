@@ -330,6 +330,12 @@ describe("daemon cycle resilience", () => {
     expect(await run(throwing)).toEqual(expected);
     expect(expected).toEqual({ ok: false, failureKind, error: "cycle failed" });
     expect(throwing).toHaveBeenCalledTimes(1);
+    // An async recorder's rejection must stay inside the guard, not surface as an unhandled rejection.
+    // A plain function on purpose: vi.fn() observes returned promises, which would mark the rejection handled.
+    let rejectingCalls = 0;
+    const rejecting = async () => { rejectingCalls += 1; throw new Error("state unavailable"); };
+    expect(await run(rejecting)).toEqual(expected);
+    expect(rejectingCalls).toBe(1);
   });
 
   it.each(["admission_denied", "runtime_failure"] as const)("persists %s through the configured default recorder", async (failureKind) => {

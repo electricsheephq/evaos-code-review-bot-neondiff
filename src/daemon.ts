@@ -77,7 +77,7 @@ export interface RunDaemonCycleOptions {
   ) => void;
   recordFailureImpl?: (failure: {
     failureKind: "admission_denied" | "runtime_failure"; message: string; runId?: string;
-  }) => void;
+  }) => void | Promise<void>;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -91,9 +91,9 @@ export interface CleanupReviewWorktreesDeps {
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
-  const recordFailure: NonNullable<RunDaemonCycleOptions["recordFailureImpl"]> = (failure) => {
+  const recordFailure = async (failure: Parameters<NonNullable<RunDaemonCycleOptions["recordFailureImpl"]>>[0]) => {
     try {
-      if (input.recordFailureImpl) input.recordFailureImpl(failure);
+      if (input.recordFailureImpl) await input.recordFailureImpl(failure);
       else recordDaemonCycleFailureFromConfig({
         configPath: input.configPath, cycle: input.cycle, dryRun: input.dryRun, ...failure, stderr
       });
@@ -111,7 +111,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
-    recordFailure({ failureKind: "admission_denied", message });
+    await recordFailure({ failureKind: "admission_denied", message });
     return { ok: false, failureKind: "admission_denied", error: message };
   }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
@@ -264,7 +264,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
-    recordFailure({ failureKind: "runtime_failure", message, runId: heartbeatRunId });
+    await recordFailure({ failureKind: "runtime_failure", message, runId: heartbeatRunId });
     recordHeartbeat("daemon_cycle_failed", "daemon_cycle_failed", heartbeatRunId);
     return { ok: false, failureKind: "runtime_failure", error: message };
   }
