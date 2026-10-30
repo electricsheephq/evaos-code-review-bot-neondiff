@@ -7316,6 +7316,47 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     });
   });
 
+  it.each(["missing", "fresh", "stale", "active"] as const)("adds recent daemon failures without changing %s heartbeat status or gates", (heartbeatStatus) => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-cycle-failures-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const recordedAt = new Date("2026-07-02T00:00:00.000Z");
+    if (heartbeatStatus !== "missing") {
+      store.recordDaemonHeartbeat({ cycle: 5, event: "daemon_cycle_start", dryRun: false,
+        runId: "run-5", reviewLane: "held", recordedAt });
+      if (heartbeatStatus !== "active") {
+        store.recordDaemonHeartbeat({ cycle: 5, event: "daemon_cycle_complete", dryRun: false,
+          runId: "run-5", reviewLane: "held", recordedAt });
+      }
+    }
+    store.close();
+    const collect = () => collectReleaseStatus({
+      cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker",
+      now: new Date(heartbeatStatus === "stale" ? "2026-07-03T00:00:00Z" : "2026-07-02T00:00:01Z")
+    });
+    const before = collect();
+    expect(before.heartbeat.status).toBe(heartbeatStatus);
+    expect(before.heartbeat).not.toHaveProperty("recentFailures");
+    const writer = new ReviewStateStore(dbPath);
+    try {
+      for (let cycle = 1; cycle <= 4; cycle++) {
+        writer.recordDaemonCycleFailure({ cycle, failureKind: "runtime_failure", message: "x".repeat(600),
+          runId: `run-${cycle}`, dryRun: true, recordedAt });
+        if (cycle === 1) expect(collect().heartbeat.recentFailures).toHaveLength(1);
+      }
+    } finally { writer.close(); }
+    const after = collect();
+    expect(after.heartbeat).toEqual({ ...before.heartbeat, recentFailures: [4, 3, 2].map((cycle) => ({
+      recordedAt: recordedAt.toISOString(), cycle, failureKind: "runtime_failure", message: "x".repeat(500)
+    })) });
+    expect(after.gates).toEqual(before.gates);
+    expect(after.ok).toBe(before.ok);
+    const reader = new ReviewStateStore(dbPath);
+    try { expect(reader.listRecentDaemonCycleFailures()[0]?.message).toHaveLength(600); }
+    finally { reader.close(); }
+  });
+
   it("reads held heartbeat state and maps malformed or legacy lane state to unknown", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-review-lane-"));
     roots.push(root);
@@ -7351,6 +7392,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     });
     const held = collect();
     expect(held.heartbeat).toMatchObject({ status: "fresh", reviewLane: "held" });
+    expect(held.heartbeat).not.toHaveProperty("recentFailures");
     expect(held.gates).toContainEqual(expect.objectContaining({
       name: "background_pr_lane",
       ok: false

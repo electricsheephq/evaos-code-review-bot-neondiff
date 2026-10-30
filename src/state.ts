@@ -707,6 +707,16 @@ export class ReviewStateStore {
         completed_at text
       );
 
+      create table if not exists daemon_cycle_failures (
+        id integer primary key autoincrement,
+        recorded_at text not null,
+        cycle integer,
+        failure_kind text not null,
+        message text not null,
+        run_id text,
+        dry_run integer
+      );
+
       create table if not exists issue_enrichment_receipt_state (
         id integer primary key check (id = 1),
         latest_receipt_json text, latest_run_id text, latest_run_started_at text, latest_cycle integer, latest_recorded_at text,
@@ -3486,6 +3496,51 @@ export class ReviewStateStore {
     const latest = decodeIssueEnrichmentLaneReceiptSlot(row, "latest");
     const failure = decodeIssueEnrichmentLaneReceiptSlot(row, "recent_failure");
     return { ...(latest ? { latest } : {}), ...(failure ? { recentFailure: failure } : {}) };
+  }
+
+  recordDaemonCycleFailure(record: {
+    cycle: number;
+    failureKind: "admission_denied" | "runtime_failure";
+    message: string;
+    runId?: string;
+    dryRun: boolean;
+    recordedAt?: Date;
+  }): void {
+    const recordedAt = (record.recordedAt ?? new Date()).toISOString();
+    const message = redactSecrets(record.message).slice(0, 2000);
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare(
+        `insert into daemon_cycle_failures (recorded_at, cycle, failure_kind, message, run_id, dry_run)
+         values (?, ?, ?, ?, ?, ?)`
+      ).run(recordedAt, record.cycle, record.failureKind, message, record.runId ?? null, record.dryRun ? 1 : 0);
+      this.db.exec(
+        `delete from daemon_cycle_failures where id not in
+         (select id from daemon_cycle_failures order by id desc limit 50)`
+      );
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* preserve the original failure */ }
+      throw error;
+    }
+  }
+
+  listRecentDaemonCycleFailures(limit = 5): Array<{
+    recordedAt: string; cycle: number | null; failureKind: string; message: string; runId?: string;
+  }> {
+    const rows = this.db.prepare(
+      `select recorded_at, cycle, failure_kind, message, run_id
+       from daemon_cycle_failures order by id desc limit ?`
+    ).all(limit) as Array<{
+      recorded_at: string; cycle: number | null; failure_kind: string; message: string; run_id: string | null;
+    }>;
+    return rows.map((row) => ({
+      recordedAt: row.recorded_at,
+      cycle: row.cycle,
+      failureKind: row.failure_kind,
+      message: row.message,
+      ...(row.run_id !== null ? { runId: row.run_id } : {})
+    }));
   }
 
   recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
