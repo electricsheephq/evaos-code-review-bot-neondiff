@@ -75,6 +75,9 @@ export interface RunDaemonCycleOptions {
     runId?: string,
     reviewLane?: DaemonReviewLane
   ) => void;
+  recordFailureImpl?: (failure: {
+    failureKind: "admission_denied" | "runtime_failure"; message: string; runId?: string;
+  }) => void;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -88,6 +91,14 @@ export interface CleanupReviewWorktreesDeps {
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
+  const recordFailure: NonNullable<RunDaemonCycleOptions["recordFailureImpl"]> = (failure) => {
+    try {
+      if (input.recordFailureImpl) input.recordFailureImpl(failure);
+      else recordDaemonCycleFailureFromConfig({
+        configPath: input.configPath, cycle: input.cycle, dryRun: input.dryRun, ...failure, stderr
+      });
+    } catch { /* Failure recording must never change the cycle result. */ }
+  };
   let admissions: DaemonCycleAdmissions | void;
   try {
     admissions = await (input.admitDaemonCycleImpl ?? admitDaemonCycle)(input.configPath);
@@ -100,6 +111,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
+    recordFailure({ failureKind: "admission_denied", message });
     return { ok: false, failureKind: "admission_denied", error: message };
   }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
@@ -252,6 +264,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
+    recordFailure({ failureKind: "runtime_failure", message, runId: heartbeatRunId });
     recordHeartbeat("daemon_cycle_failed", "daemon_cycle_failed", heartbeatRunId);
     return { ok: false, failureKind: "runtime_failure", error: message };
   }
@@ -459,6 +472,41 @@ async function runIssueEnrichmentCycleFromConfig(input: {
     });
   } finally {
     state.close();
+  }
+}
+
+function recordDaemonCycleFailureFromConfig(input: {
+  configPath?: string;
+  cycle: number;
+  dryRun: boolean;
+  failureKind: "admission_denied" | "runtime_failure";
+  message: string;
+  runId?: string;
+  stderr: (line: string) => void;
+}): void {
+  try {
+    const config = loadConfig(input.configPath);
+    const state = new ReviewStateStore(config.statePath);
+    try {
+      state.recordDaemonCycleFailure({
+        cycle: input.cycle,
+        dryRun: input.dryRun,
+        failureKind: input.failureKind,
+        message: input.message,
+        ...(input.runId ? { runId: input.runId } : {})
+      });
+    } finally {
+      state.close();
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    input.stderr(formatDaemonLog({
+      event: "daemon_failure_record_failed",
+      level: "error",
+      cycle: input.cycle,
+      dryRun: input.dryRun,
+      error: message
+    }));
   }
 }
 

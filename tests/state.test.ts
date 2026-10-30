@@ -2000,6 +2000,81 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("records daemon cycle failures newest first with optional run identity", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cycle-failures-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    try {
+      expect(store.listRecentDaemonCycleFailures()).toEqual([]);
+      store.recordDaemonCycleFailure({ cycle: 1, failureKind: "admission_denied", message: "license missing",
+        dryRun: true, recordedAt: new Date("2026-10-30T00:01:00Z") });
+      store.recordDaemonCycleFailure({ cycle: 2, failureKind: "runtime_failure", message: "timeout", runId: "run-2",
+        dryRun: false, recordedAt: new Date("2026-10-30T00:00:00Z") });
+      expect(store.listRecentDaemonCycleFailures()).toEqual([
+        { cycle: 2, failureKind: "runtime_failure", message: "timeout", runId: "run-2", recordedAt: "2026-10-30T00:00:00.000Z" },
+        { cycle: 1, failureKind: "admission_denied", message: "license missing", recordedAt: "2026-10-30T00:01:00.000Z" }
+      ]);
+      expect(store.listRecentDaemonCycleFailures(1)).toEqual(store.listRecentDaemonCycleFailures().slice(0, 1));
+    } finally { store.close(); }
+  });
+
+  it("caps daemon cycle failures at the newest 50 rows", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cycle-failure-cap-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    try {
+      for (let cycle = 1; cycle <= 55; cycle++) {
+        store.recordDaemonCycleFailure({ cycle, failureKind: "runtime_failure", message: "timeout", dryRun: false });
+      }
+      expect(store.listRecentDaemonCycleFailures()).toHaveLength(5);
+      expect(store.listRecentDaemonCycleFailures(100).map((row) => row.cycle))
+        .toEqual(Array.from({ length: 50 }, (_, index) => 55 - index));
+    } finally { store.close(); }
+  });
+
+  it("truncates stored daemon cycle failure messages to 2000 characters", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cycle-failure-length-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    try {
+      store.recordDaemonCycleFailure({ cycle: 1, failureKind: "runtime_failure", message: "x".repeat(5000), dryRun: false });
+      expect(store.listRecentDaemonCycleFailures()[0]?.message).toBe("x".repeat(2000));
+    } finally { store.close(); }
+  });
+
+  it("redacts daemon cycle failure secrets before truncation", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cycle-failure-redact-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const secret = ["ghp", "abcdefgh12345678"].join("_");
+    try {
+      store.recordDaemonCycleFailure({ cycle: 1, failureKind: "runtime_failure",
+        message: `${"x".repeat(1995)} ${secret} tail`, dryRun: true });
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const row = db.prepare("select message, dry_run from daemon_cycle_failures").get();
+        expect(row).toMatchObject({ message: `${"x".repeat(1995)} [red`, dry_run: 1 });
+        expect(JSON.stringify(row)).not.toContain(secret);
+      } finally { db.close(); }
+    } finally { store.close(); }
+  });
+
+  it("adds daemon cycle failure storage when reopening an existing database", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cycle-failure-migration-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    new ReviewStateStore(dbPath).close();
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec("drop table daemon_cycle_failures");
+    legacy.close();
+    const store = new ReviewStateStore(dbPath);
+    try {
+      store.recordDaemonCycleFailure({ cycle: 1, failureKind: "admission_denied", message: "license missing", dryRun: false });
+      expect(store.listRecentDaemonCycleFailures()).toHaveLength(1);
+    } finally { store.close(); }
+  });
+
   it("redacts daemon heartbeat errors", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-redact-"));
     roots.push(root);

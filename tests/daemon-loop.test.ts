@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import { ReviewStateStore } from "../src/state.js";
 const runDaemonCycle = async (input: RunDaemonCycleOptions) => {
   const result = await runDaemonCycleImpl({
     ...input,
+    recordFailureImpl: input.recordFailureImpl ?? (() => undefined),
     admitDaemonCycleImpl: input.admitDaemonCycleImpl ?? (async () => undefined)
   });
   await waitForIssueEnrichmentPass();
@@ -283,6 +284,7 @@ describe("daemon cycle resilience", () => {
   it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {
     const calls = { heartbeat: 0, review: 0, retry: 0, enrichment: 0 };
     const stderr: string[] = [];
+    const recordFailure = vi.fn(() => expect(stderr).toHaveLength(1));
     const result = await runDaemonCycleImpl({
       cycle: 1,
       dryRun: false,
@@ -292,6 +294,7 @@ describe("daemon cycle resilience", () => {
       commandsEnabled: false,
       issueEnrichmentEnabled: true,
       admitDaemonCycleImpl: async () => { throw new Error("license missing: no license key is stored"); },
+      recordFailureImpl: recordFailure,
       recordHeartbeatImpl: () => { calls.heartbeat += 1; },
       runOnceImpl: async () => { calls.review += 1; throw new Error("must not run"); },
       retryProviderCooldownsImpl: async () => { calls.retry += 1; throw new Error("must not run"); },
@@ -307,6 +310,61 @@ describe("daemon cycle resilience", () => {
     });
     expect(calls).toEqual({ heartbeat: 0, review: 0, retry: 0, enrichment: 0 });
     expect(stderr).toHaveLength(1);
+    expect(recordFailure).toHaveBeenCalledExactlyOnceWith({
+      failureKind: "admission_denied", message: "license missing: no license key is stored"
+    });
+  });
+
+  it.each(["admission_denied", "runtime_failure"] as const)("preserves the %s result when failure recording throws", async (failureKind) => {
+    const run = (recordFailureImpl: NonNullable<RunDaemonCycleOptions["recordFailureImpl"]>) => runDaemonCycle({
+      cycle: 9, dryRun: true, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+      admitDaemonCycleImpl: async () => {
+        if (failureKind === "admission_denied") throw new Error("cycle failed");
+      },
+      runOnceImpl: async () => { throw new Error("cycle failed"); },
+      recordFailureImpl, recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined, stderr: () => undefined
+    });
+    const expected = await run(() => undefined);
+    const throwing = vi.fn(() => { throw new Error("state unavailable"); });
+    expect(await run(throwing)).toEqual(expected);
+    expect(expected).toEqual({ ok: false, failureKind, error: "cycle failed" });
+    expect(throwing).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["admission_denied", "runtime_failure"] as const)("persists %s through the configured default recorder", async (failureKind) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-failure-recorder-"));
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, JSON.stringify({ statePath }));
+    const stderr: string[] = [];
+    let heartbeatRunId: string | undefined;
+    const run = () => runDaemonCycleImpl({
+      cycle: 10, dryRun: true, configPath, pilotRepos: [], monitoredRepos: [], canaryPulls: [], commandsEnabled: false,
+      admitDaemonCycleImpl: async () => {
+        if (failureKind === "admission_denied") throw new Error("cycle failed");
+      },
+      runOnceImpl: async () => { throw new Error("cycle failed"); },
+      recordHeartbeatImpl: (_event, _error, runId) => { heartbeatRunId = runId; },
+      stdout: () => undefined, stderr: (line) => stderr.push(line)
+    });
+    try {
+      const result = await run();
+      expect(result).toEqual({ ok: false, failureKind, error: "cycle failed" });
+      const store = new ReviewStateStore(statePath);
+      try {
+        expect(store.listRecentDaemonCycleFailures()).toEqual([{
+          recordedAt: expect.any(String), cycle: 10, failureKind, message: "cycle failed",
+          ...(failureKind === "runtime_failure" ? { runId: heartbeatRunId } : {})
+        }]);
+      } finally { store.close(); }
+      expect(stderr.map((line) => JSON.parse(line).event)).toEqual(["daemon_cycle_failed"]);
+      // A config load failure must emit one diagnostic and preserve the same cycle result.
+      writeFileSync(configPath, "{");
+      stderr.length = 0;
+      expect(await run()).toEqual(result);
+      expect(stderr.map((line) => JSON.parse(line).event)).toEqual(["daemon_cycle_failed", "daemon_failure_record_failed"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   it("logs runtime cycle failures without throwing out of the daemon loop", async () => {
     const stdout: string[] = [];
@@ -350,6 +408,7 @@ describe("daemon cycle resilience", () => {
 
   it("records start and completion heartbeat events for successful cycles", async () => {
     const heartbeats: Array<{ event: string; runId?: string; reviewLane?: string }> = [];
+    const recordFailure = vi.fn();
 
     const result = await runDaemonCycle({
       cycle: 2,
@@ -403,6 +462,7 @@ describe("daemon cycle resilience", () => {
       recordHeartbeatImpl: (event, _error, runId, reviewLane) => {
         heartbeats.push({ event, runId, reviewLane });
       },
+      recordFailureImpl: recordFailure,
       stdout: () => undefined,
       stderr: () => undefined
     });
@@ -412,6 +472,7 @@ describe("daemon cycle resilience", () => {
     expect(new Set(heartbeats.map(({ runId }) => runId)).size).toBe(1);
     expect(new Set(heartbeats.map(({ reviewLane }) => reviewLane))).toEqual(new Set(["active"]));
     expect(heartbeats[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(recordFailure).not.toHaveBeenCalled();
   });
 
   it("runs one bounded provider cooldown drain after successful review cycles", async () => {
@@ -533,6 +594,7 @@ describe("daemon cycle resilience", () => {
   it("records a failed heartbeat with the failure message", async () => {
     const heartbeats: Array<{ event: string; error?: string }> = [];
     const runIds: string[] = [];
+    const recordFailure = vi.fn();
 
     const result = await runDaemonCycle({
       cycle: 3,
@@ -548,6 +610,7 @@ describe("daemon cycle resilience", () => {
         heartbeats.push({ event, ...(error ? { error } : {}) });
         runIds.push(runId!);
       },
+      recordFailureImpl: recordFailure,
       stdout: () => undefined,
       stderr: () => undefined
     });
@@ -559,6 +622,9 @@ describe("daemon cycle resilience", () => {
       { event: "daemon_cycle_failed", error: "daemon_cycle_failed" }
     ]);
     expect(new Set(runIds).size).toBe(1);
+    expect(recordFailure).toHaveBeenCalledExactlyOnceWith({
+      failureKind: "runtime_failure", message: "second timeout", runId: runIds[0]
+    });
   });
 
   it("runs and logs the issue enrichment cycle when the default-off lane is enabled", async () => {

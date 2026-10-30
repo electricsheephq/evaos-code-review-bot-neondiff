@@ -122,6 +122,7 @@ export interface ReleaseHeartbeatStatus {
   activeTotalAgeMs?: number;
   activeAgeMs?: number;
   completedAt?: string;
+  recentFailures?: Array<{ recordedAt: string; cycle: number | null; failureKind: string; message: string }>;
 }
 
 export interface ReleaseStatusInput {
@@ -3389,10 +3390,19 @@ function readHeartbeatStatus(
   if (!existsSync(statePath)) return { status: "missing", maxAgeMs, reviewLane: "unknown" };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
+    const failureTable = db.prepare(
+      "select 1 from sqlite_master where type = 'table' and name = 'daemon_cycle_failures' limit 1"
+    ).get();
+    const failures = failureTable ? db.prepare(
+      "select recorded_at, cycle, failure_kind, message from daemon_cycle_failures order by id desc limit 3"
+    ).all() as Array<{ recorded_at: string; cycle: number | null; failure_kind: string; message: string }> : [];
+    const recentFailures = failures.length > 0 ? { recentFailures: failures.map((row) => ({
+      recordedAt: row.recorded_at, cycle: row.cycle, failureKind: row.failure_kind, message: row.message.slice(0, 500)
+    })) } : {};
     const table = db
       .prepare("select 1 from sqlite_master where type = 'table' and name = 'daemon_heartbeat' limit 1")
       .get();
-    if (!table) return { status: "missing", maxAgeMs, reviewLane: "unknown" };
+    if (!table) return { status: "missing", maxAgeMs, reviewLane: "unknown", ...recentFailures };
 
     const columns = new Set(
       (db.prepare("pragma table_info(daemon_heartbeat)").all() as unknown as Array<{ name: string }>)
@@ -3426,7 +3436,7 @@ function readHeartbeatStatus(
         completed_at: string | null;
         review_lane: string | null;
       } | undefined;
-    if (!row) return { status: "missing", maxAgeMs, reviewLane: "unknown" };
+    if (!row) return { status: "missing", maxAgeMs, reviewLane: "unknown", ...recentFailures };
 
     const latestTime = row.recorded_at ? Date.parse(row.recorded_at) : NaN;
     const activeStartedTime = row.started_at ? Date.parse(row.started_at) : NaN;
@@ -3458,6 +3468,7 @@ function readHeartbeatStatus(
       normalizeDaemonReviewLane(row.review_lane) ?? "unknown";
     const common: Omit<ReleaseHeartbeatStatus, "status"> = {
       maxAgeMs,
+      ...recentFailures,
       ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
       ...(Number.isFinite(latestTime) ? { ageMs: Math.max(0, now.getTime() - latestTime) } : {}),
       ...(row.cycle !== null ? { cycle: row.cycle } : {}),
