@@ -840,6 +840,7 @@ describe("daemon cycle resilience", () => {
     let releaseIssue!: () => void;
     const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
     let issueSettled = false;
+    const recordFailure = vi.fn();
 
     const result = await runDaemonCycleImpl({
       cycle: 12,
@@ -858,11 +859,15 @@ describe("daemon cycle resilience", () => {
         return successfulIssueEnrichmentCycleResult();
       },
       recordHeartbeatImpl: () => undefined,
+      recordFailureImpl: recordFailure,
       stdout: () => undefined,
       stderr: () => undefined
     });
 
     expect(result).toMatchObject({ ok: false, failureKind: "runtime_failure", error: "review batch failed" });
+    expect(recordFailure).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      failureKind: "runtime_failure", message: "review batch failed"
+    }));
     expect(issueSettled).toBe(false);
     releaseIssue();
     await waitForIssueEnrichmentPass();
