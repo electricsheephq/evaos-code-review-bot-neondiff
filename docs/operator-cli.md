@@ -549,8 +549,10 @@ npx tsx src/cli.ts issue-enrichment-scan --config <config.json> --dry-run true -
 ```
 
 The scan does not use `pilotRepos`, does not post comments, and defaults to the
-larger of the configured recent-update lookback and burst window. Deferred rows
-include `nextEligibleAt` based on the configured cooldown. Per-repo throttles live under
+larger of the configured recent-update lookback and burst window. Cap-deferred
+rows include `nextEligibleAt` based on the configured cooldown. Bursts of updates
+to existing issues are skipped, without a cooldown deadline; issues created in
+the last 24 hours are exempt from that burst guard. Per-repo throttles live under
 `issueEnrichment.repos.<owner/name>` and can cap `maxIssuesPerCycle`,
 `maxCommentsPerCycle`, burst thresholds, cooldown, and backlog behavior.
 Issue label and reviewer/owner allowlists come only from

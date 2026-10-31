@@ -67,6 +67,8 @@ export interface IssueEnrichmentConfig {
   repos?: Record<string, IssueEnrichmentRepoOverride>;
 }
 
+export const ISSUE_ENRICHMENT_NEW_ISSUE_GRACE_MS = 24 * 60 * 60_000;
+
 export const DEFAULT_ISSUE_ENRICHMENT_CONFIG: IssueEnrichmentConfig = {
   enabled: false,
   postIssueComment: false,
@@ -257,7 +259,7 @@ export interface IssueEnrichmentScanResult {
     reposSkipped: number;
     readFailures: number;
     issuesSeen: number;
-    /** Counts issues considered eligible for enrichment, including cap- and burst-deferred issues. Use wouldEnrich/wouldComment for current-cycle throughput. */
+    /** Counts issues considered eligible for enrichment, including cap-deferred issues (standalone scans also count burst-skipped ones). Use wouldEnrich/wouldComment for current-cycle throughput. */
     eligible: number;
     skipped: number;
     wouldEnrich: number;
@@ -327,7 +329,7 @@ export interface IssueEnrichmentRepoScan {
   since?: string;
   throttle: IssueEnrichmentThrottlePolicy;
   issuesSeen: number;
-  /** Counts issues considered eligible for enrichment, including cap- and burst-deferred issues. Use wouldEnrich/wouldComment for current-cycle throughput. */
+  /** Counts issues considered eligible for enrichment, including cap-deferred issues (standalone scans also count burst-skipped ones). Use wouldEnrich/wouldComment for current-cycle throughput. */
   eligible: number;
   skipped: number;
   wouldEnrich: number;
@@ -1046,6 +1048,8 @@ export async function runIssueEnrichmentCycle(input: {
           config: input.config,
           reader: {
             listIssuesForEnrichment: async (repo, options) => {
+              const postedProbeCap = options?.minIssueResults ?? 0;
+              let postedProbes = 0;
               const prepared = new Map<string, GitHubRelatedIssueOrPull>(), qualifyForMinimum = async (issue: GitHubRelatedIssueOrPull): Promise<boolean> => {
                 const key = issueKey(repo, issue.number);
                 let existing = input.force === true ? undefined : input.state.getIssueEnrichmentRecord(repo, issue.number);
@@ -1064,6 +1068,8 @@ export async function runIssueEnrichmentCycle(input: {
                 if (authorGated) { prepared.set(key, issue); issuesByKey.set(key, issue); authorGatedIssues.add(key); return false; }
                 if (sameIdentity && activeDeferred) { prepared.set(key, issue); issuesByKey.set(key, issue); return false; }
                 const promotionNeedsEvents = preview.skipped && shouldDeferPreservationPreviewToPromotion(preview.reason) && Boolean(override?.promotionMaintainers?.length && input.github.getCollaboratorPermission); if (preview.skipped && !promotionNeedsEvents) { prepared.set(key, issue); issuesByKey.set(key, issue); return false; }
+                // Only unchanged posted rows count toward the cap: an edited one is probed before the watermark can pass it.
+                if (existing?.status === "posted" && sameIdentity && ++postedProbes > postedProbeCap) { prepared.set(key, issue); issuesByKey.set(key, issue); settledSkippedIssues.add(key); return false; }
                 if (!shouldCollectModelEvidence && !promotionNeedsEvents) { prepared.set(key, issue); issuesByKey.set(key, issue); return true; }
                 let events: IssueEventResult | undefined;
                 try {
@@ -1082,7 +1088,8 @@ export async function runIssueEnrichmentCycle(input: {
                 if (promotion.evidence) promotionEvidenceByIssue.set(key, promotion.evidence);
                 return !previewIssue(repo, promotion.issue).skipped && !issueEventReadFailures.has(key) && !preservedEventReadFailures.has(key);
               };
-              const issues = await input.github.listIssuesForEnrichment(repo, { ...options, qualifyForMinimum });
+              // A burst decision needs the whole window, or new and posted issues can hide it.
+              const issues = await input.github.listIssuesForEnrichment(repo, { ...options, minIssueResults: 0, qualifyForMinimum });
               if (issues.scanCompletion !== "stopped_after_min_issue_results") for (const issue of issues) if (!prepared.has(issueKey(repo, issue.number))) await qualifyForMinimum(issue);
               return Object.assign(issues.flatMap((issue) => prepared.has(issueKey(repo, issue.number)) && !settledSkippedIssues.has(issueKey(repo, issue.number)) ? [prepared.get(issueKey(repo, issue.number))!] : []), { scanCompletion: issues.scanCompletion });
             }
@@ -1122,7 +1129,10 @@ export async function runIssueEnrichmentCycle(input: {
       repos: combinedRepos,
       recommendedActions: buildScanRecommendedActions(status, combinedSummary)
     };
-    const admissionItems = scan.items.map((item) => ({ ...item, issueUpdatedAt: canonicalIssueUpdatedAt(issuesByKey.get(issueKey(item.repo, item.issueNumber)), checkedAt) }));
+    const admissionItems = scan.items.map((item) => {
+      const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+      return { ...item, issueUpdatedAt: canonicalIssueUpdatedAt(issue, checkedAt), isNew: isNewIssue(issue, checkedAt) };
+    });
     const admissionSnapshot = snapshotIssueEnrichmentAdmission({
       allowlist: reposToScan,
       items: admissionItems,
@@ -1455,6 +1465,12 @@ export async function runIssueEnrichmentCycle(input: {
         if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "failed", reason: "source_or_evidence_failed", error, now: new Date(checkedAt) });
         if (!input.dryRun) summary.failed += 1; items.push({ ...item, ...(!input.dryRun ? { recordStatus: "failed" as const, error } : {}) }); continue;
       }
+      if (decision.reason === "burst_threshold_exceeded") {
+        if (!input.dryRun) input.state.recordIssueEnrichment({ repo: item.repo, issueNumber: item.issueNumber, issueUpdatedAt, status: "skipped", reason: "burst_threshold_exceeded", now: new Date(checkedAt) });
+        if (!input.dryRun) summary.skippedRecorded += 1;
+        items.push({ ...item, action: "skipped", reason: "burst_threshold_exceeded", ...(!input.dryRun ? { recordStatus: "skipped" as const } : {}) });
+        continue;
+      }
       const policy = resolveIssueEnrichmentRepoPolicy(config, item.repo), deferredReason = decision.reason === "held" ? "persisted_defer_active" : decision.reason, retainedDeferredReason = decision.reason === "held" ? existing?.reason ?? deferredReason : deferredReason;
       const deferredUntil = decision.reason === "held" ? decision.candidate.record?.nextEligibleAt ?? decision.candidate.nextEligibleAt ?? nextEligibleAt({ checkedAt, throttle: policy.throttle }) :
         decision.reason.startsWith("global_") ? globalNextEligibleAt({ checkedAt, config, throttle: policy.throttle }) : nextEligibleAt({ checkedAt, throttle: policy.throttle });
@@ -1565,6 +1581,7 @@ function planRepoIssueScan(input: {
     maxRelatedRefs: 8,
     ...input.renderPolicy
   }));
+  const newIssues = new Set(input.issues.filter((issue) => isNewIssue(issue, input.checkedAt)).map((issue) => issue.number));
   const eligible = planned.filter((output) => !output.skipped);
   const countableEligible = input.shouldCountItem
     ? eligible.filter((output) => input.shouldCountItem!(
@@ -1578,7 +1595,7 @@ function planRepoIssueScan(input: {
         )
       ))
     : eligible;
-  const burstExceeded = countableEligible.length > input.throttle.maxIssuesPerBurst;
+  const burstExceeded = countableEligible.filter((output) => !newIssues.has(output.issueNumber)).length > input.throttle.maxIssuesPerBurst;
   let enriched = 0;
   let comments = 0;
 
@@ -1597,8 +1614,8 @@ function planRepoIssueScan(input: {
     const eligibleItem = issueScanItem(input.repo, output.issueNumber, output.state, eligibleAction, "eligible", output.url);
     const countTowardCaps = input.shouldCountItem ? input.shouldCountItem(eligibleItem) : true;
     if (!countTowardCaps) return eligibleItem;
-    if (burstExceeded) {
-      return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "burst_threshold_exceeded", output.url, nextEligibleAt(input));
+    if (burstExceeded && !newIssues.has(output.issueNumber)) {
+      return issueScanItem(input.repo, output.issueNumber, output.state, "skipped", "burst_threshold_exceeded", output.url);
     }
     if (enriched >= input.throttle.maxIssuesPerCycle) {
       return issueScanItem(input.repo, output.issueNumber, output.state, "deferred", "repo_max_issues_per_cycle", output.url, nextEligibleAt(input));
@@ -1779,7 +1796,7 @@ function buildScanRecommendedActions(status: IssueEnrichmentStatus, summary: Iss
   const actions = [];
   if (status.state === "blocked") actions.push("resolve issue-enrichment blockers before live issue comments");
   if (summary.deferred > 0) {
-    actions.push("inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap- and burst-deferred issues, while wouldEnrich/wouldComment show current-cycle throughput");
+    actions.push("inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap-deferred issues (standalone scans also count burst-skipped ones), while wouldEnrich/wouldComment show current-cycle throughput");
   }
   if (summary.truncatedRepos > 0) actions.push("inspect truncated issue-enrichment scans before advancing repo watermarks");
   if (summary.readFailures > 0) actions.push("run doctor and inspect GitHub App Issues permissions");
@@ -1817,6 +1834,12 @@ function emptyCycleSummary(): IssueEnrichmentCycleResult["summary"] {
     alreadyProcessed: 0,
     failed: 0
   };
+}
+
+function isNewIssue(issue: GitHubRelatedIssueOrPull | undefined, checkedAt: string): boolean {
+  const created = Date.parse(issue?.created_at ?? ""), now = Date.parse(checkedAt);
+  // A created_at after checkedAt is an issue opened during this cycle: still NEW.
+  return Number.isFinite(created) && Number.isFinite(now) && now - created <= ISSUE_ENRICHMENT_NEW_ISSUE_GRACE_MS;
 }
 
 function canonicalIssueUpdatedAt(issue: GitHubRelatedIssueOrPull | undefined, checkedAt: string): string {

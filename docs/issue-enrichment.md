@@ -26,6 +26,17 @@ Live issue comments are blocked until all of these are true:
 - the GitHub App credential path can post as the App.
 - every live allowlisted repo has explicit repo-level thresholds for `maxIssuesPerCycle`, `maxCommentsPerCycle`, `cooldownMs`, `burstWindowMs`, `maxIssuesPerBurst`, and `lookbackMs`.
 
+The burst guard skips a whole burst of updates to existing issues instead of
+putting it on cooldown. A skipped issue is eligible again after a later update;
+legacy burst deferrals with unchanged identity drain as skips when their holds
+expire, without comments. Issues created within the last 24 hours never count
+toward the burst and are never burst-skipped; their rate limits are the per-repo
+`maxCommentsPerCycle` and `globalMaxCommentsPerCycle` caps. Cap deferrals wait one
+cooldown, so a new cohort drains at about `maxCommentsPerCycle` per cooldown per
+repo. After 24 hours, waiting issues lose this exemption and may be burst-skipped:
+with one-hour cooldowns, a cohort larger than about
+24 × `maxCommentsPerCycle` + `maxIssuesPerBurst` loses its tail.
+
 Keep new rollouts dry-run first:
 
 ```json

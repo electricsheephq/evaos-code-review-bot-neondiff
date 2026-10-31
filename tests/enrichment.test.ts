@@ -1330,7 +1330,7 @@ describe("sticky enrichment comments", () => {
         "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
       );
       expect(scan.recommendedActions).toContain(
-        "inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap- and burst-deferred issues, while wouldEnrich/wouldComment show current-cycle throughput"
+        "inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap-deferred issues (standalone scans also count burst-skipped ones), while wouldEnrich/wouldComment show current-cycle throughput"
       );
       expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
     } finally {
@@ -1416,7 +1416,7 @@ describe("sticky enrichment comments", () => {
     }
   });
 
-  it("defers large issue bursts instead of enriching every issue in a milestone filing wave", async () => {
+  it("skips large bursts of existing issue updates", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-burst-"));
     try {
       const configPath = join(root, "config.json");
@@ -1451,9 +1451,10 @@ describe("sticky enrichment comments", () => {
         eligible: 3,
         wouldEnrich: 0,
         wouldComment: 0,
-        deferred: 3
+        deferred: 0,
+        skipped: 3
       });
-      expect(scan.items.every((item) => item.action === "deferred" && item.reason === "burst_threshold_exceeded")).toBe(true);
+      expect(scan.items.every((item) => item.action === "skipped" && item.reason === "burst_threshold_exceeded")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1642,7 +1643,7 @@ describe("sticky enrichment comments", () => {
     }
   });
 
-  it("applies per-repo issue-enrichment throttles to defer bursts and comments", async () => {
+  it("applies per-repo throttles to skip bursts and defer comments", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-repo-throttle-"));
     try {
       const configPath = join(root, "config.json");
@@ -1701,15 +1702,13 @@ describe("sticky enrichment comments", () => {
       expect(scan.items.filter((item) => item.repo === "owner/burst-capped-repo")).toEqual([
         expect.objectContaining({
           issueNumber: 201,
-          action: "deferred",
-          reason: "burst_threshold_exceeded",
-          nextEligibleAt: "2026-07-03T12:05:00.000Z"
+          action: "skipped",
+          reason: "burst_threshold_exceeded"
         }),
         expect.objectContaining({
           issueNumber: 202,
-          action: "deferred",
-          reason: "burst_threshold_exceeded",
-          nextEligibleAt: "2026-07-03T12:05:00.000Z"
+          action: "skipped",
+          reason: "burst_threshold_exceeded"
         })
       ]);
     } finally {
