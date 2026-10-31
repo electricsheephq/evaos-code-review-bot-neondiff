@@ -136,6 +136,8 @@ it.each([
   "NeonDiff is license-free everywhere.",
   "Don't wait; NeonDiff is free everywhere.",
   "If you don't have a license key, NeonDiff is free everywhere.",
+  "Don't wait — NeonDiff is free everywhere.",
+  "You don't need a key since NeonDiff is free everywhere.",
   "NeonDiff is not open source, but NeonDiff is free everywhere."
 ])("rejects a free claim that covers every surface: %s", (claim) => {
   const result = runGuardWith(claim);
@@ -151,9 +153,9 @@ it.each([
   "Use strong passwords everywhere; public repos are free through the GitHub Action.",
   "Public repos are free through the GitHub Action, but not everywhere.",
   "Do not say NeonDiff is free everywhere.",
-  "Don't call NeonDiff free everywhere.",
+  "Do not call NeonDiff free everywhere.",
   "Do not describe NeonDiff as open source and free everywhere.",
-  "Private, internal, and unknown-visibility repositories aren't free on any surface.",
+  "Private, internal, and unknown-visibility repositories are not free on any surface.",
   "Calling NeonDiff free everywhere is forbidden.",
   "Describing NeonDiff as free on every surface is forbidden.",
   "The Mac app does not require a license key for every repository.",
@@ -161,6 +163,13 @@ it.each([
   'Calling NeonDiff "free everywhere (including private repositories)" is forbidden.'
 ])("allows copy that is not an every-surface free claim: %s", (claim) => {
   expect(runGuardWith(claim).status).toBe(0);
+});
+// A contraction never excuses an every-surface claim, because it often sits in an unrelated clause; write "not".
+it.each([
+  "Don't call NeonDiff free everywhere.",
+  "Private, internal, and unknown-visibility repositories aren't free on any surface."
+])("rejects a contraction in place of boundary language: %s", (claim) => {
+  expect(runGuardWith(claim).status).toBe(1);
 });
 it("allows the Mac app private-repository license rule", () => {
   expect(runGuardWith("The Mac app needs a Solo or Team license for private repositories.").status).toBe(0);
