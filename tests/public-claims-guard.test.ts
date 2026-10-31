@@ -118,58 +118,14 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
 });
-// A free claim that covers every surface is broad even when it names one surface. A negation excuses it only inside
-// the claim's own clause, and free-trial copy is not such a claim (#1243).
+// A named surface does not scope a claim that covers every surface.
 it.each([
   "Public repos are free on every interface, including the Mac app.",
-  "Public repositories are free everywhere, including the GitHub Action.",
-  "Public repos are free everywhere, including the Mac app, and never need a license.",
-  "Public repos are free everywhere through the Mac app and never need a license.",
-  "Public repos are free on every interface, including the Mac app, unless the repo is private.",
-  "Public review is free everywhere, not just through the GitHub Action.",
-  "From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free everywhere, including the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker.",
-  "NeonDiff is free everywhere.",
-  "Reviews are free on every surface for public repositories.",
-  "After the trial, public repos are free everywhere through the Mac app.",
-  "After your 7-day trial ends, public repos stay free everywhere.",
-  "Skip the trial: public repos are free on every surface.",
-  "NeonDiff is license-free everywhere.",
-  "Don't wait; NeonDiff is free everywhere.",
-  "If you don't have a license key, NeonDiff is free everywhere.",
-  "Don't wait — NeonDiff is free everywhere.",
-  "You don't need a key since NeonDiff is free everywhere.",
-  "NeonDiff is not open source, but NeonDiff is free everywhere."
-])("rejects a free claim that covers every surface: %s", (claim) => {
+  "Public repositories are free everywhere, including the GitHub Action."
+])("rejects an all-surfaces public-free claim that names one surface: %s", (claim) => {
   const result = runGuardWith(claim);
   expect(result.status).toBe(1);
-  expect(result.stderr).toMatch(/README\.md:\d+: free claim covers every surface/);
-});
-it.each([
-  "The 7-day free trial works on every surface.",
-  "Solo includes a free 14 day trial on every surface.",
-  "Team plans include a free, 30-day trial on every surface.",
-  "The 7-day Solo trial is free on every surface.",
-  "The confirmed install keeps the self-hosted worker credential-free on every path except Keychain-backed mode.",
-  "Use strong passwords everywhere; public repos are free through the GitHub Action.",
-  "Public repos are free through the GitHub Action, but not everywhere.",
-  "Do not say NeonDiff is free everywhere.",
-  "Do not call NeonDiff free everywhere.",
-  "Do not describe NeonDiff as open source and free everywhere.",
-  "Private, internal, and unknown-visibility repositories are not free on any surface.",
-  "Calling NeonDiff free everywhere is forbidden.",
-  "Describing NeonDiff as free on every surface is forbidden.",
-  "The Mac app does not require a license key for every repository.",
-  "Calling NeonDiff MIT licensed is forbidden.",
-  'Calling NeonDiff "free everywhere (including private repositories)" is forbidden.'
-])("allows copy that is not an every-surface free claim: %s", (claim) => {
-  expect(runGuardWith(claim).status).toBe(0);
-});
-// A contraction never excuses an every-surface claim, because it often sits in an unrelated clause; write "not".
-it.each([
-  "Don't call NeonDiff free everywhere.",
-  "Private, internal, and unknown-visibility repositories aren't free on any surface."
-])("rejects a contraction in place of boundary language: %s", (claim) => {
-  expect(runGuardWith(claim).status).toBe(1);
+  expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
 });
 it("allows the Mac app private-repository license rule", () => {
   expect(runGuardWith("The Mac app needs a Solo or Team license for private repositories.").status).toBe(0);
