@@ -48,8 +48,27 @@ describe("Codex CLI review runtime", () => {
   });
   it("records only a boolean when Codex warns that it omitted the service tier", () => {
     const stderr = "Private prompt text\nWarning: Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests.\ntokens used\n123\n";
-    expect(parseCodexUsage(stderr, { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9))
+    expect(parseCodexUsage(stderr, { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9, { serviceTier: "priority" }))
       .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: 123, durationMs: 9, serviceTierOmitted: true });
+  });
+  it.each([undefined, "default"] as const)("ignores the omission warning for service tier %s", (serviceTier) => {
+    const stderr = "Warning: Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests.\n";
+    expect(parseCodexUsage(stderr, { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9, { serviceTier }))
+      .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9 });
+  });
+  it.each(["\n", "\r\n"])("ignores every echoed prompt with %j line endings when scanning for tier warnings", (newline) => {
+    const echoedPrompt = "Review this diff:\r\n+Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests.";
+    const echo = `user\n${echoedPrompt.replace(/\r\n/g, "\n")}\n`.replace(/\n/g, newline);
+    expect(parseCodexUsage(echo + echo, { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9,
+      { serviceTier: "priority", echoedPrompt }))
+      .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9 });
+  });
+  it("keeps a real tier warning before an echoed prompt containing the same warning", () => {
+    const warning = "Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests.";
+    const echoedPrompt = `Review this diff:\n+${warning}`;
+    expect(parseCodexUsage(`Warning: ${warning}\nuser\n${echoedPrompt}\n`,
+      { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9, { serviceTier: "priority", echoedPrompt }))
+      .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9, serviceTierOmitted: true });
   });
   it("leaves serviceTierOmitted absent without the omission warning", () => {
     expect(parseCodexUsage("Warning: unrelated stderr\n", { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9))

@@ -206,7 +206,8 @@ export function parseCodexCommands(stderr: string, echoedPrompt?: string): {
 }
 
 export function parseCodexUsage(
-  stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number
+  stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number,
+  options: { serviceTier?: CodexServiceTier; echoedPrompt?: string } = {}
 ): { model: string; reasoningEffort: CodexReasoningEffort; tokensUsed: number | null; durationMs: number; serviceTierOmitted?: boolean } {
   const model = /^model:[ \t]*(gpt-[a-z0-9._-]+)[ \t]*$/m.exec(stderr)?.[1];
   const effort = /^reasoning effort:[ \t]*(low|medium|high|xhigh|max)[ \t]*$/m.exec(stderr)?.[1];
@@ -215,7 +216,11 @@ export function parseCodexUsage(
   const rawTokens = [...stderr.matchAll(/^tokens used[ \t]*\r?\n([0-9][0-9 \u00a0\u202f,]*)[ \t]*\r?$/gm)].at(-1)?.[1]?.trim();
   const tokens = rawTokens && /^(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f,][0-9]{3})+)$/.test(rawTokens)
     ? Number(rawTokens.replace(/[ \u00a0\u202f,]/g, "")) : NaN;
-  const serviceTierOmitted = /Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\./.test(stderr);
+  const echoedPrompt = options.echoedPrompt?.replace(/\r\n/g, "\n");
+  const normalizedStderr = stderr.replace(/\r\n/g, "\n");
+  const warningText = echoedPrompt ? normalizedStderr.split(echoedPrompt).join("") : normalizedStderr;
+  const serviceTierOmitted = options.serviceTier !== undefined && options.serviceTier !== "default" &&
+    /Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\./.test(warningText);
   return {
     model: model && !containsSecretLikeText(model) ? model : redactSecrets(fallback.model),
     reasoningEffort: (effort ?? fallback.reasoningEffort) as CodexReasoningEffort,
@@ -679,7 +684,8 @@ export async function runCodexStructuredOutput<T>(input: {
     ? "codex-usage.json"
     : `codex-usage-${input.artifactPrefix}-${randomBytes(4).toString("hex")}.json`;
   writeSecureFileSync(join(usageDir, usageFile),
-    `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt), null, 2)}\n`);
+    `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt,
+      { serviceTier: input.serviceTier, echoedPrompt: input.prompt }), null, 2)}\n`);
   const after = captureWorktreeState(input.cwd);
   const stdout = redactSecrets(result.stdout);
   const stderr = redactSecrets(result.stderr);
