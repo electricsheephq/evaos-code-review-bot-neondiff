@@ -169,4 +169,20 @@ describe("burst recovery acceptance", () => {
     expect(h.state.recordIssueEnrichment).not.toHaveBeenCalled();
     expect(result.summary.truncatedRepos).toBe(0);
   });
+
+  it("10b: always probes posted issues whose identity changed, beyond the cap", async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => issue(i + 1)), h = harness(rows), changed = [20, 25, 30];
+    for (const row of rows) await h.posted(row);
+    // Our own comment bumps updated_at after the record is written, so these stored identities are stale.
+    for (const number of changed) h.records.set(number, { ...h.records.get(number)!, issueUpdatedAt: oldWatermark });
+    const before = new Map(h.records);
+    const result = await h.cycle();
+    expect(h.github.listIssueLabelEvents).toHaveBeenCalledTimes(14);
+    expect(h.github.listIssueComments).toHaveBeenCalledTimes(14);
+    expect(result.items.map(({ issueNumber }) => issueNumber)).toEqual([...rows.slice(0, 11).map(({ number }) => number), ...changed]);
+    for (const number of changed) expect(h.records.get(number)).toMatchObject({ status: "posted", issueUpdatedAt: rows[number - 1]!.updated_at });
+    for (const row of rows) if (!changed.includes(row.number)) expect(h.records.get(row.number)).toBe(before.get(row.number));
+    expect(h.state.recordIssueEnrichment).toHaveBeenCalledTimes(3);
+    expect(result.summary.truncatedRepos).toBe(0);
+  });
 });

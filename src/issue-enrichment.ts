@@ -1068,7 +1068,8 @@ export async function runIssueEnrichmentCycle(input: {
                 if (authorGated) { prepared.set(key, issue); issuesByKey.set(key, issue); authorGatedIssues.add(key); return false; }
                 if (sameIdentity && activeDeferred) { prepared.set(key, issue); issuesByKey.set(key, issue); return false; }
                 const promotionNeedsEvents = preview.skipped && shouldDeferPreservationPreviewToPromotion(preview.reason) && Boolean(override?.promotionMaintainers?.length && input.github.getCollaboratorPermission); if (preview.skipped && !promotionNeedsEvents) { prepared.set(key, issue); issuesByKey.set(key, issue); return false; }
-                if (existing?.status === "posted" && ++postedProbes > postedProbeCap) { prepared.set(key, issue); issuesByKey.set(key, issue); settledSkippedIssues.add(key); return false; }
+                // Only unchanged posted rows count toward the cap: an edited one is probed before the watermark can pass it.
+                if (existing?.status === "posted" && sameIdentity && ++postedProbes > postedProbeCap) { prepared.set(key, issue); issuesByKey.set(key, issue); settledSkippedIssues.add(key); return false; }
                 if (!shouldCollectModelEvidence && !promotionNeedsEvents) { prepared.set(key, issue); issuesByKey.set(key, issue); return true; }
                 let events: IssueEventResult | undefined;
                 try {
