@@ -613,6 +613,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.selectedBotInstallation == nil)
         #expect(fixture.model.currentRepositoryActivationReady)
         #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.setupSummaryLicenseText == "active")
     }
 
     @Test(arguments: ["public", "private", "internal", "unknown"])
@@ -645,6 +646,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         await fixture.waitForConfigPatchToFinish()
 
         #expect(fixture.model.publicFreeReviewPath)
+        #expect(fixture.model.setupSummaryLicenseText == "not required (public repositories only)")
         #expect(fixture.model.currentRepositoryActivationReady == (visibility == "public"))
         #expect(fixture.model.productionUsefulWorkAvailable == (visibility == "public"))
         #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo") == (visibility == "public"))
@@ -667,6 +669,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         try fixture.secretStore.setSecret("nd_live_fixture_12345678", account: "license/default")
         #expect(!fixture.model.publicFreeReviewPath)
         #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.model.setupSummaryLicenseText == "activation required")
     }
 
     @Test(arguments: zip(
@@ -763,6 +766,45 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")
         #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
         #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @Test func verifyingExistingAccessKeepsPublicResults() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(readChecks: [
+                    doctorReadCheck(repo: "acme/api"),
+                    doctorReadCheck(repo: "acme/demo")
+                ].joined(separator: ","))),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["acme/api","acme/demo"]}}"#,
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.enterActivation(for: .publicReposOnly)
+        fixture.model.repos = [
+            RepoMonitor(name: "acme/api", enabled: true),
+            RepoMonitor(name: "acme/demo", enabled: true)
+        ]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.selectedBYOReviewRepository == nil)
+
+        // Two verified public repositories and no target: nothing needs a re-check, so their evidence stays.
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+
+        #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")
+        #expect(fixture.model.currentRepositoryActivationReady)
     }
 
     @Test(arguments: [false, true])

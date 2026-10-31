@@ -778,10 +778,7 @@ struct OnboardingWizardView: View {
                     LabeledContent("Repository", value: repository)
                         .foregroundStyle(NeonDiffTheme.textPrimary)
                 }
-                LabeledContent(
-                    "License",
-                    value: model.licenseSetupReady ? "active" : "activation required"
-                )
+                LabeledContent("License", value: model.setupSummaryLicenseText)
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                 if model.existingLocalBotReconciliationMode {
                     Text("This existing setup remains read-only until current GitHub and repository entitlement checks pass for new work.")

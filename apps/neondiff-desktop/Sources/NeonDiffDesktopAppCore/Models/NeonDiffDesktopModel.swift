@@ -977,6 +977,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// setup display. It does not replace the exact current-launch activation
     /// checks in `currentRepositoryActivationReady` or
     /// `productionUsefulWorkAvailable`.
+    /// The License row of the setup summary. The free path needs no key, so it never reads "active".
+    package var setupSummaryLicenseText: String {
+        if publicFreeReviewPath { return "not required (public repositories only)" }
+        return licenseSetupReady ? "active" : "activation required"
+    }
+
     package var licenseSetupReady: Bool {
         if currentRepositoryActivationReady {
             return true
@@ -4016,10 +4022,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyExistingLocalBotGitHubAccess() {
-        // A non-public result can leave the free path with no target to verify. Forget the recorded results
-        // so the repository can be checked again, for example after it was made public.
-        if publicFreeReviewPath, selectedBYOReviewRepository == nil, !byoRepositoryVisibilities.isEmpty {
-            byoRepositoryVisibilities.removeAll()
+        // A non-public result can leave the free path with no target to verify. Forget the non-public results
+        // so those repositories can be checked again (for example after one was made public); public ones stay.
+        if publicFreeReviewPath, selectedBYOReviewRepository == nil,
+           byoRepositoryVisibilities.values.contains(where: { $0 != "public" }) {
+            byoRepositoryVisibilities = byoRepositoryVisibilities.filter { $0.value == "public" }
             reconcileBYOReviewRepository(enabledRepositories: repos.filter(\.enabled).map(\.name))
         }
         if existingLocalAgentAccessAvailable,

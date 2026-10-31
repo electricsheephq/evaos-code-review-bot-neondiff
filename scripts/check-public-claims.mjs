@@ -62,9 +62,7 @@ const forbiddenClaims = [
   /\bfree for all repositor(?:y|ies)\b/i,
   /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i,
   // #1203: the Mac app reviews public repositories without a key, so the old claim is stale.
-  /\bMac app\b[^.!?]{0,80}\b(?:requires?|needs?)\b[^.!?]{0,80}\b(?:every repositor|even (?:for )?public)/i,
-  // Naming one surface does not scope a claim that covers all of them.
-  /\bfree\b[^.!?]{0,40}(?:\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b)/i
+  /\bMac app\b[^.!?]{0,80}\b(?:requires?|needs?)\b[^.!?]{0,80}\b(?:every repositor|even (?:for )?public)/i
 ];
 
 let failed = false;
@@ -91,16 +89,23 @@ function sentenceAt(text, index) {
   return text.slice(...sentenceSpan(text, index));
 }
 const boundaryLanguage = /\b(?:not|avoid|unless|forbidden|never)\b/i;
+// Boundary language exempts a phrase only when it comes first ("Do not describe ... as open source"),
+// so a trailing "never need a license" cannot excuse a claim.
+function boundaryBefore(text, index) {
+  return boundaryLanguage.test(text.slice(sentenceSpan(text, index)[0], index));
+}
 // The canonical claim keeps the strict rule: all three surfaces within 350 characters, no exemption.
 const canonicalPublicFree = /reports\s+as\s+public\s+is\s+free/gi;
 const canonicalScope = /GitHub\s+Action[\s\S]{0,60}review-pr\s+--ci[\s\S]{0,60}self-hosted\s+worker/i;
 const publicFreeClaim = /public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
 const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci|self-hosted\s+worker|Mac\s+app/i;
+// Naming one surface does not scope a claim that covers all of them.
+const everySurface = /\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenClaims) {
     for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
-      if (!boundaryLanguage.test(sentenceAt(text, match.index))) {
+      if (!boundaryBefore(text, match.index)) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match[0]}`);
         failed = true;
       }
@@ -113,14 +118,11 @@ for (const path of paths) {
       failed = true;
     }
   }
-  // Paraphrases are exempt only when boundary language precedes them ("Do not describe ... as open source"),
-  // so a trailing "never need a license" cannot excuse a broad promise.
   for (const match of text.matchAll(publicFreeClaim)) {
     const sentence = sentenceAt(text, match.index);
-    const before = text.slice(sentenceSpan(text, match.index)[0], match.index);
-    if (!boundaryLanguage.test(before) && !scopedPublicFree.test(sentence)) {
+    if (!boundaryBefore(text, match.index) && (!scopedPublicFree.test(sentence) || everySurface.test(sentence))) {
       const line = text.slice(0, match.index).split("\n").length;
-      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action, review-pr --ci, self-hosted worker, or Mac app)`);
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action, review-pr --ci, self-hosted worker, or Mac app), not every surface`);
       failed = true;
     }
   }
