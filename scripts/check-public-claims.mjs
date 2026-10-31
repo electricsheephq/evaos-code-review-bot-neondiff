@@ -62,7 +62,9 @@ const forbiddenClaims = [
   /\bfree for all repositor(?:y|ies)\b/i,
   /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i,
   // #1203: the Mac app reviews public repositories without a key, so the old claim is stale.
-  /\bMac app\b[^.!?]{0,80}\b(?:requires?|needs?)\b[^.!?]{0,80}\b(?:every repositor|even (?:for )?public)/i
+  /\bMac app\b[^.!?]{0,80}\b(?:requires?|needs?)\b[^.!?]{0,80}\b(?:every repositor|even (?:for )?public)/i,
+  // Naming one surface does not scope a claim that covers all of them.
+  /\bfree\b[^.!?]{0,40}(?:\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b)/i
 ];
 
 let failed = false;

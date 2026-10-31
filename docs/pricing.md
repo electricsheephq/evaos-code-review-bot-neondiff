@@ -46,8 +46,7 @@ neondiff pricing
 The pricing command emits JSON by default and does not call the network. It reports:
 
 - review of repositories that GitHub reports as public is free through the
-  GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker (1.1.0+);
-  the Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
+  GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker (1.1.0+)
 - private, internal, and unknown-visibility review requires API-backed activation
 - active paid plans are `$9/mo`, `$90/yr` (Solo) and `$290/yr` (Team)
 - Solo plans include a 7-day trial; Team plans include a 30-day trial

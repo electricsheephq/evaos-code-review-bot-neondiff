@@ -728,6 +728,60 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
+    @Test func verifyingExistingAccessRestoresATargetThatANonPublicResultRemoved() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(readChecks: doctorReadCheck(
+                    repo: "acme/demo", visibility: "private"
+                ))),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.enterActivation(for: .publicReposOnly)
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.selectedBYOReviewRepository == nil)
+        #expect(!fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
+
+        // Existing-agent and existing-bot checks verify through the selected target, so the target must come back
+        // for the repository to be checked again (for example after it was made public).
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+
+        #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")
+        #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
+        #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @Test(arguments: [false, true])
+    func choosingPublicSkipsThePurchaseWallOnlyWithoutAStoredKey(keyStored: Bool) throws {
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: ["neondiff.activationState.v1": "purchase_required"],
+            productionBoundary: exactB0Boundary
+        )
+        if keyStored {
+            try fixture.secretStore.setSecret("nd_live_fixture_12345678", account: "license/default")
+        }
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.syncActivationEntryFromOnboardingMode()
+
+        // The free path is keyless, so a stored key keeps its purchase flow instead of a free state it cannot use.
+        #expect(fixture.model.activationState == (keyStored ? .purchaseRequired : .publicFreeSkip))
+        #expect(fixture.model.publicFreeReviewPath == !keyStored)
+    }
+
     @Test func freshInstallKeepsThePublicReviewModeDefault() {
         let fixture = ModelDependencyFixture(productionBoundary: exactB0Boundary)
         #expect(fixture.model.onboardingFlow.mode == .publicReposOnly)

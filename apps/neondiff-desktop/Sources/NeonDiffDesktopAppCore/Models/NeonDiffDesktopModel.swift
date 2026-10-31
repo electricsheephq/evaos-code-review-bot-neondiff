@@ -4016,6 +4016,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyExistingLocalBotGitHubAccess() {
+        // A non-public result can leave the free path with no target to verify. Forget the recorded results
+        // so the repository can be checked again, for example after it was made public.
+        if publicFreeReviewPath, selectedBYOReviewRepository == nil, !byoRepositoryVisibilities.isEmpty {
+            byoRepositoryVisibilities.removeAll()
+            reconcileBYOReviewRepository(enabledRepositories: repos.filter(\.enabled).map(\.name))
+        }
         if existingLocalAgentAccessAvailable,
            selectedBotInstallation != nil,
            !keychainWorkerLaunchAgentActive
@@ -4894,7 +4900,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// mid-flow or resumed state (resume-exact).
     package func syncActivationEntryFromOnboardingMode() {
         switch activationState {
-        case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
+        // A stored key keeps its purchase flow: the free path is keyless (publicFreeReviewPath).
+        case .purchaseRequired where onboardingFlow.mode == .publicReposOnly
+            && !dependencies.secretStore.containsSecret(account: activationKeyAccount):
             applyActivationEvent(.choosePublicPath)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)

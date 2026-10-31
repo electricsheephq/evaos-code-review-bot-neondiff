@@ -112,7 +112,7 @@ export function buildPricingOutput() {
     billingModel: "free for GitHub-public repositories through the GitHub Action, review-pr --ci, and self-hosted worker; flat paid plans for private repositories",
     sourceAvailableBeta: true,
     publicOpenSourceReposFree: true,
-    // The Mac app still requires activation; keyless native review is tracked in #1203.
+    // CLI and worker surfaces only; the Mac app's keyless public review (#1203) ships with the Desktop beta.
     publicReposFreeVia: ["github-action", "review-pr --ci", "self-hosted worker"],
     publicReposFreeTracking: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1191",
     activationRequiredForSupportedReview: false,

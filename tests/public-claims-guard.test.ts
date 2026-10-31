@@ -118,6 +118,15 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
 });
+// A named surface does not scope a claim that covers every surface.
+it.each([
+  "Public repos are free on every interface, including the Mac app.",
+  "Public repositories are free everywhere, including the GitHub Action."
+])("rejects an all-surfaces public-free claim that names one surface: %s", (claim) => {
+  const result = runGuardWith(claim);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
+});
 it("allows the Mac app private-repository license rule", () => {
   expect(runGuardWith("The Mac app needs a Solo or Team license for private repositories.").status).toBe(0);
 });
