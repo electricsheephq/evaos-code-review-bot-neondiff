@@ -97,10 +97,11 @@ const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci|self-hosted\s+worker|
 // A free claim that covers every surface is broad even when it names one surface. A negation excuses it before the
 // claim ends ("Do not say ... free everywhere", "free through the Action, but not everywhere") or later in the same
 // clause ("Calling NeonDiff free everywhere is forbidden"), but not after a clause break (", and never need a license").
-// Free-trial copy and compounds such as "credential-free" are not such claims.
-const freeEverySurface = /(?<!\btrials?\b[^.!?]{0,40})\b(?<!-)free\b(?![\s,-]+(?:\d+[\s-]day[\s-]+)?trials?\b)[^.!?]{0,40}(?:\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b)/gi;
+// Free-trial copy ("free 7-day trial", "the trial is free") and credential compounds such as "credential-free" are not
+// such claims; pricing compounds such as "license-free" are.
+const freeEverySurface = /(?<!\btrials?\s+(?:is|are|stays|remains)\s+)\b(?<!(?:credential|secret|token)-)free\b(?![\s,-]+(?:\d+[\s-]day[\s-]+)?trials?\b)[^.!?]{0,40}(?:\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b)/gi;
 const everySurfaceNegation = /\b(?:not|avoid|unless|forbidden|never)\b|n['’]t\b/i;
-const clauseBreak = /[,;:]|\b(?:and|but|while|so|because|whereas|including)\b/i;
+const clauseBreak = /[,;:]|\b(?:and|but|while|so|because|whereas)\b/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenClaims) {

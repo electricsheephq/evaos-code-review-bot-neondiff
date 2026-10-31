@@ -129,7 +129,11 @@ it.each([
   "Public review is free everywhere, not just through the GitHub Action.",
   "From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free everywhere, including the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker.",
   "NeonDiff is free everywhere.",
-  "Reviews are free on every surface for public repositories."
+  "Reviews are free on every surface for public repositories.",
+  "After the trial, public repos are free everywhere through the Mac app.",
+  "After your 7-day trial ends, public repos stay free everywhere.",
+  "Skip the trial: public repos are free on every surface.",
+  "NeonDiff is license-free everywhere."
 ])("rejects a free claim that covers every surface: %s", (claim) => {
   const result = runGuardWith(claim);
   expect(result.status).toBe(1);
@@ -149,7 +153,8 @@ it.each([
   "Calling NeonDiff free everywhere is forbidden.",
   "Describing NeonDiff as free on every surface is forbidden.",
   "The Mac app does not require a license key for every repository.",
-  "Calling NeonDiff MIT licensed is forbidden."
+  "Calling NeonDiff MIT licensed is forbidden.",
+  'Calling NeonDiff "free everywhere (including private repositories)" is forbidden.'
 ])("allows copy that is not an every-surface free claim: %s", (claim) => {
   expect(runGuardWith(claim).status).toBe(0);
 });
