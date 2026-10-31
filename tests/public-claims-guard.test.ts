@@ -118,8 +118,8 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
 });
-// A free claim that covers every surface is broad even when it names one surface. A negation after a clause break
-// does not excuse it, and free-trial copy is not such a claim (#1243).
+// A free claim that covers every surface is broad even when it names one surface. A negation excuses it only inside
+// the claim's own clause, and free-trial copy is not such a claim (#1243).
 it.each([
   "Public repos are free on every interface, including the Mac app.",
   "Public repositories are free everywhere, including the GitHub Action.",
@@ -133,7 +133,10 @@ it.each([
   "After the trial, public repos are free everywhere through the Mac app.",
   "After your 7-day trial ends, public repos stay free everywhere.",
   "Skip the trial: public repos are free on every surface.",
-  "NeonDiff is license-free everywhere."
+  "NeonDiff is license-free everywhere.",
+  "Don't wait; NeonDiff is free everywhere.",
+  "If you don't have a license key, NeonDiff is free everywhere.",
+  "NeonDiff is not open source, but NeonDiff is free everywhere."
 ])("rejects a free claim that covers every surface: %s", (claim) => {
   const result = runGuardWith(claim);
   expect(result.status).toBe(1);
@@ -149,6 +152,7 @@ it.each([
   "Public repos are free through the GitHub Action, but not everywhere.",
   "Do not say NeonDiff is free everywhere.",
   "Don't call NeonDiff free everywhere.",
+  "Do not describe NeonDiff as open source and free everywhere.",
   "Private, internal, and unknown-visibility repositories aren't free on any surface.",
   "Calling NeonDiff free everywhere is forbidden.",
   "Describing NeonDiff as free on every surface is forbidden.",
