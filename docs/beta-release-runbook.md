@@ -780,7 +780,7 @@ The release event also runs the npm workflows. `release-npm.yml` skips prereleas
 
   The canary does a clean install on macOS 15 and 26 and checks the feed, signature and team ID. If a job fails for a reason that is not transient, go to Rollback: the feed has moved.
 
-  GitHub retired its macOS 14 runners on 2026-11-02, so the canary no longer covers macOS 14. It is still the app's minimum supported version. When a release changes install, signing or launch behaviour, do a clean install on a macOS 14 machine or VM by hand and record the result on the release issue.
+  GitHub retires its macOS 14 runners on 2026-11-02, so the canary no longer covers macOS 14. It is still the app's minimum supported version. When a release changes install, signing or launch behaviour, do a clean install on a macOS 14 machine or VM by hand and record the result on the release issue. If it fails, go to Rollback, as for a canary failure.
 - Optional: once the canary is green, dispatch `desktop-accepted-release-packet.yml` from `main` with `release_tag=v1.1.0-beta.N`. It writes the beta's accepted packet and the artifact-source attestation, which only the stable-transition machinery reads. It needs the declaration from step 1 on `main` and a zip without AppleDouble entries, so beta.90's hosted zip cannot produce one.
 
 **Rollback.**

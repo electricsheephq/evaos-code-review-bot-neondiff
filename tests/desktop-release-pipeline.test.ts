@@ -228,7 +228,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     }
   });
 
-  it("defines a three-clean-Mac public download and install canary", () => {
+  it("defines a clean-Mac public download and install canary on macOS 15 and 26", () => {
     const workflowPath = ".github/workflows/paid-beta-public-download-canary.yml";
 
     expect(existsSync(workflowPath)).toBe(true);
