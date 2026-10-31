@@ -76,6 +76,10 @@ public struct OnboardingFlow: Equatable {
     }
 
     public var canAdvance: Bool {
+        canAdvance(activationState: .purchaseRequired)
+    }
+
+    public func canAdvance(activationState: ActivationState) -> Bool {
         switch currentStep {
         case .welcome:
             return true
@@ -85,6 +89,7 @@ public struct OnboardingFlow: Equatable {
             return daemonBootstrapChecked
         case .license:
             return licenseActivation == .activated
+                || (mode == .publicReposOnly && activationState == .publicFreeSkip)
         case .done:
             return true
         }
@@ -99,8 +104,8 @@ public struct OnboardingFlow: Equatable {
         }
     }
 
-    public mutating func advance() {
-        guard canAdvance else { return }
+    public mutating func advance(activationState: ActivationState = .purchaseRequired) {
+        guard canAdvance(activationState: activationState) else { return }
         switch currentStep {
         case .welcome:
             currentStep = .provider

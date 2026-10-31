@@ -87,18 +87,15 @@ export async function resolveRuntimeCredentialEnvelope(input: {
     throw new Error("runtime credential stdin must be one JSON object");
   }
   const record = envelope as Record<string, unknown>;
-  if (Object.keys(record).length !== 5
-    || ![
-      "schemaVersion",
-      "githubAppId",
-      "githubPrivateKey",
-      "licenseKey",
-      "licenseMachineId"
-    ].every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    || record.schemaVersion !== 2
+  const expectedKeys = record.schemaVersion === 2
+    ? ["schemaVersion", "githubAppId", "githubPrivateKey", "licenseKey", "licenseMachineId"]
+    : ["schemaVersion", "githubAppId", "githubPrivateKey", "licenseMachineId"];
+  if ((record.schemaVersion !== 2 && record.schemaVersion !== 3)
+    || Object.keys(record).length !== expectedKeys.length
+    || !expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(record, key))
     || typeof record.githubAppId !== "string"
     || typeof record.githubPrivateKey !== "string"
-    || typeof record.licenseKey !== "string"
+    || (record.schemaVersion === 2 && typeof record.licenseKey !== "string")
     || typeof record.licenseMachineId !== "string") {
     throw new Error("runtime credential stdin has an unsupported schema");
   }
@@ -108,8 +105,8 @@ export async function resolveRuntimeCredentialEnvelope(input: {
   }
   const privateKey = record.githubPrivateKey.trim();
   validatePrivateKey(privateKey);
-  const licenseKey = record.licenseKey.trim();
-  if (!/^nd_live_[A-Za-z0-9_-]{8,}$/.test(licenseKey)) {
+  const licenseKey = record.schemaVersion === 2 ? (record.licenseKey as string).trim() : undefined;
+  if (licenseKey !== undefined && !/^nd_live_[A-Za-z0-9_-]{8,}$/.test(licenseKey)) {
     throw new Error("runtime credential license key must be one valid production key");
   }
   const licenseMachineId = record.licenseMachineId.trim();
@@ -119,7 +116,7 @@ export async function resolveRuntimeCredentialEnvelope(input: {
   return {
     appId,
     privateKey,
-    licenseKey,
+    ...(licenseKey === undefined ? {} : { licenseKey }),
     licenseMachineId
   };
 }

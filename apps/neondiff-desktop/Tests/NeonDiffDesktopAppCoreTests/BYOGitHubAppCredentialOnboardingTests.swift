@@ -615,6 +615,178 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.productionUsefulWorkAvailable)
     }
 
+    @Test(arguments: ["public", "private", "internal", "unknown"])
+    func publicFreeReviewGatesUseDoctorVisibility(visibility: String) async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(readChecks: doctorReadCheck(
+                    repo: "acme/demo", visibility: visibility
+                ))),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.enterActivation(for: .publicReposOnly)
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        #expect(fixture.model.publicFreeReviewPath)
+        #expect(fixture.model.githubAccessCue(for: fixture.model.repos[0]) == nil)
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        #expect(fixture.model.publicFreeReviewPath)
+        #expect(fixture.model.currentRepositoryActivationReady == (visibility == "public"))
+        #expect(fixture.model.productionUsefulWorkAvailable == (visibility == "public"))
+        #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo") == (visibility == "public"))
+        if visibility != "public" {
+            #expect(fixture.model.githubAccessCue(for: fixture.model.repos[0])?.label
+                == "NEEDS SOLO OR TEAM LICENSE")
+            fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+            #expect(!fixture.model.currentRepositoryActivationReady)
+        } else {
+            #expect(fixture.model.githubAccessCue(for: fixture.model.repos[0]) == .publicFree)
+            fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+            fixture.loadConfig(byoProviderConfigInspectJSON(repository: "acme/demo"))
+            try #require(fixture.model.productionDaemonStartAvailable)
+        }
+        fixture.model.startDaemon()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(fixture.preferences.bool(forKey: "neondiff.keylessPublicWorker") == (visibility == "public"))
+        try fixture.secretStore.setSecret("nd_live_fixture_12345678", account: "license/default")
+        #expect(!fixture.model.publicFreeReviewPath)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @Test(arguments: zip(
+        ["public_free_skip", "purchase_required", "active"],
+        ["publicReposOnly", "privateRepos", "privateRepos"]
+    ))
+    func restoredActivationStateSetsTheReviewMode(rawState: String, expectedMode: String) {
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: ["neondiff.activationState.v1": rawState],
+            productionBoundary: exactB0Boundary
+        )
+        #expect(fixture.model.onboardingFlow.mode.rawValue == expectedMode)
+    }
+
+    @Test func storingAKeyClearsTheKeylessWorkerMarker() {
+        let fixture = ModelDependencyFixture(
+            preferenceBools: ["neondiff.keylessPublicWorker": true],
+            preferenceStrings: ["neondiff.activationState.v1": "public_free_skip"],
+            productionBoundary: exactB0Boundary
+        )
+        #expect(fixture.model.activationState == .publicFreeSkip)
+        // Passing through another state, as a review-target change does, keeps the mark.
+        fixture.model.activationState = .purchaseRequired
+        fixture.model.activationState = .publicFreeSkip
+        #expect(fixture.preferences.bool(forKey: "neondiff.keylessPublicWorker"))
+
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        #expect(fixture.secretStore.containsSecret(account: "license/default"))
+        #expect(!fixture.preferences.bool(forKey: "neondiff.keylessPublicWorker"))
+    }
+
+    @Test func publicFreePathCanSelectAnUncheckedRepositoryButNotReviewIt() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.enterActivation(for: .publicReposOnly)
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        // An existing worker verifies through the selected target, so an unchecked repository must stay selectable.
+        #expect(fixture.model.publicFreeReviewPath)
+        #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+        #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")
+        #expect(fixture.model.githubAccessCue(for: fixture.model.repos[0]) == nil)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @Test func verifyingExistingAccessRestoresATargetThatANonPublicResultRemoved() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(readChecks: doctorReadCheck(
+                    repo: "acme/demo", visibility: "private"
+                ))),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.enterActivation(for: .publicReposOnly)
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.selectedBYOReviewRepository == nil)
+        #expect(!fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
+
+        // Existing-agent and existing-bot checks verify through the selected target, so the target must come back
+        // for the repository to be checked again (for example after it was made public).
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+
+        #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")
+        #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
+        #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @Test(arguments: [false, true])
+    func choosingPublicSkipsThePurchaseWallOnlyWithoutAStoredKey(keyStored: Bool) throws {
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: ["neondiff.activationState.v1": "purchase_required"],
+            productionBoundary: exactB0Boundary
+        )
+        if keyStored {
+            try fixture.secretStore.setSecret("nd_live_fixture_12345678", account: "license/default")
+        }
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.syncActivationEntryFromOnboardingMode()
+
+        // The free path is keyless, so a stored key keeps its purchase flow instead of a free state it cannot use.
+        #expect(fixture.model.activationState == (keyStored ? .purchaseRequired : .publicFreeSkip))
+        #expect(fixture.model.publicFreeReviewPath == !keyStored)
+    }
+
+    @Test func freshInstallKeepsThePublicReviewModeDefault() {
+        let fixture = ModelDependencyFixture(productionBoundary: exactB0Boundary)
+        #expect(fixture.model.onboardingFlow.mode == .publicReposOnly)
+    }
+
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {
         struct Scenario {
             let name: String
@@ -838,6 +1010,10 @@ private func waitForBYOVerification(_ fixture: ModelDependencyFixture) async {
     }
 }
 
+private func byoProviderConfigInspectJSON(repository: String) -> String {
+    #"{"ok":true,"command":"config inspect","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"],"zcode":{"providerId":"zcode-glm","model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"zcode","displayName":"ZCode GLM","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
+}
+
 private func byoRepoPatchJSON(repository: String) -> String {
     #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"]}}"#
 }
@@ -857,12 +1033,13 @@ private func doctorResult(
 private func doctorReadCheck(
     repo: String,
     skippedByPolicy: String? = nil,
-    ok: Bool = true
+    ok: Bool = true,
+    visibility: String = "public"
 ) -> String {
     let skippedField = skippedByPolicy.map {
         #","skippedByPolicy":"\#($0)""#
     } ?? ""
-    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"\#(visibility)","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
 }
 
 private func discoverySnapshot(

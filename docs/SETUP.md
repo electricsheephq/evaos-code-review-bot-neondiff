@@ -24,14 +24,15 @@ for the support-tier pricing contract.
 - a provider/model path available on the machine running the worker
 - a NeonDiff license key for private, internal, or unknown-visibility repositories
   (from 1.1.0, public repositories need no key through the GitHub Action,
-  `neondiff review-pr --ci`, or the self-hosted worker; the Mac app and npm CLI
-  1.0.x still require activation for every repository)
+  `neondiff review-pr --ci`, the self-hosted worker, or the Mac app with
+  "Public repositories only" selected; npm CLI 1.0.x still requires activation
+  for every repository)
 
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
 the tier. From 1.1.0, review of repositories that GitHub reports as public is
 free, with no license key, through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
 worker (`daemon`, `run-once`, `review-pr`, `providers verify`).
-The Mac app still requires a license key for every repository ([#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203)).
+The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
 Private, internal, and unknown-visibility
 repositories require an active NeonDiff license, and unknown visibility fails
 closed. The npm CLI 1.0.x requires API-backed activation for every repository.
@@ -155,7 +156,7 @@ environment variable name; it must not store the API key itself.
 Every private, internal, or unknown-visibility repository review requires a
 live NeonDiff entitlement; from 1.1.0, repositories that GitHub reports as
 public need none through the GitHub Action, `neondiff review-pr --ci`, or the
-self-hosted worker. The Mac app still requires one (#1203). The supported distribution pins
+self-hosted worker. The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team. The supported distribution pins
 `https://neondiff-license.fly.dev`, enables enforcement for private work, and
 grants no offline cache authority. Legacy v1.0.3 fields still load for upgrade recovery but cannot
 weaken this effective policy.
@@ -201,8 +202,9 @@ From 1.1.0, a repository that GitHub reports as public needs no entitlement for
 review through the GitHub Action, `neondiff review-pr --ci`, or the self-hosted
 worker (`daemon`, `run-once`, `review-pr`, `providers verify`). A stored but
 broken key still denies worker admission; remove it explicitly to use keyless
-public-only mode. Issue enrichment and update checks remain licensed. The Mac
-app (#1203) and npm CLI 1.0.x still require activation for every repository.
+public-only mode. Issue enrichment and update checks remain licensed.
+The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
+The npm CLI 1.0.x still requires activation for every repository.
 Cached entitlement metadata is diagnostic only.
 
 Use this matrix when reading doctor or review evidence:
@@ -285,8 +287,9 @@ For a B0 customer, the native first-run path is:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
-2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
-   PEM, then choose **Store in Keychain**.
+2. Launch NeonDiff, choose **Public repositories only** for keyless public
+   review (private repositories need Solo or Team), and enter the App's numeric
+   ID and downloaded private-key PEM, then choose **Store in Keychain**.
 3. On a clean install, if NeonDiff reports that the local worker command is
    unavailable, choose **Install / Update Local Worker** before **Initialize
    Local Config**. From the verified extracted bundle, use Node.js 26 or newer
@@ -361,7 +364,7 @@ gates. No invitation is required when the versioned public GitHub prerelease is
 published and the neondiff.com purchase/download path is live. Until both are
 true, the candidate and its GitHub prerelease assets remain held.
 
-After App access, provider, repository, and activation are verified, the native
+After App access, provider, repository, and any required activation are verified, the native
 daemon step offers **Preview Start** followed by **Install & Start** when no
 supported LaunchAgent exists. Preview validates the exact signed
 `/Applications/NeonDiff.app`, account-scoped config, customer-owned App ID, and
@@ -372,10 +375,11 @@ private-key value or file path. It includes the non-secret broker device ID
 already used for native activation. That mode revalidates the same public
 coordinates, re-derives the device ID from NeonDiff's own Keychain identity,
 rejects a mismatched plist, reads the App key from Keychain without user
-interaction, reads the API-backed activation credential from the same app-owned
-Keychain service, validates the running sealed worker process, and only then
-pipes both secret values plus that non-secret device ID once in a bounded JSON
-envelope to its stdin. License validation then uses the same machine binding as
+interaction, reads the API-backed activation credential when present from the
+same app-owned Keychain service, validates the running sealed worker process,
+and only then pipes credentials plus that non-secret device ID once in a
+bounded JSON envelope to its stdin. Keyed envelopes retain schema v2; keyless
+public-only envelopes use schema v3 and omit the license key. License validation then uses the same machine binding as
 native activation instead of the CLI's legacy host hash. A conflicting plist,
 unsafe app/config/worker path, unavailable Keychain item, device mismatch, or
 launchd failure fails closed. Do not replace this with a `security -w` wrapper,

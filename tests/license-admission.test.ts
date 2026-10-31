@@ -134,6 +134,59 @@ describe("production useful-work admission", () => {
     expect(JSON.stringify(result)).not.toContain(key());
   });
 
+  it("admits a keyless runtime with no key file for public reviews only", async () => {
+    const config = fixtureConfig();
+    rmSync(config.keyPath!);
+    let fetchCalls = 0;
+    const result = await withRuntimeGitHubCredentials({
+      appId: "4184532",
+      privateKey: "runtime-private-key-fixture",
+      licenseMachineId: brokerDeviceId
+    }, () => requireActiveDaemonCycleAdmissions({
+      config,
+      fetchImpl: (async () => {
+        fetchCalls += 1;
+        return new Response("{}");
+      }) as typeof fetch
+    }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected public daemon admission");
+    expect(result.admissions.daemonCycle).toMatchObject({
+      fingerprint: "public-free", repoVisibilityScope: "public", privateRepoAllowed: false
+    });
+    expect(result.admissions.issueEnrichment).toBeUndefined();
+    expect(authorizeAdmissionForVisibility(result.admissions.reviewDiscovery, "public").ok).toBe(true);
+    expect(authorizeAdmissionForVisibility(result.admissions.reviewDiscovery, "private").ok).toBe(false);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("uses a key file for a keyless runtime instead of the public-only path", async () => {
+    let fetchCalls = 0;
+    const result = await withRuntimeGitHubCredentials({
+      appId: "4184532",
+      privateKey: "runtime-private-key-fixture",
+      licenseMachineId: brokerDeviceId
+    }, () => requireActiveDaemonCycleAdmissions({
+      config: fixtureConfig(),
+      fetchImpl: (async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({
+          status: "active",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    }));
+    expect(fetchCalls).toBe(1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected keyed daemon admission");
+    expect(result.admissions.issueEnrichment).toBeDefined();
+    expect(authorizeAdmissionForVisibility(result.admissions.reviewDiscovery, "private").ok).toBe(true);
+  });
+
   it("rejects a structurally forged admission token", () => {
     const forged = Object.freeze({
       kind: "production-license-admission",

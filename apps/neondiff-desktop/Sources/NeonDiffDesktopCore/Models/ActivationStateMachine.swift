@@ -173,6 +173,7 @@ public enum ActivationStateMachine {
         case (.serviceError, .verifyExistingEntitlement): return .activationPending
 
         case (.publicFreeSkip, .choosePrivatePath): return .purchaseRequired
+        case (.publicFreeSkip, .provideExistingKey): return .keyReady
 
         default: return state
         }

@@ -213,6 +213,7 @@ public enum GitHubRepositoryAccessCue: String, Equatable {
     case publicFree
     case licenseActive
     case licenseRequired
+    case soloOrTeamLicenseRequired
     case insufficientReadAccess
 
     public var label: String {
@@ -220,6 +221,7 @@ public enum GitHubRepositoryAccessCue: String, Equatable {
         case .publicFree: "PUBLIC · FREE"
         case .licenseActive: "PRIVATE · LICENSE ACTIVE"
         case .licenseRequired: "PRIVATE · LICENSE REQUIRED"
+        case .soloOrTeamLicenseRequired: "NEEDS SOLO OR TEAM LICENSE"
         case .insufficientReadAccess: "INSUFFICIENT READ ACCESS"
         }
     }

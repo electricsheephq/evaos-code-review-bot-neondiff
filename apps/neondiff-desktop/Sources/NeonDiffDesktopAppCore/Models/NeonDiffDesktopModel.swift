@@ -151,7 +151,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var pendingBYOGitHubAppId = ""
     @Published package var pendingBYOGitHubAppPrivateKey = ""
     @Published package private(set) var byoGitHubPrivateKeyStored = false
-    @Published package private(set) var byoGitHubCredentialsVerified = false
+    private var byoRepositoryVisibilities: [String: String] = [:]
+    @Published package private(set) var byoGitHubCredentialsVerified = false {
+        didSet {
+            if !byoGitHubCredentialsVerified { byoRepositoryVisibilities.removeAll() }
+        }
+    }
     @Published package private(set) var isBYOGitHubVerificationInProgress = false
     @Published package private(set) var byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
     @Published package var pendingReviewPullNumber = "" {
@@ -246,7 +251,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return productionActivationBoundaryMessage
     }
 
+    package var publicFreeReviewPath: Bool {
+        dependencies.productionBoundary.byoGitHubEnabled
+            && onboardingFlow.mode == .publicReposOnly
+            && activationState == .publicFreeSkip
+            && !dependencies.secretStore.containsSecret(account: activationKeyAccount)
+    }
+
     package var currentRepositoryActivationReady: Bool {
+        if publicFreeReviewPath {
+            guard let selectedBYOReviewRepository else { return false }
+            return byoRepositoryVisibilities[selectedBYOReviewRepository.lowercased()] == "public"
+        }
         guard activationVerifiedThisLaunch,
               activationState == .active,
               let activationVerifiedRepositoryThisLaunch,
@@ -309,6 +325,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Public managed repositories need no paid activation; every other beta
     /// path keeps the repository-scoped current-launch proof visible.
     package var existingAccountEntitlementSummaryReady: Bool {
+        if publicFreeReviewPath {
+            return repositoryConfigurationReady && currentRepositoryActivationReady
+        }
         guard existingLocalBotIdentityReady,
               selectedAccountEntitlementSupportsCurrentPath
         else {
@@ -339,6 +358,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private var selectedAccountEntitlementSupportsCurrentPath: Bool {
+        if publicFreeReviewPath {
+            return currentRepositoryActivationReady
+        }
         guard let accountEntitlement = selectedAccountWorkspace?.entitlement
         else {
             return false
@@ -724,7 +746,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                   byoGitHubCredentialsVerified
             else { return false }
         }
-        return onboardingFlow.canAdvance
+        return onboardingFlow.canAdvance(activationState: activationState)
     }
 
     private var hasVerifiedManagedGitHubSelection: Bool {
@@ -847,13 +869,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
         self.isOnboardingPresented = !dependencies.preferences.bool(forKey: onboardingCompletedKey)
         // Resume-exact: restore the persisted activation state (rawValue) without
         // touching the Keychain on the launch path (v1.0.3 startup-stability rule).
+        var restoredActivationState = false
         if let rawActivationState = dependencies.preferences.string(forKey: activationStateKey),
            let restored = ActivationState(rawValue: rawActivationState) {
             self.activationState = restored
+            restoredActivationState = true
         } else {
             self.activationState = ActivationStateMachine.initialState
         }
         self.lastCommandLine = statusCommand.commandLine
+        // The review mode is not persisted. Derive it from the restored state so a relaunch keeps a private-path
+        // user on the key flow instead of switching them back to the free public path.
+        if restoredActivationState {
+            onboardingFlow.mode = activationState == .publicFreeSkip ? .publicReposOnly : .privateRepos
+        }
     }
 
     package var selectedAccountWorkspace: DesktopAccountWorkspace? {
@@ -2483,6 +2512,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func startDaemon() {
         guard requireProductionDaemonStartAuthorization() else { return }
+        if publicFreeReviewPath {
+            do {
+                _ = try GitHubBrokerDeviceIdentityStore(
+                    secretStore: dependencies.secretStore
+                ).loadOrCreate()
+            } catch {
+                lastError = "The public-only worker device identity could not be created safely."
+                return
+            }
+        }
+        dependencies.preferences.set(publicFreeReviewPath, forKey: keylessPublicWorkerPreferenceKey)
         if keychainWorkerLaunchAgentActive
             || (!existingLocalAgentAccessAvailable
                 && keychainWorkerLaunchAgentInstallAvailable)
@@ -2670,9 +2710,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError ?? "GitHub App setup required."
             return nil
         }
-        guard let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+        let identityStore = GitHubBrokerDeviceIdentityStore(
             secretStore: dependencies.secretStore
-        ).loadExisting(allowUserInteraction: false).deviceId else {
+        )
+        guard let licenseMachineID = try? (publicFreeReviewPath
+            ? identityStore.loadOrCreate()
+            : identityStore.loadExisting(allowUserInteraction: false)).deviceId else {
             lastError =
                 "The saved activation device identity is unavailable. Reconnect or reactivate before installing the worker service."
             keychainWorkerLaunchAgentStatus =
@@ -2741,16 +2784,22 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard let privateKey = try dependencies.secretStore.readSecret(
                 account: BYOGitHubAppKeychainAccount.privateKey,
                 allowUserInteraction: false
-            ),
+            ) else {
+                throw BYOGitHubAppCredentialError.invalidPrivateKey
+            }
             let licenseKey = try dependencies.secretStore.readSecret(
                 account: activationKeyAccount,
                 allowUserInteraction: false
-            ),
-            let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
-                secretStore: dependencies.secretStore
-            ).loadExisting(allowUserInteraction: false).deviceId else {
-                throw BYOGitHubAppCredentialError.invalidPrivateKey
+            )
+            guard licenseKey != nil || publicFreeReviewPath else {
+                throw DesktopRuntimeCredentialEnvelopeError.invalidLicenseKey
             }
+            let identityStore = GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+            )
+            let licenseMachineID = try (publicFreeReviewPath
+                ? identityStore.loadOrCreate()
+                : identityStore.loadExisting(allowUserInteraction: false)).deviceId
             return try DesktopRuntimeCredentialEnvelope(
                 appID: appID,
                 privateKey: privateKey,
@@ -3204,6 +3253,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Choose an enabled repository from the applied worker configuration."
             return
         }
+        // A repository not checked in this launch stays selectable so its access can be verified;
+        // reviews still need a verified public visibility (currentRepositoryActivationReady).
+        if publicFreeReviewPath,
+           let visibility = byoRepositoryVisibilities[repository.name.lowercased()],
+           visibility != "public" {
+            lastError = "Only public repositories can be reviewed without a key. This repository needs a Solo or Team license."
+            return
+        }
         guard isAppliedBYOReviewRepository(repository.name) else {
             lastError = "Apply and read back this repository in the current worker config before using it as the activation target."
             return
@@ -3223,8 +3280,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return
         }
+        let preservePublicFreePath = publicFreeReviewPath
         invalidateScopedReviewApproval()
         invalidateActivationForRepositoryChange(fullReset: true)
+        if preservePublicFreePath {
+            enterActivation(for: .publicReposOnly)
+        }
         selectedBYOReviewRepository = repository.name
         dependencies.preferences.set(
             repository.name,
@@ -3239,6 +3300,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func canSelectBYOReviewRepository(fullName: String) -> Bool {
+        if publicFreeReviewPath,
+           let visibility = byoRepositoryVisibilities[fullName.lowercased()],
+           visibility != "public" {
+            return false
+        }
         guard byoGitHubCredentialOnboardingAvailable,
               !managedGitHubAvailable,
               repos.contains(where: {
@@ -3258,6 +3324,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func githubAccessCue(for repo: RepoMonitor) -> GitHubRepositoryAccessCue? {
+        if publicFreeReviewPath {
+            // No entry means App access has not been checked in this launch yet; selection stays fail-closed.
+            guard let visibility = byoRepositoryVisibilities[repo.name.lowercased()] else { return nil }
+            return visibility == "public" ? .publicFree : .soloOrTeamLicenseRequired
+        }
         if managedGitHubAvailable,
            let authoritative = managedGitHubRepositories.first(where: {
                $0.fullName == repo.name
@@ -3945,6 +4016,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyExistingLocalBotGitHubAccess() {
+        // A non-public result can leave the free path with no target to verify. Forget the recorded results
+        // so the repository can be checked again, for example after it was made public.
+        if publicFreeReviewPath, selectedBYOReviewRepository == nil, !byoRepositoryVisibilities.isEmpty {
+            byoRepositoryVisibilities.removeAll()
+            reconcileBYOReviewRepository(enabledRepositories: repos.filter(\.enabled).map(\.name))
+        }
         if existingLocalAgentAccessAvailable,
            selectedBotInstallation != nil,
            !keychainWorkerLaunchAgentActive
@@ -4206,7 +4283,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let repositories = report.github.readChecks.map(\.repo).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
+        byoRepositoryVisibilities = Dictionary(uniqueKeysWithValues:
+            report.github.readChecks.map {
+                ($0.repo.lowercased(), $0.visibilityResult?.lowercased() ?? "unknown")
+            }
+        )
         byoGitHubCredentialsVerified = true
+        if publicFreeReviewPath {
+            reconcileBYOReviewRepository(enabledRepositories: repos.filter(\.enabled).map(\.name))
+        }
         lastError = nil
         switch expectedContext.source {
         case .existingLocalAgent:
@@ -4226,6 +4311,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
         }
 
+        if publicFreeReviewPath { return }
         if expectedContext.source == .existingLocalAgent
             || (
                 expectedContext.source == .keychainStdinExistingBot
@@ -4692,6 +4778,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard requireVerifiedNativeActivationBroker() else { return }
         do {
             try dependencies.secretStore.setSecret(pendingLicenseKey, account: licenseKeyAccount)
+            clearKeylessWorkerMark()
             pendingLicenseKey = ""
             license = LicenseStatus(keyStored: true, entitlement: "stored locally", updateChannel: license.updateChannel)
             lastError = nil
@@ -4813,7 +4900,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// mid-flow or resumed state (resume-exact).
     package func syncActivationEntryFromOnboardingMode() {
         switch activationState {
-        case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
+        // A stored key keeps its purchase flow: the free path is keyless (publicFreeReviewPath).
+        case .purchaseRequired where onboardingFlow.mode == .publicReposOnly
+            && !dependencies.secretStore.containsSecret(account: activationKeyAccount):
             applyActivationEvent(.choosePublicPath)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)
@@ -4877,6 +4966,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         do {
             try dependencies.secretStore.setSecret(pendingActivationKey, account: activationKeyAccount)
+            clearKeylessWorkerMark()
             activationKeyRedactedPrefix = material.redactedPrefix
             pendingActivationKey = ""
             return true
@@ -4884,6 +4974,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
             return false
         }
+    }
+
+    /// Only startDaemon marks the worker keyless. A stored key withdraws the mark, so a worker that launchd
+    /// restarts later fails as before instead of running public-only when the keychain refuses a quiet read.
+    private func clearKeylessWorkerMark() {
+        dependencies.preferences.set(false, forKey: keylessPublicWorkerPreferenceKey)
     }
 
     package func reenterActivationKey() {
@@ -5120,7 +5216,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             completeOnboarding()
             return
         }
-        onboardingFlow.advance()
+        onboardingFlow.advance(activationState: activationState)
     }
 
     package func goBackOnboarding() {
@@ -5131,7 +5227,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard productionUsefulWorkAvailable,
               dependencies.productionBoundary.managedGitHubBrokerOrigin == nil
                 || hasVerifiedManagedGitHubSelection,
-              onboardingFlow.licenseActivation == .activated
+              onboardingFlow.licenseActivation == .activated || publicFreeReviewPath
         else {
             _ = requireVerifiedNativeActivationBroker()
             isOnboardingPresented = true
@@ -6209,7 +6305,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         let repositories = uniqueSortedRepoNames(
-            enabledRepositories.filter(isValidRepoName)
+            enabledRepositories.filter {
+                isValidRepoName($0)
+                    && (!publicFreeReviewPath
+                        || byoRepositoryVisibilities[$0.lowercased()].map { $0 == "public" } ?? true)
+            }
         )
         if let selectedBYOReviewRepository,
            repositories.contains(where: {
@@ -6978,6 +7078,7 @@ private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
 private let activationCliBackedEnabledKey = "neondiff.activationCliBackedValidation"
 private let managedGitHubInstallationIdKey = "neondiff.managedGitHubInstallationId"
 private let byoGitHubAppIdPreferenceKey = "neondiff.byoGitHubAppId"
+private let keylessPublicWorkerPreferenceKey = "neondiff.keylessPublicWorker"
 
 private enum ManagedGitHubModelError: Error {
     case installPageOpenFailed
