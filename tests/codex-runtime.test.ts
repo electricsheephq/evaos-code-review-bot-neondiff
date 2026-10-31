@@ -67,7 +67,8 @@ describe("Codex CLI review runtime", () => {
     temporaryRoots.push(root);
     const runtime = loadConfigFromObject({ codexRuntime: { serviceTier } }).codexRuntime!;
     await runCodexReview({
-      ...runtime, cwd: root, prompt: "Synthetic tier fixture", evidenceDir: root
+      // No checkout reads: this test pins the tier argument, and read confinement needs a real Codex CLI.
+      ...runtime, checkoutReads: false, cwd: root, prompt: "Synthetic tier fixture", evidenceDir: root
     }, {
       captureWorktreeState: () => "unchanged",
       runProcess: async (invocation) => {

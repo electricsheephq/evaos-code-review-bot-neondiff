@@ -316,6 +316,9 @@ unset, Codex uses its default (standard) tier. `"priority"` is faster but uses
 plan usage faster (Codex calls it "2x speed, increased usage"). NeonDiff ignores
 `~/.codex/config.toml`, so the global Codex service-tier setting never applies
 to NeonDiff; set this field in NeonDiff's config to select a tier explicitly.
+Codex applies the tier only when the active model and account advertise it; otherwise it
+omits the tier and prints a warning on stderr. String tiers need a Codex CLI from May 2026
+or later; NeonDiff's checkout reads already require 0.163.0.
 
 The default `cliPath: "codex"` resolves through the worker's `PATH`; explicit absolute paths also work.
 
