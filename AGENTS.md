@@ -32,7 +32,8 @@ If you are a coding agent working in this repository:
   license key through the GitHub Action, `neondiff review-pr --ci`, and the
   self-hosted worker (`daemon`, `run-once`, `review-pr`, `providers verify`)
   (`publicReposFree: true` in the official policy; product decision 2026-10-23).
-  The Mac app still requires activation for every repository (#1203).
+  The Mac app reviews public repositories without a key when the user chooses
+  "Public repositories only" in setup (#1203); other repositories need activation.
   The npm CLI 1.0.x requires API-backed activation for every repository.
 - `review-local` is a local development tool that posts nothing and needs no activation: it reviews only a local diff and makes no GitHub calls.
 - API-backed activation is required for supported private, internal, and unknown-visibility

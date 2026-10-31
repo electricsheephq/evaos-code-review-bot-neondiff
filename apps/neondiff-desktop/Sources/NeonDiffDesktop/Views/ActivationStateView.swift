@@ -15,7 +15,9 @@ struct ActivationStateView: View {
     var body: some View {
         let palette = NDPalette(scheme: colorScheme)
         Group {
-            if model.existingAccountEntitlementSummaryReady,
+            if model.publicFreeReviewPath {
+                activationFlow(palette: palette)
+            } else if model.existingAccountEntitlementSummaryReady,
                let entitlement = model.selectedAccountEntitlementLabel {
                 existingAccountEntitlement(entitlement, palette: palette)
             } else if model.existingAccountEntitlementNeedsCurrentAccessVerification,
@@ -36,7 +38,19 @@ struct ActivationStateView: View {
             Text("Activation")
                 .ndSectionLabel(palette)
 
-            Text(presentation.title)
+            if model.byoGitHubCredentialOnboardingAvailable,
+               presentation.state == .purchaseRequired || presentation.state == .publicFreeSkip {
+                Picker("Review Mode", selection: $model.onboardingFlow.mode) {
+                    Text("Public repositories only").tag(OnboardingMode.publicReposOnly)
+                    Text("Private repositories").tag(OnboardingMode.privateRepos)
+                }
+                .onAppear { model.syncActivationEntryFromOnboardingMode() }
+                .onChange(of: model.onboardingFlow.mode) { _, _ in
+                    model.syncActivationEntryFromOnboardingMode()
+                }
+            }
+
+            Text(model.publicFreeReviewPath ? "Free plan: public repositories" : presentation.title)
                 .font(.system(.headline, design: .monospaced).weight(.bold))
                 .foregroundStyle(presentation.isSuccess ? palette.accentPrimary : palette.textPrimary)
 

@@ -117,6 +117,40 @@ describe("runtime GitHub credentials", () => {
     expect(readRuntimeLicenseMachineId()).toBeUndefined();
   });
 
+  it("accepts a v3 keyless envelope and preserves the device identity", async () => {
+    const credentials = await resolveRuntimeCredentialEnvelope({
+      command: "daemon",
+      runtimeCredentialsStdin: "true",
+      stdin: Readable.from([JSON.stringify({
+        schemaVersion: 3,
+        githubAppId: "4184532",
+        githubPrivateKey: privateKey,
+        licenseMachineId: brokerDeviceId
+      })])
+    });
+    expect(credentials?.licenseKey).toBeUndefined();
+    expect(credentials).not.toHaveProperty("licenseKey");
+    expect(credentials?.licenseMachineId).toBe(brokerDeviceId);
+  });
+
+  it.each([
+    { schemaVersion: 3, licenseKey: "nd_live_runtime_fixture_1234" },
+    { schemaVersion: 2 },
+    { schemaVersion: 3, unexpected: "field" },
+    { schemaVersion: 3, licenseMachineId: undefined }
+  ])("rejects an envelope whose keys do not match its schema: %j", async (fields) => {
+    await expect(resolveRuntimeCredentialEnvelope({
+      command: "review-pr",
+      runtimeCredentialsStdin: "true",
+      stdin: Readable.from([JSON.stringify({
+        githubAppId: "4184532",
+        githubPrivateKey: privateKey,
+        licenseMachineId: brokerDeviceId,
+        ...fields
+      })])
+    })).rejects.toThrow("unsupported schema");
+  });
+
   it("accepts the signed-app credential envelope for a selected issue-enrichment run", async () => {
     const credentials = await resolveRuntimeCredentialEnvelope({
       command: "issue-enrichment-run",

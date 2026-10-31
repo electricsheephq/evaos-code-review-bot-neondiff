@@ -5,6 +5,7 @@ import NeonDiffDesktopCore
 
 enum FoundationKeychainWorkerDaemonRunner {
     private static let appIDPreferenceKey = "neondiff.byoGitHubAppId"
+    private static let keylessPublicWorkerPreferenceKey = "neondiff.keylessPublicWorker"
 
     static func runAndExitIfRequested(
         arguments: [String] = Array(CommandLine.arguments.dropFirst()),
@@ -70,11 +71,18 @@ enum FoundationKeychainWorkerDaemonRunner {
         guard let stored = try secretStore.readSecret(
             account: BYOGitHubAppKeychainAccount.privateKey,
             allowUserInteraction: false
-        ),
+        ) else {
+            throw WorkerDaemonRunnerError.keychainUnavailable
+        }
         let licenseKey = try secretStore.readSecret(
             account: "license/default",
             allowUserInteraction: false
-        ) else {
+        )
+        // readSecret also returns nil when the keychain refuses non-interactive access, so start keyless
+        // only when the app started this worker on the free public path.
+        guard licenseKey != nil
+            || UserDefaults.standard.bool(forKey: keylessPublicWorkerPreferenceKey)
+        else {
             throw WorkerDaemonRunnerError.keychainUnavailable
         }
         var standardInput = try DesktopRuntimeCredentialEnvelope(

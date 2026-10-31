@@ -14,8 +14,7 @@ public-safe evidence for every live posting decision.
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
 free, with no license key, through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
 worker (`daemon`, `run-once`, `review-pr`, `providers verify`).
-The Mac app still requires a license key for every repository; keyless Mac
-review is tracked in [#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203).
+The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
 Private, internal, and unknown-visibility repositories need an active NeonDiff
 license; unknown visibility fails closed.
 The npm CLI 1.0.x requires API-backed activation for every repository.
@@ -192,15 +191,14 @@ The public paid B0 BYO beta build uses a separate exact
 `paid-mac-beta-byo-v1` release contract with `NeonDiffBYOGitHubEnabled=true` and
 no managed-broker fields. That contract enables the existing local direct/BYO
 path and API-backed native activation without a hidden defaults mutation. It
-is a paid path for every repository and does not claim the managed public-free
-model. The signed release app contains a sealed NeonDiff worker built from the
+supports keyless public-only review; private repositories need Solo or Team. The signed release app contains a sealed NeonDiff worker built from the
 exact reviewed source and a pinned, SHA-256-verified official Node runtime. A
 clean Mac therefore does not need a global CLI or separate worker install for
 the native setup and review path. The separate checksum-bound bundle remains
 available for the customer-owned local-agent path; its explicit `first-install`
 command installs only its verified CLI in a private current-user version
 directory, writes a credential-free installation marker, and creates or loads
-no LaunchAgent. After repository, provider, activation, and App-access
+no LaunchAgent. After repository, provider, App-access, and any required activation
 verification, the signed app can install a secret-free LaunchAgent whose
 executable is the signed NeonDiff app. Before releasing either Keychain secret,
 the app validates its exact Developer ID signature and the running sealed

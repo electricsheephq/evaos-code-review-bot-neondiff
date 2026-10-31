@@ -583,23 +583,25 @@ package struct DesktopLocalBotDiscoverySnapshot: Sendable {
 package struct DesktopRuntimeCredentialEnvelope: Sendable {
     private let appID: String
     private let privateKey: String
-    private let licenseKey: String
+    private let licenseKey: String?
     private let licenseMachineID: String
 
     package init(
         appID: String,
         privateKey: String,
-        licenseKey: String,
+        licenseKey: String?,
         licenseMachineID: String
     ) throws {
         self.appID = try BYOGitHubAppCredentialValidator
             .normalizedAppId(appID)
         self.privateKey = try Self.normalizedPrivateKey(privateKey)
-        guard licenseKey.range(
-            of: #"^nd_live_[A-Za-z0-9_-]{8,}$"#,
-            options: .regularExpression
-        ) != nil else {
-            throw DesktopRuntimeCredentialEnvelopeError.invalidLicenseKey
+        if let licenseKey {
+            guard licenseKey.range(
+                of: #"^nd_live_[A-Za-z0-9_-]{8,}$"#,
+                options: .regularExpression
+            ) != nil else {
+                throw DesktopRuntimeCredentialEnvelopeError.invalidLicenseKey
+            }
         }
         self.licenseKey = licenseKey
         guard licenseMachineID.range(
@@ -613,7 +615,18 @@ package struct DesktopRuntimeCredentialEnvelope: Sendable {
     }
 
     package func encodedData() throws -> Data {
-        try JSONSerialization.data(
+        guard let licenseKey else {
+            return try JSONSerialization.data(
+                withJSONObject: [
+                    "schemaVersion": 3,
+                    "githubAppId": appID,
+                    "githubPrivateKey": privateKey,
+                    "licenseMachineId": licenseMachineID
+                ],
+                options: []
+            )
+        }
+        return try JSONSerialization.data(
             withJSONObject: [
                 "schemaVersion": 2,
                 "githubAppId": appID,

@@ -10,8 +10,8 @@ product direction without reconstructing it from issue history. The worker
 runs locally with a GitHub App scoped to explicit repositories. From NeonDiff
 1.1.0, review of repositories that GitHub reports as public is free through the
 GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker (`daemon`,
-`run-once`, `review-pr`, `providers verify`) (the Mac app still requires a
-license key, #1203), while private, internal, and unknown-visibility
+`run-once`, `review-pr`, `providers verify`) (and the Mac app when you choose
+"Public repositories only"), while private, internal, and unknown-visibility
 repositories require an active NeonDiff license; the npm CLI 1.0.x requires
 activation for every repository. See [license-boundary.md](license-boundary.md).
 

@@ -178,12 +178,17 @@ authorization, API rate limiting, missing App installation, and organization
 policy or permission blocks without showing raw API bodies. Discovered repos
 show one of these access cues:
 
-- `PUBLIC · ACTIVATION REQUIRED` until active entitlement is proven;
-- `PUBLIC · LICENSE ACTIVE` only for an explicit active entitlement state;
+- `PUBLIC · FREE` for a repository GitHub reports as public;
 - `PRIVATE · LICENSE REQUIRED` until active entitlement is proven;
 - `PRIVATE · LICENSE ACTIVE` only for an explicit active entitlement state;
 - `INSUFFICIENT READ ACCESS` when GitHub reports that the user cannot read the
   repository.
+
+On the BYO "Public repositories only" path, a repository that App access shows
+as public gets `PUBLIC · FREE`, and a private, internal, or unknown-visibility
+one gets `NEEDS SOLO OR TEAM LICENSE` and cannot be selected for review. Until
+App access has been checked in the current launch, the row shows
+`MANUAL · VERIFY INSTALL`.
 
 A stored license key is not treated as active entitlement. Repo selection still
 writes only the local allowlist; the worker's pre-checkout license and GitHub App

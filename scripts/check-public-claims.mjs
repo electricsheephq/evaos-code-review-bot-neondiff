@@ -27,12 +27,13 @@ const paths = [
 // current flat prices; the public-free and activation claims must carry their
 // 1.1.0 and 1.0.x qualifiers.
 // Owner decision #1191: the self-hosted worker joins the CI public-free scope;
-// the Mac app still requires activation until #1203.
+// #1203 adds the Mac app public-only onboarding path without a license key.
 const required = [
   /source-available/i,
   /From (?:NeonDiff )?1\.1\.0,\s+review\s+of\s+repositories\s+that\s+GitHub\s+reports\s+as\s+public\s+is\s+free/i,
   /through\s+the\s+GitHub\s+Action,[\s\S]{0,60}review-pr\s+--ci[\s\S]{0,60}self-hosted\s+worker/i,
-  /#1203/,
+  /Mac app reviews public repositories without a key/i,
+  /Public repositories only/i,
   /private, internal, and unknown-visibility repositor(?:y|ies) (?:require|need)/i,
   /1\.0\.x\s+requires\s+(?:live\s+|active\s+|mandatory\s+)?API-backed\s+activation\s+for\s+every\s+repository/i,
   /\$9\/mo/,
@@ -59,7 +60,9 @@ const forbiddenClaims = [
   /\bpublic launch is complete\b/i,
   /\bfree (?:for )?private repo/i,
   /\bfree for all repositor(?:y|ies)\b/i,
-  /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i
+  /\bprivate (?:repos?|repositor(?:y|ies)) (?:are|is) free\b/i,
+  // #1203: the Mac app reviews public repositories without a key, so the old claim is stale.
+  /\bMac app\b[^.!?]{0,80}\b(?:requires?|needs?)\b[^.!?]{0,80}\b(?:every repositor|even (?:for )?public)/i
 ];
 
 let failed = false;
@@ -90,7 +93,7 @@ const boundaryLanguage = /\b(?:not|avoid|unless|forbidden|never)\b/i;
 const canonicalPublicFree = /reports\s+as\s+public\s+is\s+free/gi;
 const canonicalScope = /GitHub\s+Action[\s\S]{0,60}review-pr\s+--ci[\s\S]{0,60}self-hosted\s+worker/i;
 const publicFreeClaim = /public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
-const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci|self-hosted\s+worker/i;
+const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci|self-hosted\s+worker|Mac\s+app/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenClaims) {

@@ -10,8 +10,7 @@ NeonDiff is source-available commercial software, not open-source software.
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free,
 with no NeonDiff license key, through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
 worker (`daemon`, `run-once`, `review-pr`, `providers verify`),
-including company-owned public repositories. The Mac app still requires a
-license key for every repository ([#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203)).
+including company-owned public repositories. The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
 Private, internal, and unknown-visibility repositories require an active
 NeonDiff license; unknown or unreadable visibility fails closed. The npm CLI
 1.0.x requires API-backed activation for every repository.
@@ -44,8 +43,7 @@ model calls.
 - Submitting GitHub issues and pull requests.
 - From 1.1.0, reviewing repositories that GitHub reports as public through the
   GitHub Action, `neondiff review-pr --ci`, or the self-hosted worker (`daemon`,
-  `run-once`, `review-pr`, `providers verify`). The Mac app still requires
-  activation for every repository (#1203).
+  `run-once`, `review-pr`, `providers verify`). The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
 
 ## Requires A Paid License
 
@@ -67,7 +65,7 @@ visibility requires live activation. Keyless public-only worker admission covers
 `providers verify`, provider smoke checks, `daemon`, and review discovery for
 `run-once` and retries. A stored key always receives live validation; failures
 never silently downgrade to public-only mode. Issue enrichment and update
-checks remain licensed. The Mac app still requires activation (#1203).
+checks remain licensed. The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
 User or legacy config cannot disable
 enforcement for private work, redirect the API, or enable grace. The npm CLI
 1.0.x requires live activation for public, private, internal, and unknown
@@ -125,7 +123,7 @@ Use:
 
 - "source-available commercial software"
 - "review of repositories that GitHub reports as public is free through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker (NeonDiff 1.1.0 and later)"
-- "the Mac app still requires a license key (#1203)"
+- "the Mac app reviews public repositories without a key (choose Public repositories only in onboarding); private repositories need Solo or Team"
 - "private, internal, and unknown-visibility repositories require an active NeonDiff license"
 - "private repository review requires a paid NeonDiff license"
 - "the npm CLI 1.0.x requires API-backed activation for every repository"
@@ -167,8 +165,8 @@ CLI setup/help copy should say:
 > NeonDiff is source-available commercial software. From 1.1.0, review of
 > repositories that GitHub reports as public is free with no license key
 > through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker
-> (`daemon`, `run-once`, `review-pr`, `providers verify`); the Mac app still
-> requires a license key (#1203).
+> (`daemon`, `run-once`, `review-pr`, `providers verify`).
+> The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team.
 > Private, internal, and unknown-visibility repositories require an active
 > API-backed NeonDiff license: Solo $9/mo or $90/yr, Team $290/yr per GitHub
 > organization, with a 7-day Solo trial and a 30-day Team trial. Legacy
