@@ -123,6 +123,7 @@ export interface BotConfig {
     cliPath: string;
     model: string;
     reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
+    serviceTier?: "default" | "priority";
     timeoutMs: number;
     maxOutputBytes: number;
     contextWindowTokens: number;
@@ -868,6 +869,9 @@ function validateConfig(config: BotConfig): void {
   validateNonEmptyString(codexRuntime.model, "config.codexRuntime.model");
   if (!["low", "medium", "high", "xhigh", "max"].includes(codexRuntime.reasoningEffort)) {
     throw new Error("config.codexRuntime.reasoningEffort must be low, medium, high, xhigh, or max");
+  }
+  if (codexRuntime.serviceTier !== undefined && codexRuntime.serviceTier !== "default" && codexRuntime.serviceTier !== "priority") {
+    throw new Error("config.codexRuntime.serviceTier must be default or priority");
   }
   validatePositiveInteger(codexRuntime.timeoutMs, "config.codexRuntime.timeoutMs");
   validatePositiveInteger(codexRuntime.maxOutputBytes, "config.codexRuntime.maxOutputBytes");

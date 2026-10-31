@@ -14,6 +14,7 @@ import { writeSecureFileSync } from "./temp-files.js";
 import { parseReviewModelSummary, type ZCodeReviewResult } from "./zcode.js";
 
 export type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type CodexServiceTier = "default" | "priority";
 
 export interface CodexExecInvocation {
   command: string;
@@ -504,6 +505,7 @@ export function buildCodexExecInvocation(input: {
   cwd: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   schemaPath: string;
   outputPath: string;
   readConfinement?: CodexReadConfinement;
@@ -524,6 +526,7 @@ export function buildCodexExecInvocation(input: {
       ...(input.restrictTools ? RESTRICTED_TOOL_ARGS : []),
       "-c", "approval_policy=\"never\"",
       "-c", `model_reasoning_effort=\"${input.reasoningEffort}\"`,
+      ...(input.serviceTier !== undefined ? ["-c", `service_tier="${input.serviceTier}"`] : []),
       "--model", input.model,
       "-c", 'shell_environment_policy.inherit="core"',
       "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","*TOKEN*","*PASSWORD*","*CREDENTIAL*","*AUTH*"]',
@@ -544,6 +547,7 @@ export async function runCodexReview(input: {
   cliPath: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   evidenceDir: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -611,6 +615,7 @@ export async function runCodexStructuredOutput<T>(input: {
   cliPath: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   evidenceDir: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -644,6 +649,7 @@ export async function runCodexStructuredOutput<T>(input: {
     cwd: input.cwd,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
+    serviceTier: input.serviceTier,
     schemaPath,
     outputPath,
     restrictTools: input.restrictTools,

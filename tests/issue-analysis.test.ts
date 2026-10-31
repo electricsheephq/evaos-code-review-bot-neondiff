@@ -235,6 +235,9 @@ describe("model-backed issue analysis", () => {
     };
     const identity = buildIssueAnalysisInputHash(base);
 
+    // Pinned: a new identity re-analyses every posted issue on upgrade, so the Codex service tier stays out of it.
+    expect(identity).toBe("8811dffb6f8d5b3d2b0018b5310b0c45fcf5f6ed32245bbf6f4460583bbffa5d");
+
     expect(buildIssueAnalysisInputHash({
       ...base,
       allowedLabels: ["data-integrity"]
@@ -373,6 +376,7 @@ describe("model-backed issue analysis", () => {
         cliPath: "/Users/test/.local/bin/codex",
         model: "gpt-5.6-sol",
         reasoningEffort: "high",
+        serviceTier: "priority",
         timeoutMs: 30_000,
         maxOutputBytes: 1024 * 1024
       }, {
@@ -393,6 +397,7 @@ describe("model-backed issue analysis", () => {
       expect(result.scorecard.ok).toBe(true);
       expect(invocations).toHaveLength(2);
       for (const invocation of invocations) {
+        expect(invocation.args.filter((arg) => arg.startsWith("service_tier="))).toEqual(['service_tier="priority"']);
         expect(invocation.args).toContain('default_permissions="neondiff_checkout_read"');
         expect(invocation.args).not.toContain("--sandbox");
         const permissions = invocation.args.find((arg) => arg.startsWith("permissions."));

@@ -53,6 +53,33 @@ describe("Codex CLI review runtime", () => {
     expect(() => loadConfigFromObject({ codexRuntime: { enabled: true, cliPath: "./codex" } })).toThrow();
     expect(() => loadConfigFromObject({ codexRuntime: { reasoningEffort: "ultra" } })).toThrow();
   });
+  it.each([undefined, "default", "priority"])("accepts the optional Codex service tier %s", (serviceTier) => {
+    const config = loadConfigFromObject({ codexRuntime: { serviceTier } });
+    expect(config.codexRuntime?.serviceTier).toBe(serviceTier);
+    expect(loadConfigFromObject({}).codexRuntime).not.toHaveProperty("serviceTier");
+  });
+  it.each(["flex", "fast", "", 1])("rejects the unsupported Codex service tier %s", (serviceTier) => {
+    expect(() => loadConfigFromObject({ codexRuntime: { serviceTier } }))
+      .toThrow("config.codexRuntime.serviceTier must be default or priority");
+  });
+  it.each(["default", "priority"] as const)("passes configured tier %s through review to exec exactly once", async (serviceTier) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-tier-"));
+    temporaryRoots.push(root);
+    const runtime = loadConfigFromObject({ codexRuntime: { serviceTier } }).codexRuntime!;
+    await runCodexReview({
+      ...runtime, cwd: root, prompt: "Synthetic tier fixture", evidenceDir: root
+    }, {
+      captureWorktreeState: () => "unchanged",
+      runProcess: async (invocation) => {
+        const tierArg = `service_tier="${serviceTier}"`;
+        const effortIndex = invocation.args.indexOf('model_reasoning_effort="high"');
+        expect(invocation.args.slice(effortIndex + 1, effortIndex + 3)).toEqual(["-c", tierArg]);
+        expect(invocation.args.filter((arg) => arg.startsWith("service_tier="))).toEqual([tierArg]);
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [], summary: fixtureSummary }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+  });
   it("requests an original LCM assessment only when the repository opts in", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-"));
     temporaryRoots.push(root);

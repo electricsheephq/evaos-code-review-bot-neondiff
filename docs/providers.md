@@ -311,6 +311,12 @@ only. See [docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
 checkout, and their contents go to Codex's configured service along with the
 prompt and diff. Set it to `false` to send only the prompt and diff.
 
+Optional `codexRuntime.serviceTier` accepts `"default"` or `"priority"`. When
+unset, Codex uses its default (standard) tier. `"priority"` is faster but uses
+plan usage faster (Codex calls it "2x speed, increased usage"). NeonDiff ignores
+`~/.codex/config.toml`, so the global Codex service-tier setting never applies
+to NeonDiff; set this field in NeonDiff's config to select a tier explicitly.
+
 The default `cliPath: "codex"` resolves through the worker's `PATH`; explicit absolute paths also work.
 
 This is an execution-backend choice, not a license or GitHub authorization

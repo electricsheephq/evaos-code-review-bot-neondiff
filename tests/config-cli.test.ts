@@ -18,6 +18,24 @@ describe("desktop config CLI", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("patches the optional Codex service tier and preserves it on unrelated desktop saves", () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json"), patchPath = join(root, "patch.json");
+    writeConfig(configPath, { codexRuntime: { model: "gpt-6.1-sol" } });
+    writeConfig(patchPath, { codexRuntime: { serviceTier: "priority" } });
+    expect(patchConfigForDesktop({ configPath, inputPath: patchPath, dryRun: false, confirm: true }))
+      .toMatchObject({ ok: true, wrote: true });
+    writeConfig(patchPath, { desktop: { updateChannel: "beta" } });
+    expect(patchConfigForDesktop({ configPath, inputPath: patchPath, dryRun: false, confirm: true }))
+      .toMatchObject({ ok: true, wrote: true });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).codexRuntime)
+      .toEqual({ model: "gpt-6.1-sol", serviceTier: "priority" });
+    writeConfig(patchPath, { codexRuntime: { serviceTier: "flex" } });
+    expect(patchConfigForDesktop({ configPath, inputPath: patchPath, dryRun: false, confirm: true }))
+      .toMatchObject({ ok: false, wrote: false, error: "candidate config failed validation: config.codexRuntime.serviceTier must be default or priority" });
+    expect(JSON.parse(readFileSync(configPath, "utf8")).codexRuntime.serviceTier).toBe("priority");
+  });
+
   it("inspects effective config with secret-bearing fields redacted", async () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
@@ -50,6 +68,7 @@ describe("desktop config CLI", () => {
     expect(output.editablePaths).toContain("zcode.model");
     expect(output.editablePaths).toContain("codexRuntime.enabled");
     expect(output.editablePaths).toContain("codexRuntime.reasoningEffort");
+    expect(output.editablePaths).toContain("codexRuntime.serviceTier");
     expect(output.editablePaths).toContain("desktop.openAICompatibleEndpoint");
     expect(output.editablePaths).toContain("github.appId");
     expect(output.editablePaths).toContain("github.clientId");

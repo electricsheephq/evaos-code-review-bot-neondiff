@@ -4510,6 +4510,7 @@ async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: str
   try {
     return (await runCodexStructuredOutput<unknown>({
       cwd, prompt, cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort,
+      serviceTier: runtime.serviceTier,
       evidenceDir: scratch, timeoutMs: config.reviewGate?.selfConsistency?.timeoutMs ?? runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
       artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value,
       usageEvidenceDir, restrictTools: runtime.restrictTools, readConfinement: runtime.readConfinement
@@ -4907,6 +4908,7 @@ async function runConfiguredReview(input: {
     cliPath: input.config.codexRuntime.cliPath,
     model: input.config.codexRuntime.model,
     reasoningEffort: input.config.codexRuntime.reasoningEffort,
+    serviceTier: input.config.codexRuntime.serviceTier,
     evidenceDir: input.evidenceDir,
     timeoutMs: input.config.codexRuntime.timeoutMs,
     maxOutputBytes: input.config.codexRuntime.maxOutputBytes
