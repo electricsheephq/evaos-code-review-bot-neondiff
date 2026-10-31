@@ -66,6 +66,7 @@ export interface GitHubRelatedIssueOrPull {
   title?: string | null;
   state?: string | null;
   html_url?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
   pull_request?: unknown;
   body?: string | null;

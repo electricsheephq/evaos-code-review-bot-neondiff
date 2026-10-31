@@ -4,7 +4,7 @@ import { classifyIssueEnrichmentAdmission, type IssueEnrichmentAdmissionDecision
 
 export type IssueEnrichmentAdmissionLedgerReason = "source_probe" | "eligible" | "held" | "already_recorded" | "released" | "repository_blocked" | "burst_threshold_exceeded" | "repo_max_issues_per_cycle" | "repo_max_comments_per_cycle" | "global_max_issues_per_cycle" | "global_max_comments_per_cycle";
 export interface IssueEnrichmentAdmissionLedgerCandidate { candidate: Readonly<IssueEnrichmentAdmissionCandidate>; classification: Readonly<IssueEnrichmentAdmissionDecision>; intendedAction: IssueEnrichmentAdmissionAction; }
-export interface IssueEnrichmentAdmissionLedgerDecision extends IssueEnrichmentAdmissionLedgerCandidate { outputAction: IssueEnrichmentAdmissionAction | "deferred"; reason: IssueEnrichmentAdmissionLedgerReason; }
+export interface IssueEnrichmentAdmissionLedgerDecision extends IssueEnrichmentAdmissionLedgerCandidate { outputAction: IssueEnrichmentAdmissionAction | "deferred" | "skipped"; reason: IssueEnrichmentAdmissionLedgerReason; }
 export interface IssueEnrichmentAdmissionLedger { candidates: readonly Readonly<IssueEnrichmentAdmissionCandidate>[]; next(): Readonly<IssueEnrichmentAdmissionLedgerDecision> | undefined; snapshot(): readonly Readonly<IssueEnrichmentAdmissionLedgerDecision>[]; release(candidate: Readonly<IssueEnrichmentAdmissionCandidate>): void; requeue(candidate: Readonly<IssueEnrichmentAdmissionCandidate>): void; blockRepo(repo: string): void; }
 
 type RepoLimits = { issues: number; comments: number; burst: number };
@@ -26,7 +26,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
   const frozenCandidates = Object.freeze(candidates), active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>(), probed = new Set<string>(), requeued = new Set<string>();
   const deferred = new Map<string, IssueEnrichmentAdmissionLedgerReason>(), issueOnly = new Set<string>(), eligible = (entry: IssueEnrichmentAdmissionLedgerCandidate) => entry.classification.state === "pending" || requeued.has(entry.candidate.key);
   const eligibleByRepo = new Map<string, number>();
-  for (const entry of frozenCandidates) if (eligible(entry)) eligibleByRepo.set(repoKey(entry.candidate.repo), (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) + 1);
+  for (const entry of frozenCandidates) if (eligible(entry) && countsTowardBurst(entry)) eligibleByRepo.set(repoKey(entry.candidate.repo), (eligibleByRepo.get(repoKey(entry.candidate.repo)) ?? 0) + 1);
 
   const ledger: IssueEnrichmentAdmissionLedger = {
     candidates: Object.freeze(frozenCandidates.map((entry) => entry.candidate)),
@@ -36,7 +36,7 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
       for (const entry of frozenCandidates) {
         const key = entry.candidate.key;
         if (!eligible(entry) || active.has(key) || released.has(key) || deferred.has(key)) continue;
-        const reason = capReason(entry, usage, limits, blocked, eligibleByRepo);
+        const reason = capReason(entry, usage, limits, blocked, eligibleByRepo, requeued);
         if (reason) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } continue; }
         active.add(key); addFull(usage, entry); return projected(entry, entry.intendedAction, "eligible");
       }
@@ -49,30 +49,41 @@ export function createIssueEnrichmentAdmissionLedger(snapshot: Readonly<IssueEnr
         if (entry.classification.state === "already_recorded") { output.push(projected(entry, "deferred", "already_recorded")); continue; }
         if (released.has(key)) { output.push(projected(entry, "deferred", "released")); continue; }
         if (active.has(key)) { output.push(projected(entry, entry.intendedAction, "eligible")); continue; }
-        const stored = deferred.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, eligibleByRepo);
-        if (reason) { output.push(projected(entry, "deferred", reason)); if (!stored) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } } continue; }
+        const stored = deferred.get(key), reason = stored ?? capReason(entry, usage, limits, blocked, eligibleByRepo, requeued);
+        if (reason) { output.push(projected(entry, reason === "burst_threshold_exceeded" ? "skipped" : "deferred", reason)); if (!stored) { deferred.set(key, reason); if (commentReason(reason)) { issueOnly.add(key); addIssue(usage, entry); } } continue; }
         output.push(projected(entry, entry.intendedAction, "eligible")); addFull(usage, entry);
       }
       return Object.freeze(output);
     },
     release(candidate) { active.delete(candidate.key); released.add(candidate.key); },
-    requeue(candidate) { if (!requeued.has(candidate.key)) { requeued.add(candidate.key); const repo = repoKey(candidate.repo); eligibleByRepo.set(repo, (eligibleByRepo.get(repo) ?? 0) + 1); } },
+    requeue(candidate) { if (!requeued.has(candidate.key)) {
+      requeued.add(candidate.key);
+      const entry = frozenCandidates.find((entry) => entry.candidate.key === candidate.key);
+      if (entry && countsTowardBurst(entry)) { const repo = repoKey(candidate.repo); eligibleByRepo.set(repo, (eligibleByRepo.get(repo) ?? 0) + 1); }
+    } },
     blockRepo(repo) { const normalized = repoKey(repo); if (!frozenCandidates.some((entry) => repoKey(entry.candidate.repo) === normalized)) return; blocked.add(normalized); deferred.clear(); issueOnly.clear(); for (const entry of frozenCandidates) if (repoKey(entry.candidate.repo) === normalized) active.delete(entry.candidate.key); }
   };
   return Object.freeze(ledger);
 }
 
-function capReason(entry: IssueEnrichmentAdmissionLedgerCandidate, usage: Usage, limits: Limits, blocked: Set<string>, eligibleByRepo: Map<string, number>): IssueEnrichmentAdmissionLedgerReason | undefined {
-  const repo = repoKey(entry.candidate.repo), cap = repoLimits(limits, repo); if (blocked.has(repo)) return "repository_blocked"; if ((eligibleByRepo.get(repo) ?? 0) > cap.burst) return "burst_threshold_exceeded";
+function capReason(entry: IssueEnrichmentAdmissionLedgerCandidate, usage: Usage, limits: Limits, blocked: Set<string>, eligibleByRepo: Map<string, number>, requeued: Set<string>): IssueEnrichmentAdmissionLedgerReason | undefined {
+  if (legacyBurstDeferral(entry)) return "burst_threshold_exceeded";
+  const repo = repoKey(entry.candidate.repo), cap = repoLimits(limits, repo);
+  if (blocked.has(repo)) return "repository_blocked";
+  if (countsTowardBurst(entry) && (entry.classification.state !== "source_dependent" || requeued.has(entry.candidate.key)) && (eligibleByRepo.get(repo) ?? 0) > cap.burst) return "burst_threshold_exceeded";
   const used = usage.repos.get(repo) ?? { issues: 0, comments: 0 };
   if (used.issues >= cap.issues) return "repo_max_issues_per_cycle"; if (usage.globalIssues >= limits.globalIssues) return "global_max_issues_per_cycle";
   if (entry.intendedAction === "would_comment" && used.comments >= cap.comments) return "repo_max_comments_per_cycle";
   if (entry.intendedAction === "would_comment" && usage.globalComments >= limits.globalComments) return "global_max_comments_per_cycle";
 }
+function legacyBurstDeferral(entry: IssueEnrichmentAdmissionLedgerCandidate): boolean {
+  return entry.candidate.isNew !== true && entry.classification.reason === "persisted_defer_due_or_unknown" && entry.candidate.record?.reason === "burst_threshold_exceeded";
+}
+function countsTowardBurst(entry: IssueEnrichmentAdmissionLedgerCandidate): boolean { return entry.candidate.isNew !== true && !legacyBurstDeferral(entry); }
 function currentUsage(entries: readonly IssueEnrichmentAdmissionLedgerCandidate[], active: Set<string>, issueOnly: Set<string>): Usage { const usage: Usage = { globalIssues: 0, globalComments: 0, repos: new Map() }; for (const entry of entries) { if (active.has(entry.candidate.key)) addFull(usage, entry); else if (issueOnly.has(entry.candidate.key)) addIssue(usage, entry); } return usage; }
 function addIssue(usage: Usage, entry: IssueEnrichmentAdmissionLedgerCandidate): void { const key = repoKey(entry.candidate.repo), repo = usage.repos.get(key) ?? { issues: 0, comments: 0 }; repo.issues += 1; usage.globalIssues += 1; usage.repos.set(key, repo); }
 function addFull(usage: Usage, entry: IssueEnrichmentAdmissionLedgerCandidate): void { addIssue(usage, entry); if (entry.intendedAction === "would_comment") { const repo = usage.repos.get(repoKey(entry.candidate.repo))!; repo.comments += 1; usage.globalComments += 1; } }
-function projected(entry: IssueEnrichmentAdmissionLedgerCandidate, outputAction: IssueEnrichmentAdmissionAction | "deferred", reason: IssueEnrichmentAdmissionLedgerReason): Readonly<IssueEnrichmentAdmissionLedgerDecision> { return Object.freeze(Object.assign(Object.create(null), { ...entry, outputAction, reason })); }
+function projected(entry: IssueEnrichmentAdmissionLedgerCandidate, outputAction: IssueEnrichmentAdmissionAction | "deferred" | "skipped", reason: IssueEnrichmentAdmissionLedgerReason): Readonly<IssueEnrichmentAdmissionLedgerDecision> { return Object.freeze(Object.assign(Object.create(null), { ...entry, outputAction, reason })); }
 function commentReason(reason: IssueEnrichmentAdmissionLedgerReason): boolean { return reason === "repo_max_comments_per_cycle" || reason === "global_max_comments_per_cycle"; }
 function repoLimits(limits: Limits, repo: string): RepoLimits { return limits.repos.get(repoKey(repo)) ?? fail(`missing_repo_limits:${repo}`); }
 function repoKey(repo: string): string { return repo.toLowerCase(); }

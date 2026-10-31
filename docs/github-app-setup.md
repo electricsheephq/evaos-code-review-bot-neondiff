@@ -84,7 +84,9 @@ Optional issue-enrichment permissions are separate from PR review:
 
 Do not add Issues permissions merely because a repository is in the PR review
 monitor list. Issue enrichment has a separate allowlist and per-repo throttles
-because milestone or planning days can create large issue bursts.
+because milestone or planning days can create large issue bursts. Bursts of
+updates to existing issues are skipped; newly created issues are exempt for
+24 hours but still wait for per-cycle caps.
 
 ## Selected-Repo Install Path
 

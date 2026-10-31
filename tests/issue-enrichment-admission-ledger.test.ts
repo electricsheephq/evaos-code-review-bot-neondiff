@@ -110,3 +110,48 @@ describe("issue-enrichment admission ledger", () => {
     }
   });
 });
+
+
+describe("burst recovery ledger acceptance (4)", () => {
+  const one = () => limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, maxIssuesPerBurst: 1 } } });
+  it("does not count NEW flags, which survive the frozen snapshot", () => {
+    const admission = ledger([item("a/repo", 1), { ...item("a/repo", 2), isNew: true }], { limits: one() });
+    expect(admission.candidates[1]?.isNew).toBe(true);
+    expect(Object.isFrozen(admission.candidates[1])).toBe(true);
+    expect(admission.next()?.candidate.issueNumber).toBe(1);
+    expect(admission.next()?.candidate.issueNumber).toBe(2);
+    expect(admission.snapshot().every(({ reason }) => reason === "eligible")).toBe(true);
+  });
+  it("projects burst decisions as skipped and never admits them", () => {
+    const admission = ledger([item("a/repo", 1), item("a/repo", 2)], { limits: one() });
+    expect(admission.next()).toBeUndefined();
+    expect(admission.snapshot().map(({ outputAction, reason }) => [outputAction, reason])).toEqual([
+      ["skipped", "burst_threshold_exceeded"], ["skipped", "burst_threshold_exceeded"]
+    ]);
+  });
+  it.each([false, true])("requeue counts existing but exempts NEW (isNew=%s)", (isNew) => {
+    const admission = ledger([item("a/repo", 1), { ...item("a/repo", 2), isNew }], { limits: one(), records: [{ repo: "a/repo", issueNumber: 2, status: "posted", issueUpdatedAt: updatedAt }] });
+    const probe = admission.next()!;
+    expect(probe).toMatchObject({ reason: "source_probe", candidate: { issueNumber: 2 } });
+    admission.requeue(probe.candidate);
+    admission.requeue(probe.candidate); // One requeue, even if called twice.
+    if (isNew) {
+      expect(admission.next()?.candidate.issueNumber).toBe(1);
+      expect(admission.next()?.candidate.issueNumber).toBe(2);
+    } else {
+      expect(admission.next()).toBeUndefined();
+      expect(admission.snapshot().every(({ outputAction, reason }) => outputAction === "skipped" && reason === "burst_threshold_exceeded")).toBe(true);
+    }
+  });
+  it("skips a due legacy tail without counting it, even when the repo is blocked", () => {
+    const admission = ledger([item("a/repo", 1), item("a/repo", 2)], { limits: one(), records: [{ repo: "a/repo", issueNumber: 1, status: "deferred", reason: "burst_threshold_exceeded", issueUpdatedAt: updatedAt, nextEligibleAt: checkedAt }] });
+    expect(admission.next()?.candidate.issueNumber).toBe(2); // Legacy row did not push the count over one.
+    admission.blockRepo("a/repo");
+    expect(admission.snapshot()[0]).toMatchObject({ outputAction: "skipped", reason: "burst_threshold_exceeded" });
+  });
+  it("counts a changed legacy identity as ordinary eligible work", () => {
+    const admission = ledger([item("a/repo", 1), item("a/repo", 2)], { limits: one(), records: [{ repo: "a/repo", issueNumber: 1, status: "deferred", reason: "burst_threshold_exceeded", issueUpdatedAt: "2026-08-24T00:00:00Z", nextEligibleAt: checkedAt }] });
+    expect(admission.next()).toBeUndefined();
+    expect(admission.snapshot().every(({ outputAction, reason }) => outputAction === "skipped" && reason === "burst_threshold_exceeded")).toBe(true);
+  });
+});
