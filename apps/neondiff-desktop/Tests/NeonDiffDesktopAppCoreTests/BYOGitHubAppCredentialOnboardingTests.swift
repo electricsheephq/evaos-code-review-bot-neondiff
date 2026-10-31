@@ -768,16 +768,17 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.currentRepositoryActivationReady)
     }
 
-    @Test func verifyingExistingAccessKeepsPublicResults() async {
+    @Test func verifyingExistingAccessKeepsPublicResultsAndRechecksTheRest() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
                 .success(doctorResult(readChecks: [
                     doctorReadCheck(repo: "acme/api"),
-                    doctorReadCheck(repo: "acme/demo")
+                    doctorReadCheck(repo: "acme/demo"),
+                    doctorReadCheck(repo: "acme/internal", visibility: "private")
                 ].joined(separator: ","))),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["acme/api","acme/demo"]}}"#,
+                    stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["acme/api","acme/demo","acme/internal"]}}"#,
                     stderr: ""
                 ))
             ],
@@ -788,7 +789,8 @@ struct BYOGitHubAppCredentialOnboardingTests {
         fixture.model.enterActivation(for: .publicReposOnly)
         fixture.model.repos = [
             RepoMonitor(name: "acme/api", enabled: true),
-            RepoMonitor(name: "acme/demo", enabled: true)
+            RepoMonitor(name: "acme/demo", enabled: true),
+            RepoMonitor(name: "acme/internal", enabled: true)
         ]
         fixture.model.pendingBYOGitHubAppId = "123456"
         fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
@@ -798,9 +800,12 @@ struct BYOGitHubAppCredentialOnboardingTests {
         fixture.model.applyRepoAllowlistPatch()
         await fixture.waitForConfigPatchToFinish()
         #expect(fixture.model.selectedBYOReviewRepository == nil)
+        #expect(!fixture.model.canSelectBYOReviewRepository(fullName: "acme/internal"))
 
-        // Two verified public repositories and no target: nothing needs a re-check, so their evidence stays.
+        // Two verified public repositories, one private one and no target: only the private result is dropped,
+        // so it can be checked again while the public evidence stays.
         fixture.model.verifyExistingLocalBotGitHubAccess()
+        #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/internal"))
         fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
 
         #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")

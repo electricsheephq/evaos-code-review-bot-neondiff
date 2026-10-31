@@ -973,16 +973,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 .isEmpty
     }
 
-    /// Account entitlement is server authority for the selected existing bot's
-    /// setup display. It does not replace the exact current-launch activation
-    /// checks in `currentRepositoryActivationReady` or
-    /// `productionUsefulWorkAvailable`.
     /// The License row of the setup summary. The free path needs no key, so it never reads "active".
     package var setupSummaryLicenseText: String {
         if publicFreeReviewPath { return "not required (public repositories only)" }
         return licenseSetupReady ? "active" : "activation required"
     }
 
+    /// Account entitlement is server authority for the selected existing bot's
+    /// setup display. It does not replace the exact current-launch activation
+    /// checks in `currentRepositoryActivationReady` or
+    /// `productionUsefulWorkAvailable`.
     package var licenseSetupReady: Bool {
         if currentRepositoryActivationReady {
             return true

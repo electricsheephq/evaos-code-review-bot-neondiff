@@ -958,14 +958,18 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
-    @Test func freePathExistingAgentRechecksARepositoryAfterANonPublicResult() async throws {
+    @Test(arguments: [true, false])
+    func freePathExistingBotRechecksARepositoryAfterANonPublicResult(throughLocalAgent: Bool) async throws {
         let targetRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        // The exact local agent verifies with its own configured credential. A keychain worker (an execution
+        // context without environment overrides) passes the stored App key on stdin instead.
+        let credentialSource = throughLocalAgent ? "configured" : "stdin"
         func doctorReport(visibility: String) -> CLIRunResult {
             let readCheck =
                 #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"\#(visibility)","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
             return CLIRunResult(
                 exitCode: 0,
-                stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
+                stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"\#(credentialSource)"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
                 stderr: ""
             )
         }
@@ -994,7 +998,7 @@ import NeonDiffDesktopCore
                     workingDirectory: "/fixture/evaos-code-review-bot"
                 )
             ],
-            localBotExecutionContexts: [
+            localBotExecutionContexts: throughLocalAgent ? [] : [
                 DesktopLocalBotExecutionContext(
                     configPath: configPath,
                     executablePath:
@@ -1006,10 +1010,12 @@ import NeonDiffDesktopCore
             localBotExecutionConfigPaths: [configPath],
             productionBoundary: .testAccountLink
         )
-        fixture.model.pendingBYOGitHubAppId = "4184532"
-        fixture.model.pendingBYOGitHubAppPrivateKey =
-            existingBotFixturePrivateKey
-        fixture.model.storeBYOGitHubAppCredentials()
+        if !throughLocalAgent {
+            fixture.model.pendingBYOGitHubAppId = "4184532"
+            fixture.model.pendingBYOGitHubAppPrivateKey =
+                existingBotFixturePrivateKey
+            fixture.model.storeBYOGitHubAppCredentials()
+        }
         fixture.model.applyAccountWorkspaceCatalog(.loaded([
             workspace(entitlement: .internalAdmin)
         ]))
@@ -1043,10 +1049,18 @@ import NeonDiffDesktopCore
         for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
             await Task.yield()
         }
+        let expectedArguments = throughLocalAgent
+            ? ["doctor", "github", "--config", configPath, "--repo", targetRepository, "--json"]
+            : [
+                "doctor", "github", "--config", configPath, "--repo", targetRepository,
+                "--github-app-id", "4184532", "--github-app-private-key-stdin", "true", "--json"
+            ]
+        let expectedInput = throughLocalAgent ? nil : Data(existingBotFixturePrivateKey.utf8)
         #expect(fixture.cli.calls.count == 4)
-        #expect(fixture.cli.calls[3].arguments.starts(with: [
-            "doctor", "github", "--config", configPath, "--repo", targetRepository
-        ]))
+        for call in fixture.cli.calls[2...] {
+            #expect(call.arguments == expectedArguments)
+            #expect(call.standardInput == expectedInput)
+        }
         #expect(fixture.model.selectedBYOReviewRepository == targetRepository)
         #expect(fixture.model.currentRepositoryActivationReady)
     }
