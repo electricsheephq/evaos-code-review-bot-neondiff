@@ -536,6 +536,47 @@ describe("beta release status", () => {
     expect(status.database.reviewQueueJobsByRepo?.[0]).toMatchObject({ repo: "owner/repo", failed: 1, activeFailed: 0 });
   });
 
+  it("counts a recent unrecovered failed queue job without a review row in live_db_no_errors", () => {
+    // A GitHub refetch failure fails the queue job but writes no processed_reviews row (scheduler.ts).
+    const statusFor = (failedAt: string, postedAt?: string) => {
+      const root = mkdtempSync(join(tmpdir(), "release-status-recent-queue-failure-"));
+      roots.push(root);
+      const dbPath = join(root, "state.sqlite");
+      const db = new DatabaseSync(dbPath);
+      db.exec(`create table processed_reviews (repo text, pull_number integer, head_sha text, status text, event text, error text, created_at text, primary key (repo, pull_number, head_sha));
+        create table review_queue_jobs (job_id text primary key, attempt_id text, source text, lane text, repo text, org text, pull_number integer, head_sha text, priority integer, state text, next_eligible_at text, lease_expires_at text, last_error text, created_at text, updated_at text);`);
+      if (postedAt) db.prepare("insert into processed_reviews values (?,?,?,?,?,?,?)").run("owner/repo", 7, "new-head", "posted", "COMMENT", null, postedAt);
+      db.prepare("insert into review_queue_jobs values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("failed", "attempt", "automatic", "background", "owner/repo", "owner", 7, "failed-head", 1, "failed", null, null, "GitHub API 401 for /repos/owner/repo/pulls/7", failedAt, failedAt);
+      db.close();
+      return collectReleaseStatus({ cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker", now: new Date("2026-08-23T00:00:00Z") });
+    };
+    const gate = (status: ReturnType<typeof collectReleaseStatus>, name: string) => status.gates.find((candidate) => candidate.name === name);
+
+    const recent = statusFor("2026-08-22T23:00:00Z");
+    expect(recent.database.recentUnrecoveredFailedReviewQueueJobCount).toBe(1);
+    expect(gate(recent, "live_db_no_errors")).toMatchObject({ ok: false });
+    expect(gate(recent, "live_db_no_errors")?.detail).toContain("; 1 recent unrecovered failed queue job(s) in 24h");
+    expect(gate(recent, "queue_no_failed_jobs")).toMatchObject({ ok: false });
+
+    // Older than the window: worker health clears; the release gate still holds the row until it is retried or retired.
+    const old = statusFor("2026-08-21T18:00:00Z");
+    expect(old.database.recentUnrecoveredFailedReviewQueueJobCount).toBe(0);
+    expect(gate(old, "live_db_no_errors")).toMatchObject({ ok: true });
+    expect(gate(old, "live_db_no_errors")?.detail).not.toContain("failed queue job");
+    expect(gate(old, "queue_no_failed_jobs")).toMatchObject({ ok: false, detail: "1 failed durable queue job(s)" });
+
+    // Recovered by a later posted review on the same PR: neither gate counts it.
+    const recovered = statusFor("2026-08-22T23:00:00Z", "2026-08-22T23:30:00Z");
+    expect(recovered.database.recentUnrecoveredFailedReviewQueueJobCount).toBe(0);
+    expect(gate(recovered, "live_db_no_errors")).toMatchObject({ ok: true });
+    expect(gate(recovered, "queue_no_failed_jobs")).toMatchObject({ ok: true });
+
+    // The window is exactly 24 hours, and both stored timestamp forms are read.
+    expect(statusFor("2026-08-22T00:00:00Z").database.recentUnrecoveredFailedReviewQueueJobCount).toBe(1);
+    expect(statusFor("2026-08-21T23:59:59Z").database.recentUnrecoveredFailedReviewQueueJobCount).toBe(0);
+    expect(statusFor("2026-08-22 23:00:00").database.recentUnrecoveredFailedReviewQueueJobCount).toBe(1);
+  });
+
   it("keeps recovered historical failures amber rather than red", () => {
     const status = buildReleaseStatus({ repo: { branch: "main", head: "head", dirtyFiles: [] }, expectedHead: "head", configPath: "/config/live.json", launchd: { label: "worker", state: "running", configPath: "/config/live.json", usesSystemCa: true }, database: { rowCount: 2, errorCount: 1, recentUnrecoveredErrorCount: 0, lastErrorAt: "2026-08-21T00:00:00Z", failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 0 }, heartbeat: freshHeartbeat(), now: new Date("2026-08-23T00:00:00Z") });
     expect(status.ok).toBe(true);
