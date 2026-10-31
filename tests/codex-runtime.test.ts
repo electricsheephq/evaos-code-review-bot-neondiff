@@ -46,6 +46,15 @@ describe("Codex CLI review runtime", () => {
     expect(parseCodexUsage("model: raw prompt text\nreasoning effort: ultra\ntokens used\n12 34\n",
       { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9)).toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9 });
   });
+  it("records only a boolean when Codex warns that it omitted the service tier", () => {
+    const stderr = "Private prompt text\nWarning: Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests.\ntokens used\n123\n";
+    expect(parseCodexUsage(stderr, { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9))
+      .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: 123, durationMs: 9, serviceTierOmitted: true });
+  });
+  it("leaves serviceTierOmitted absent without the omission warning", () => {
+    expect(parseCodexUsage("Warning: unrelated stderr\n", { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9))
+      .toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9 });
+  });
   it("defaults to PATH-resolved Sol 6.1/high with 500000 context tokens", () => {
     expect(loadConfigFromObject({ codexRuntime: { enabled: true } }).codexRuntime).toMatchObject({
       cliPath: "codex", model: "gpt-6.1-sol", reasoningEffort: "high", contextWindowTokens: 500000

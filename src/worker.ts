@@ -4504,7 +4504,10 @@ function severeVerificationFailureReceipt(
   }));
 }
 
-async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: string, usageEvidenceDir: string): Promise<string> {
+export async function runSevereCodexRawJson(
+  config: BotConfig, cwd: string, prompt: string, usageEvidenceDir: string,
+  dependencies: Parameters<typeof runCodexStructuredOutput>[1] = {}
+): Promise<string> {
   const runtime = config.codexRuntime!;
   const scratch = mkdtempSync(join(tmpdir(), "neondiff-severe-verifier-"));
   try {
@@ -4514,7 +4517,7 @@ async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: str
       evidenceDir: scratch, timeoutMs: config.reviewGate?.selfConsistency?.timeoutMs ?? runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
       artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value,
       usageEvidenceDir, restrictTools: runtime.restrictTools, readConfinement: runtime.readConfinement
-    })).rawResponse;
+    }, dependencies)).rawResponse;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -4885,7 +4888,7 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
   };
 }
 
-async function runConfiguredReview(input: {
+export async function runConfiguredReview(input: {
   config: BotConfig;
   lcmReviewAssessment?: boolean;
   worktreePath: string;
@@ -4893,7 +4896,7 @@ async function runConfiguredReview(input: {
   evidenceDir: string;
   providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
-}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+}, dependencies: Parameters<typeof runCodexReview>[1] = {}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   if (input.config.untrustedProviderLane) return runUntrustedProviderReview(input);
   if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
   input.assertProviderConfigCurrent?.();
@@ -4912,7 +4915,7 @@ async function runConfiguredReview(input: {
     evidenceDir: input.evidenceDir,
     timeoutMs: input.config.codexRuntime.timeoutMs,
     maxOutputBytes: input.config.codexRuntime.maxOutputBytes
-  });
+  }, dependencies);
   const completedAt = new Date();
   return {
     ...result,

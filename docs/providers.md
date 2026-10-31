@@ -311,14 +311,21 @@ only. See [docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
 checkout, and their contents go to Codex's configured service along with the
 prompt and diff. Set it to `false` to send only the prompt and diff.
 
-Optional `codexRuntime.serviceTier` accepts `"default"` or `"priority"`. When
-unset, Codex uses its default (standard) tier. `"priority"` is faster but uses
-plan usage faster (Codex calls it "2x speed, increased usage"). NeonDiff ignores
-`~/.codex/config.toml`, so the global Codex service-tier setting never applies
-to NeonDiff; set this field in NeonDiff's config to select a tier explicitly.
-Codex applies the tier only when the active model and account advertise it; otherwise it
-omits the tier and prints a warning on stderr. String tiers need a Codex CLI from May 2026
-or later; NeonDiff's checkout reads already require 0.163.0.
+Optional `codexRuntime.serviceTier` accepts `"default"` or `"priority"`.
+`"priority"` is faster but consumes ChatGPT plan usage faster; with an API key,
+it bills at a higher per-token rate instead of using plan usage (see OpenAI's
+[Codex speed docs](https://learn.chatgpt.com/docs/agent-configuration/speed#api-billing)
+and [API priority pricing](https://developers.openai.com/api/docs/guides/fast-mode)).
+When the field is unset or `"default"`, Codex sends no tier and the account
+decides: a ChatGPT login runs at the standard tier, and an API key runs at your
+OpenAI project's default tier, which is priority if the project is set that way.
+NeonDiff ignores `~/.codex/config.toml`, so the global Codex service-tier setting
+never applies to NeonDiff; set this field in NeonDiff's config to select a tier
+explicitly. Codex applies `"priority"` only when the active model and account
+advertise it; otherwise it omits the tier and prints a warning on stderr. When
+that warning appears, the review's usage record carries `serviceTierOmitted: true`.
+String tiers need a Codex CLI from May 2026 or later; NeonDiff's checkout reads
+already require 0.163.0.
 
 The default `cliPath: "codex"` resolves through the worker's `PATH`; explicit absolute paths also work.
 
