@@ -681,20 +681,51 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.onboardingFlow.mode.rawValue == expectedMode)
     }
 
-    @Test func leavingTheFreeStateClearsTheKeylessWorkerMarker() {
+    @Test func storingAKeyClearsTheKeylessWorkerMarker() {
         let fixture = ModelDependencyFixture(
             preferenceBools: ["neondiff.keylessPublicWorker": true],
             preferenceStrings: ["neondiff.activationState.v1": "public_free_skip"],
             productionBoundary: exactB0Boundary
         )
         #expect(fixture.model.activationState == .publicFreeSkip)
+        // Passing through another state, as a review-target change does, keeps the mark.
+        fixture.model.activationState = .purchaseRequired
+        fixture.model.activationState = .publicFreeSkip
         #expect(fixture.preferences.bool(forKey: "neondiff.keylessPublicWorker"))
 
         fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
         fixture.model.provideExistingActivationKey()
 
-        #expect(fixture.model.activationState != .publicFreeSkip)
+        #expect(fixture.secretStore.containsSecret(account: "license/default"))
         #expect(!fixture.preferences.bool(forKey: "neondiff.keylessPublicWorker"))
+    }
+
+    @Test func publicFreePathCanSelectAnUncheckedRepositoryButNotReviewIt() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.onboardingFlow.mode = .publicReposOnly
+        fixture.model.enterActivation(for: .publicReposOnly)
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        // An existing worker verifies through the selected target, so an unchecked repository must stay selectable.
+        #expect(fixture.model.publicFreeReviewPath)
+        #expect(fixture.model.canSelectBYOReviewRepository(fullName: "acme/demo"))
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+        #expect(fixture.model.selectedBYOReviewRepository == "acme/demo")
+        #expect(fixture.model.githubAccessCue(for: fixture.model.repos[0]) == nil)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @Test func freshInstallKeepsThePublicReviewModeDefault() {

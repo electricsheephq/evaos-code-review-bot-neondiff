@@ -208,15 +208,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     // (its raw value) so onboarding resumes exactly across relaunch / cancel /
     // network loss (AC6). No Keychain read happens on the launch path; the
     // activation key is read lazily only when the user activates.
-    @Published package var activationState: ActivationState = ActivationStateMachine.initialState {
-        didSet {
-            // Only startDaemon marks the worker keyless. Leaving the free state withdraws that mark, so a
-            // worker that launchd restarts later cannot start keyless for a user who moved to a key.
-            if activationState != .publicFreeSkip {
-                dependencies.preferences.set(false, forKey: keylessPublicWorkerPreferenceKey)
-            }
-        }
-    }
+    @Published package var activationState: ActivationState = ActivationStateMachine.initialState
     @Published package private(set) var activationKeyRedactedPrefix: String?
     @Published package var pendingActivationKey = ""
     @Published package private(set) var activationVerifiedThisLaunch = false {
@@ -3261,8 +3253,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Choose an enabled repository from the applied worker configuration."
             return
         }
+        // A repository not checked in this launch stays selectable so its access can be verified;
+        // reviews still need a verified public visibility (currentRepositoryActivationReady).
         if publicFreeReviewPath,
-           byoRepositoryVisibilities[repository.name.lowercased()] != "public" {
+           let visibility = byoRepositoryVisibilities[repository.name.lowercased()],
+           visibility != "public" {
             lastError = "Only public repositories can be reviewed without a key. This repository needs a Solo or Team license."
             return
         }
@@ -3306,7 +3301,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func canSelectBYOReviewRepository(fullName: String) -> Bool {
         if publicFreeReviewPath,
-           byoRepositoryVisibilities[fullName.lowercased()] != "public" {
+           let visibility = byoRepositoryVisibilities[fullName.lowercased()],
+           visibility != "public" {
             return false
         }
         guard byoGitHubCredentialOnboardingAvailable,
@@ -4776,6 +4772,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard requireVerifiedNativeActivationBroker() else { return }
         do {
             try dependencies.secretStore.setSecret(pendingLicenseKey, account: licenseKeyAccount)
+            clearKeylessWorkerMark()
             pendingLicenseKey = ""
             license = LicenseStatus(keyStored: true, entitlement: "stored locally", updateChannel: license.updateChannel)
             lastError = nil
@@ -4961,6 +4958,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         do {
             try dependencies.secretStore.setSecret(pendingActivationKey, account: activationKeyAccount)
+            clearKeylessWorkerMark()
             activationKeyRedactedPrefix = material.redactedPrefix
             pendingActivationKey = ""
             return true
@@ -4968,6 +4966,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
             return false
         }
+    }
+
+    /// Only startDaemon marks the worker keyless. A stored key withdraws the mark, so a worker that launchd
+    /// restarts later fails as before instead of running public-only when the keychain refuses a quiet read.
+    private func clearKeylessWorkerMark() {
+        dependencies.preferences.set(false, forKey: keylessPublicWorkerPreferenceKey)
     }
 
     package func reenterActivationKey() {
@@ -6295,7 +6299,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let repositories = uniqueSortedRepoNames(
             enabledRepositories.filter {
                 isValidRepoName($0)
-                    && (!publicFreeReviewPath || byoRepositoryVisibilities[$0.lowercased()] == "public")
+                    && (!publicFreeReviewPath
+                        || byoRepositoryVisibilities[$0.lowercased()].map { $0 == "public" } ?? true)
             }
         )
         if let selectedBYOReviewRepository,

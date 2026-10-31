@@ -118,18 +118,7 @@ for (const path of paths) {
     const before = text.slice(sentenceSpan(text, match.index)[0], match.index);
     if (!boundaryLanguage.test(before) && !scopedPublicFree.test(sentence)) {
       const line = text.slice(0, match.index).split("\n").length;
-      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action, review-pr --ci, or self-hosted worker)`);
-      failed = true;
-    }
-  }
-  // Paraphrases are exempt only when boundary language precedes them ("Do not describe ... as open source"),
-  // so a trailing "never need a license" cannot excuse a broad promise.
-  for (const match of text.matchAll(publicFreeClaim)) {
-    const sentence = sentenceAt(text, match.index);
-    const before = text.slice(sentenceSpan(text, match.index)[0], match.index);
-    if (!boundaryLanguage.test(before) && !scopedPublicFree.test(sentence)) {
-      const line = text.slice(0, match.index).split("\n").length;
-      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action or review-pr --ci)`);
+      console.error(`${path}:${line}: public-free claim must name its scope (GitHub Action, review-pr --ci, self-hosted worker, or Mac app)`);
       failed = true;
     }
   }
