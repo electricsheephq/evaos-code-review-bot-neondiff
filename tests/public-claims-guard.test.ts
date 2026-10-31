@@ -118,19 +118,18 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
 });
-// A free claim that covers every surface is broad even when it names one surface; a trailing boundary word does not
-// excuse it, and free-trial copy is not such a claim (#1243).
+// A free claim that covers every surface is broad even when it names one surface. A negation after a clause break
+// does not excuse it, and free-trial copy is not such a claim (#1243).
 it.each([
   "Public repos are free on every interface, including the Mac app.",
   "Public repositories are free everywhere, including the GitHub Action.",
   "Public repos are free everywhere, including the Mac app, and never need a license.",
+  "Public repos are free everywhere through the Mac app and never need a license.",
   "Public repos are free on every interface, including the Mac app, unless the repo is private.",
+  "Public review is free everywhere, not just through the GitHub Action.",
   "From NeonDiff 1.1.0, review of repositories that GitHub reports as public is free everywhere, including the GitHub Action, `neondiff review-pr --ci`, and the self-hosted worker.",
   "NeonDiff is free everywhere.",
-  "Reviews are free on every surface for public repositories.",
-  // Trade-off: a boundary word after the claim no longer excuses it, so this true sentence needs rephrasing
-  // ("Do not call NeonDiff free everywhere.").
-  "Calling NeonDiff free everywhere is forbidden."
+  "Reviews are free on every surface for public repositories."
 ])("rejects a free claim that covers every surface: %s", (claim) => {
   const result = runGuardWith(claim);
   expect(result.status).toBe(1);
@@ -138,10 +137,17 @@ it.each([
 });
 it.each([
   "The 7-day free trial works on every surface.",
-  "Solo plans include a free 7-day trial on every surface.",
+  "Solo includes a free 14 day trial on every surface.",
+  "Team plans include a free, 30-day trial on every surface.",
+  "The 7-day Solo trial is free on every surface.",
+  "The confirmed install keeps the self-hosted worker credential-free on every path except Keychain-backed mode.",
   "Use strong passwords everywhere; public repos are free through the GitHub Action.",
   "Public repos are free through the GitHub Action, but not everywhere.",
   "Do not say NeonDiff is free everywhere.",
+  "Don't call NeonDiff free everywhere.",
+  "Private, internal, and unknown-visibility repositories aren't free on any surface.",
+  "Calling NeonDiff free everywhere is forbidden.",
+  "Describing NeonDiff as free on every surface is forbidden.",
   "The Mac app does not require a license key for every repository.",
   "Calling NeonDiff MIT licensed is forbidden."
 ])("allows copy that is not an every-surface free claim: %s", (claim) => {

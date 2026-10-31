@@ -94,10 +94,13 @@ const canonicalPublicFree = /reports\s+as\s+public\s+is\s+free/gi;
 const canonicalScope = /GitHub\s+Action[\s\S]{0,60}review-pr\s+--ci[\s\S]{0,60}self-hosted\s+worker/i;
 const publicFreeClaim = /public\s+(?:repos?\b|repositor(?:y|ies)\b)[^.!?]{0,60}\bfree\b|\bfree\s+(?:(?:review\s+)?for\s+)?(?:public\s+(?:repos?\b|repositor(?:y|ies)\b)|open[ -]source\b)|open[ -]source[^.!?]{0,60}\bfree\b/gi;
 const scopedPublicFree = /GitHub\s+Action|review-pr\s+--ci|self-hosted\s+worker|Mac\s+app/i;
-// A free claim that covers every surface is broad even when it names one surface. Boundary language excuses it only
-// before the claim ends ("Do not say ... free everywhere", "free through the Action, but not everywhere"), so a trailing
-// "never need a license" cannot. Free-trial copy is not such a claim.
-const freeEverySurface = /\bfree\b(?![\s-]+(?:\d+-day[\s-]+)?trials?\b)[^.!?]{0,40}(?:\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b)/gi;
+// A free claim that covers every surface is broad even when it names one surface. A negation excuses it before the
+// claim ends ("Do not say ... free everywhere", "free through the Action, but not everywhere") or later in the same
+// clause ("Calling NeonDiff free everywhere is forbidden"), but not after a clause break (", and never need a license").
+// Free-trial copy and compounds such as "credential-free" are not such claims.
+const freeEverySurface = /(?<!\btrials?\b[^.!?]{0,40})\b(?<!-)free\b(?![\s,-]+(?:\d+[\s-]day[\s-]+)?trials?\b)[^.!?]{0,40}(?:\beverywhere\b|\b(?:on|in|through|via|across)\s+(?:every|all|any)\s+(?:interfaces?|surfaces?|paths?)\b)/gi;
+const everySurfaceNegation = /\b(?:not|avoid|unless|forbidden|never)\b|n['’]t\b/i;
+const clauseBreak = /[,;:]|\b(?:and|but|while|so|because|whereas|including)\b/i;
 for (const path of paths) {
   const text = readFileSync(path, "utf8");
   for (const pattern of forbiddenClaims) {
@@ -127,10 +130,13 @@ for (const path of paths) {
     }
   }
   for (const match of text.matchAll(freeEverySurface)) {
-    const claim = text.slice(sentenceSpan(text, match.index)[0], match.index + match[0].length);
-    if (!boundaryLanguage.test(claim)) {
+    const [start, end] = sentenceSpan(text, match.index);
+    const claimEnd = match.index + match[0].length;
+    const rest = text.slice(claimEnd, end);
+    const cut = rest.search(clauseBreak);
+    if (!everySurfaceNegation.test(text.slice(start, claimEnd) + (cut === -1 ? rest : rest.slice(0, cut)))) {
       const line = text.slice(0, match.index).split("\n").length;
-      console.error(`${path}:${line}: free claim covers every surface: ${match[0]}`);
+      console.error(`${path}:${line}: free claim covers every surface (name its surfaces, or negate it in the same clause): ${match[0]}`);
       failed = true;
     }
   }
