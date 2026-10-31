@@ -1330,7 +1330,7 @@ describe("sticky enrichment comments", () => {
         "standalone issue-enrichment scans are stateless; live cycles exclude already-processed issue rows from cap accounting"
       );
       expect(scan.recommendedActions).toContain(
-        "inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap-deferred and burst-skipped issues, while wouldEnrich/wouldComment show current-cycle throughput"
+        "inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap-deferred issues (standalone scans also count burst-skipped ones), while wouldEnrich/wouldComment show current-cycle throughput"
       );
       expect(JSON.stringify(scan)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
     } finally {

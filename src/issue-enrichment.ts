@@ -259,7 +259,7 @@ export interface IssueEnrichmentScanResult {
     reposSkipped: number;
     readFailures: number;
     issuesSeen: number;
-    /** Counts issues considered eligible for enrichment, including cap-deferred and burst-skipped issues. Use wouldEnrich/wouldComment for current-cycle throughput. */
+    /** Counts issues considered eligible for enrichment, including cap-deferred issues (standalone scans also count burst-skipped ones). Use wouldEnrich/wouldComment for current-cycle throughput. */
     eligible: number;
     skipped: number;
     wouldEnrich: number;
@@ -329,7 +329,7 @@ export interface IssueEnrichmentRepoScan {
   since?: string;
   throttle: IssueEnrichmentThrottlePolicy;
   issuesSeen: number;
-  /** Counts issues considered eligible for enrichment, including cap-deferred and burst-skipped issues. Use wouldEnrich/wouldComment for current-cycle throughput. */
+  /** Counts issues considered eligible for enrichment, including cap-deferred issues (standalone scans also count burst-skipped ones). Use wouldEnrich/wouldComment for current-cycle throughput. */
   eligible: number;
   skipped: number;
   wouldEnrich: number;
@@ -1795,7 +1795,7 @@ function buildScanRecommendedActions(status: IssueEnrichmentStatus, summary: Iss
   const actions = [];
   if (status.state === "blocked") actions.push("resolve issue-enrichment blockers before live issue comments");
   if (summary.deferred > 0) {
-    actions.push("inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap-deferred and burst-skipped issues, while wouldEnrich/wouldComment show current-cycle throughput");
+    actions.push("inspect deferred issue-enrichment rows before throttle changes; summary.eligible includes cap-deferred issues (standalone scans also count burst-skipped ones), while wouldEnrich/wouldComment show current-cycle throughput");
   }
   if (summary.truncatedRepos > 0) actions.push("inspect truncated issue-enrichment scans before advancing repo watermarks");
   if (summary.readFailures > 0) actions.push("run doctor and inspect GitHub App Issues permissions");
@@ -1837,7 +1837,8 @@ function emptyCycleSummary(): IssueEnrichmentCycleResult["summary"] {
 
 function isNewIssue(issue: GitHubRelatedIssueOrPull | undefined, checkedAt: string): boolean {
   const created = Date.parse(issue?.created_at ?? ""), now = Date.parse(checkedAt);
-  return Number.isFinite(created) && Number.isFinite(now) && created <= now && now - created <= ISSUE_ENRICHMENT_NEW_ISSUE_GRACE_MS;
+  // A created_at after checkedAt is an issue opened during this cycle: still NEW.
+  return Number.isFinite(created) && Number.isFinite(now) && now - created <= ISSUE_ENRICHMENT_NEW_ISSUE_GRACE_MS;
 }
 
 function canonicalIssueUpdatedAt(issue: GitHubRelatedIssueOrPull | undefined, checkedAt: string): string {

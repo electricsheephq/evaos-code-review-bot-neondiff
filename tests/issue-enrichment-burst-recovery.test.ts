@@ -121,6 +121,15 @@ describe("burst recovery acceptance", () => {
     expect(h.github.upsertIssueComment).not.toHaveBeenCalled();
   });
 
+  it("6b: an issue created after the cycle's checkedAt still counts as NEW", async () => {
+    const opened = "2026-10-31T10:00:30.000Z";
+    const h = harness([issue(1), issue(2), issue(3, { created_at: opened, updated_at: opened })], { maxIssuesPerBurst: 1 });
+    await h.cycle();
+    expectBurstSkip(h.records.get(1)); expectBurstSkip(h.records.get(2));
+    expect(h.records.get(3)?.status).toBe("posted");
+    expect(h.github.upsertIssueComment.mock.calls.map(([value]) => value.issueNumber)).toEqual([3]);
+  });
+
   it("7: NEW issues still wait for comment caps and hold the watermark", async () => {
     const h = harness([newIssue(1), newIssue(2), newIssue(3)], { maxCommentsPerCycle: 1 });
     const result = await h.cycle();
