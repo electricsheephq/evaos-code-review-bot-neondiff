@@ -262,7 +262,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
 
     const job = parsed.jobs?.["public-download-install-canary"];
     expect(job?.strategy?.["fail-fast"]).toBe(false);
-    expect(job?.strategy?.matrix?.runner).toEqual(["macos-14", "macos-15", "macos-26"]);
+    expect(job?.strategy?.matrix?.runner).toEqual(["macos-15", "macos-26"]);
     expect(job?.["runs-on"]).toBe("${{ matrix.runner }}");
 
     for (const command of [
