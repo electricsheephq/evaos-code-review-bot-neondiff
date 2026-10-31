@@ -114,16 +114,16 @@ private let currentDaemonLaunchdStates: Set<String> = [
     "unknown"
 ]
 
-// queue_no_failed_jobs is deliberately absent: it is a release-readiness gate that keeps every failed row
-// blocking until it is retried, recovered or retired, so one old failure would hold the worker badge on for
-// good. Recent unrecovered review failures still raise worker attention through live_db_no_errors.
+// queue_no_failed_jobs and queue_no_zcode_timeout_failed_jobs are deliberately absent: they are release-readiness
+// gates that keep each failed row blocking until it is retried, recovered or retired, so one old failure would hold
+// the worker badge on for good. live_db_no_errors raises worker attention for recent unrecovered failures,
+// including failed queue jobs that wrote no failed review row.
 private let currentDaemonWorkerGateNames: Set<String> = [
     "launchd_running",
     "launchd_config",
     "launchd_node_system_ca",
     "live_db_no_errors",
     "provider_cooldown_backlog",
-    "queue_no_zcode_timeout_failed_jobs",
     "queue_no_stale_review_leases",
     "queue_no_retryable_provider_deferred_jobs",
     "daemon_heartbeat_recent",

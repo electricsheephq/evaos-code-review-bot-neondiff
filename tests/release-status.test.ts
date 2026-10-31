@@ -570,6 +570,11 @@ describe("beta release status", () => {
     expect(recovered.database.recentUnrecoveredFailedReviewQueueJobCount).toBe(0);
     expect(gate(recovered, "live_db_no_errors")).toMatchObject({ ok: true });
     expect(gate(recovered, "queue_no_failed_jobs")).toMatchObject({ ok: true });
+
+    // The window is exactly 24 hours, and both stored timestamp forms are read.
+    expect(statusFor("2026-08-22T00:00:00Z").database.recentUnrecoveredFailedReviewQueueJobCount).toBe(1);
+    expect(statusFor("2026-08-21T23:59:59Z").database.recentUnrecoveredFailedReviewQueueJobCount).toBe(0);
+    expect(statusFor("2026-08-22 23:00:00").database.recentUnrecoveredFailedReviewQueueJobCount).toBe(1);
   });
 
   it("keeps recovered historical failures amber rather than red", () => {

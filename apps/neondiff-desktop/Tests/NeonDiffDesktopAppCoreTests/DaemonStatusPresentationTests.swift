@@ -228,10 +228,11 @@ import NeonDiffDesktopCore
         #expect(fixture.model.customerSurfaceStatus == "WORKER ATTENTION")
     }
 
-    @Test func failedQueueJobHistoryAloneDoesNotRaiseWorkerAttention() {
+    @Test(arguments: ["queue_no_failed_jobs", "queue_no_zcode_timeout_failed_jobs"])
+    func failedQueueJobHistoryAloneDoesNotRaiseWorkerAttention(historyGate: String) {
         let fixture = ModelDependencyFixture(suspendCLIRuns: true)
         fixture.model.isOnboardingPresented = false
-        let response = #"""
+        let healthy = #"""
         {
           "ok": false,
           "command": "daemon status",
@@ -248,7 +249,7 @@ import NeonDiffDesktopCore
               {"name": "launchd_node_system_ca", "ok": true},
               {"name": "live_db_no_errors", "ok": true, "detail": "0 recent unrecovered blocking error row(s) in 24h; 300 retained history"},
               {"name": "provider_cooldown_backlog", "ok": true},
-              {"name": "queue_no_failed_jobs", "ok": false, "detail": "209 active failed durable queue job(s); 299 retained history"},
+              {"name": "queue_no_failed_jobs", "ok": true},
               {"name": "queue_no_zcode_timeout_failed_jobs", "ok": true},
               {"name": "queue_no_stale_review_leases", "ok": true},
               {"name": "queue_no_retryable_provider_deferred_jobs", "ok": true},
@@ -258,6 +259,11 @@ import NeonDiffDesktopCore
           }
         }
         """#
+        let response = healthy.replacingOccurrences(
+            of: #"{"name": "\#(historyGate)", "ok": true}"#,
+            with: #"{"name": "\#(historyGate)", "ok": false, "detail": "old failed job(s) kept as release history"}"#
+        )
+        #expect(response != healthy)
 
         fixture.model.applyCLIResultForTesting(
             CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
