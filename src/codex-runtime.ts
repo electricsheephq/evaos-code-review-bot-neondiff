@@ -216,11 +216,23 @@ export function parseCodexUsage(
   const rawTokens = [...stderr.matchAll(/^tokens used[ \t]*\r?\n([0-9][0-9 \u00a0\u202f,]*)[ \t]*\r?$/gm)].at(-1)?.[1]?.trim();
   const tokens = rawTokens && /^(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f,][0-9]{3})+)$/.test(rawTokens)
     ? Number(rawTokens.replace(/[ \u00a0\u202f,]/g, "")) : NaN;
-  const echoedPrompt = options.echoedPrompt?.replace(/\r\n/g, "\n");
-  const normalizedStderr = stderr.replace(/\r\n/g, "\n");
-  const warningText = echoedPrompt ? normalizedStderr.split(echoedPrompt).join("") : normalizedStderr;
-  const serviceTierOmitted = options.serviceTier !== undefined && options.serviceTier !== "default" &&
-    /Configured service tier `[^`\r\n]+` is not advertised as supported for model `[^`\r\n]+` and will be omitted from requests\./.test(warningText);
+  let serviceTierOmitted = false;
+  if (options.serviceTier !== undefined && options.serviceTier !== "default") {
+    const echoedPrompt = options.echoedPrompt?.replace(/\r\n/g, "\n");
+    const normalizedStderr = stderr.replace(/\r\n/g, "\n");
+    const echo = echoedPrompt ? `user\n${echoedPrompt}` : undefined;
+    const echoAt = echo ? normalizedStderr.indexOf(echo) : -1;
+    if (echo !== undefined && echoAt >= 0) {
+      const tier = options.serviceTier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const warning = new RegExp("^warning: Configured service tier `" + tier +
+        "` is not advertised as supported for model `[^`\\r\\n]+` and will be omitted from requests\\.$");
+      // Codex 0.166.0 prints startup warnings after the prompt echo and before the first event header.
+      for (const line of normalizedStderr.slice(echoAt + echo.length).split("\n").slice(1)) {
+        if (line !== "" && !line.startsWith("warning: ")) break;
+        if (warning.test(line)) serviceTierOmitted = true;
+      }
+    }
+  }
   return {
     model: model && !containsSecretLikeText(model) ? model : redactSecrets(fallback.model),
     reasoningEffort: (effort ?? fallback.reasoningEffort) as CodexReasoningEffort,
