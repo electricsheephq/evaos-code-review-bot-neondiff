@@ -46,12 +46,96 @@ describe("Codex CLI review runtime", () => {
     expect(parseCodexUsage("model: raw prompt text\nreasoning effort: ultra\ntokens used\n12 34\n",
       { model: "gpt-6.1-sol", reasoningEffort: "high" }, 9)).toEqual({ model: "gpt-6.1-sol", reasoningEffort: "high", tokensUsed: null, durationMs: 9 });
   });
+  const tierWarningPrompt = "Run the shell command `cat fixture.txt` exactly once, then reply with exactly the word OK.";
+  const tierWarningSentence = "Configured service tier `priority` is not advertised as supported for model `gpt-6.1-sol` and will be omitted from requests.";
+  const tierWarningLine = `warning: ${tierWarningSentence}`;
+  const tierWarningStderr = [
+    "OpenAI Codex v0.166.0", "--------", "workdir: /work/probe", "model: gpt-6.1-sol",
+    "provider: openai", "approval: never", "sandbox: read-only", "reasoning effort: low",
+    "reasoning summaries: none", "session id: 00000000-0000-7000-8000-000000000000", "--------",
+    "user", tierWarningPrompt, tierWarningLine, "codex", "I’ll run the command once.", "exec",
+    "/bin/zsh -lc 'cat fixture.txt' in /work/probe", " succeeded in 0ms:", tierWarningSentence,
+    "", "codex", "OK", "tokens used", "23\u202f292", ""
+  ].join("\n");
+  const tierWarningFallback = { model: "gpt-6.1-sol", reasoningEffort: "high" as const };
+  const tierWarningUsage = { model: "gpt-6.1-sol", reasoningEffort: "low", tokensUsed: 23292, durationMs: 9 };
+  it("records only a boolean when Codex warns that it omitted the service tier", () => {
+    expect(parseCodexUsage(tierWarningStderr, tierWarningFallback, 9,
+      { serviceTier: "priority", echoedPrompt: tierWarningPrompt }))
+      .toEqual({ ...tierWarningUsage, serviceTierOmitted: true });
+  });
+  it("ignores bare and warning-prefixed tier sentences in tool output", () => {
+    const stderr = tierWarningStderr.replace(`${tierWarningLine}\n`, "")
+      .replace(`${tierWarningSentence}\n`, `${tierWarningSentence}\n${tierWarningLine}\n`);
+    expect(parseCodexUsage(stderr, tierWarningFallback, 9,
+      { serviceTier: "priority", echoedPrompt: tierWarningPrompt })).toEqual(tierWarningUsage);
+  });
+  it.each([undefined, "default"] as const)("ignores the omission warning for service tier %s", (serviceTier) => {
+    expect(parseCodexUsage(tierWarningStderr, tierWarningFallback, 9,
+      { serviceTier, echoedPrompt: tierWarningPrompt })).toEqual(tierWarningUsage);
+  });
+  it("ignores the tier sentence quoted in an echoed diff prompt", () => {
+    const echoedPrompt = `Review this diff:\n+"${tierWarningSentence}"`;
+    const stderr = tierWarningStderr.replace(`${tierWarningLine}\n`, "").replace(`${tierWarningSentence}\n`, "")
+      .replace(tierWarningPrompt, echoedPrompt);
+    expect(parseCodexUsage(stderr, tierWarningFallback, 9,
+      { serviceTier: "priority", echoedPrompt })).toEqual(tierWarningUsage);
+  });
+  it("ignores an omission warning for a different tier", () => {
+    const stderr = tierWarningStderr.replace(tierWarningLine, tierWarningLine.replace("`priority`", "`zzz`"));
+    expect(parseCodexUsage(stderr, tierWarningFallback, 9,
+      { serviceTier: "priority", echoedPrompt: tierWarningPrompt })).toEqual(tierWarningUsage);
+  });
+  it.each([undefined, "", "Different prompt"])("ignores the tier warning without a matching prompt echo: %j", (echoedPrompt) => {
+    expect(parseCodexUsage(tierWarningStderr, tierWarningFallback, 9,
+      { serviceTier: "priority", echoedPrompt })).toEqual(tierWarningUsage);
+  });
+  it("finds the tier warning after another startup warning", () => {
+    const stderr = tierWarningStderr.replace(tierWarningLine, `warning: unrelated startup warning\n${tierWarningLine}`);
+    expect(parseCodexUsage(stderr, tierWarningFallback, 9,
+      { serviceTier: "priority", echoedPrompt: tierWarningPrompt }))
+      .toEqual({ ...tierWarningUsage, serviceTierOmitted: true });
+  });
+  it("finds the tier warning with CRLF line endings", () => {
+    const echoedPrompt = tierWarningPrompt.replace(/\n/g, "\r\n");
+    const stderr = tierWarningStderr.replace(/\n/g, "\r\n");
+    expect(parseCodexUsage(stderr, tierWarningFallback, 9, { serviceTier: "priority", echoedPrompt }))
+      .toEqual({ ...tierWarningUsage, serviceTierOmitted: true });
+  });
   it("defaults to PATH-resolved Sol 6.1/high with 500000 context tokens", () => {
     expect(loadConfigFromObject({ codexRuntime: { enabled: true } }).codexRuntime).toMatchObject({
       cliPath: "codex", model: "gpt-6.1-sol", reasoningEffort: "high", contextWindowTokens: 500000
     });
     expect(() => loadConfigFromObject({ codexRuntime: { enabled: true, cliPath: "./codex" } })).toThrow();
     expect(() => loadConfigFromObject({ codexRuntime: { reasoningEffort: "ultra" } })).toThrow();
+  });
+  it.each([undefined, "default", "priority"])("accepts the optional Codex service tier %s", (serviceTier) => {
+    const config = loadConfigFromObject({ codexRuntime: { serviceTier } });
+    expect(config.codexRuntime?.serviceTier).toBe(serviceTier);
+    expect(loadConfigFromObject({}).codexRuntime).not.toHaveProperty("serviceTier");
+  });
+  it.each(["flex", "fast", "", 1])("rejects the unsupported Codex service tier %s", (serviceTier) => {
+    expect(() => loadConfigFromObject({ codexRuntime: { serviceTier } }))
+      .toThrow("config.codexRuntime.serviceTier must be default or priority");
+  });
+  it.each(["default", "priority"] as const)("passes configured tier %s through review to exec exactly once", async (serviceTier) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-tier-"));
+    temporaryRoots.push(root);
+    const runtime = loadConfigFromObject({ codexRuntime: { serviceTier } }).codexRuntime!;
+    await runCodexReview({
+      // No checkout reads: this test pins the tier argument, and read confinement needs a real Codex CLI.
+      ...runtime, checkoutReads: false, cwd: root, prompt: "Synthetic tier fixture", evidenceDir: root
+    }, {
+      captureWorktreeState: () => "unchanged",
+      runProcess: async (invocation) => {
+        const tierArg = `service_tier="${serviceTier}"`;
+        const effortIndex = invocation.args.indexOf('model_reasoning_effort="high"');
+        expect(invocation.args.slice(effortIndex + 1, effortIndex + 3)).toEqual(["-c", tierArg]);
+        expect(invocation.args.filter((arg) => arg.startsWith("service_tier="))).toEqual([tierArg]);
+        writeFileSync(invocation.outputPath, JSON.stringify({ findings: [], summary: fixtureSummary }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
   });
   it("requests an original LCM assessment only when the repository opts in", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-"));

@@ -77,6 +77,7 @@ const EXACT_PATCH_PATHS = new Set([
   "codexRuntime.cliPath",
   "codexRuntime.model",
   "codexRuntime.reasoningEffort",
+  "codexRuntime.serviceTier",
   "codexRuntime.timeoutMs",
   "codexRuntime.maxOutputBytes",
   "codexRuntime.contextWindowTokens",

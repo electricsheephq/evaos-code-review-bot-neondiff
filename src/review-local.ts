@@ -171,6 +171,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
       const chunkDir = join(evidenceDir, `chunk-${index}`);
       const result = untrusted ? await runUntrustedProviderReview({ config, prompt: promptForFiles(chunk), lcmReviewAssessment: isLcmReviewRepository(repo) }) : await runCodexReview({ cwd: repoPath, prompt: promptForFiles(chunk), evidenceDir: chunkDir,
         cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort, checkoutReads,
+        serviceTier: runtime.serviceTier,
         timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes, lcmReviewAssessment: isLcmReviewRepository(repo) }, {
         captureWorktreeState: () => git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
       });

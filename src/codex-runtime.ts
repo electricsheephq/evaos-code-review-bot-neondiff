@@ -14,6 +14,7 @@ import { writeSecureFileSync } from "./temp-files.js";
 import { parseReviewModelSummary, type ZCodeReviewResult } from "./zcode.js";
 
 export type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type CodexServiceTier = "default" | "priority";
 
 export interface CodexExecInvocation {
   command: string;
@@ -205,8 +206,9 @@ export function parseCodexCommands(stderr: string, echoedPrompt?: string): {
 }
 
 export function parseCodexUsage(
-  stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number
-): { model: string; reasoningEffort: CodexReasoningEffort; tokensUsed: number | null; durationMs: number } {
+  stderr: string, fallback: { model: string; reasoningEffort: CodexReasoningEffort }, durationMs: number,
+  options: { serviceTier?: CodexServiceTier; echoedPrompt?: string } = {}
+): { model: string; reasoningEffort: CodexReasoningEffort; tokensUsed: number | null; durationMs: number; serviceTierOmitted?: boolean } {
   const model = /^model:[ \t]*(gpt-[a-z0-9._-]+)[ \t]*$/m.exec(stderr)?.[1];
   const effort = /^reasoning effort:[ \t]*(low|medium|high|xhigh|max)[ \t]*$/m.exec(stderr)?.[1];
   // Codex groups thousands with a locale separator: a space, U+00A0, U+202F or a comma.
@@ -214,11 +216,29 @@ export function parseCodexUsage(
   const rawTokens = [...stderr.matchAll(/^tokens used[ \t]*\r?\n([0-9][0-9 \u00a0\u202f,]*)[ \t]*\r?$/gm)].at(-1)?.[1]?.trim();
   const tokens = rawTokens && /^(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f,][0-9]{3})+)$/.test(rawTokens)
     ? Number(rawTokens.replace(/[ \u00a0\u202f,]/g, "")) : NaN;
+  let serviceTierOmitted = false;
+  if (options.serviceTier !== undefined && options.serviceTier !== "default") {
+    const echoedPrompt = options.echoedPrompt?.replace(/\r\n/g, "\n");
+    const normalizedStderr = stderr.replace(/\r\n/g, "\n");
+    const echo = echoedPrompt ? `user\n${echoedPrompt}` : undefined;
+    const echoAt = echo ? normalizedStderr.indexOf(echo) : -1;
+    if (echo !== undefined && echoAt >= 0) {
+      const tier = options.serviceTier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const warning = new RegExp("^warning: Configured service tier `" + tier +
+        "` is not advertised as supported for model `[^`\\r\\n]+` and will be omitted from requests\\.$");
+      // Codex 0.166.0 prints startup warnings after the prompt echo and before the first event header.
+      for (const line of normalizedStderr.slice(echoAt + echo.length).split("\n").slice(1)) {
+        if (line !== "" && !line.startsWith("warning: ")) break;
+        if (warning.test(line)) serviceTierOmitted = true;
+      }
+    }
+  }
   return {
     model: model && !containsSecretLikeText(model) ? model : redactSecrets(fallback.model),
     reasoningEffort: (effort ?? fallback.reasoningEffort) as CodexReasoningEffort,
     tokensUsed: Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : null,
-    durationMs
+    durationMs,
+    ...(serviceTierOmitted ? { serviceTierOmitted: true } : {})
   };
 }
 
@@ -504,6 +524,7 @@ export function buildCodexExecInvocation(input: {
   cwd: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   schemaPath: string;
   outputPath: string;
   readConfinement?: CodexReadConfinement;
@@ -524,6 +545,7 @@ export function buildCodexExecInvocation(input: {
       ...(input.restrictTools ? RESTRICTED_TOOL_ARGS : []),
       "-c", "approval_policy=\"never\"",
       "-c", `model_reasoning_effort=\"${input.reasoningEffort}\"`,
+      ...(input.serviceTier !== undefined ? ["-c", `service_tier="${input.serviceTier}"`] : []),
       "--model", input.model,
       "-c", 'shell_environment_policy.inherit="core"',
       "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","*TOKEN*","*PASSWORD*","*CREDENTIAL*","*AUTH*"]',
@@ -544,6 +566,7 @@ export async function runCodexReview(input: {
   cliPath: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   evidenceDir: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -611,6 +634,7 @@ export async function runCodexStructuredOutput<T>(input: {
   cliPath: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   evidenceDir: string;
   timeoutMs: number;
   maxOutputBytes: number;
@@ -644,6 +668,7 @@ export async function runCodexStructuredOutput<T>(input: {
     cwd: input.cwd,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
+    serviceTier: input.serviceTier,
     schemaPath,
     outputPath,
     restrictTools: input.restrictTools,
@@ -671,7 +696,8 @@ export async function runCodexStructuredOutput<T>(input: {
     ? "codex-usage.json"
     : `codex-usage-${input.artifactPrefix}-${randomBytes(4).toString("hex")}.json`;
   writeSecureFileSync(join(usageDir, usageFile),
-    `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt), null, 2)}\n`);
+    `${JSON.stringify(parseCodexUsage(result.stderr, input, Date.now() - startedAt,
+      { serviceTier: input.serviceTier, echoedPrompt: input.prompt }), null, 2)}\n`);
   const after = captureWorktreeState(input.cwd);
   const stdout = redactSecrets(result.stdout);
   const stderr = redactSecrets(result.stderr);

@@ -92,6 +92,12 @@ it("falls back to a diff-only review when checkout reads are unavailable", async
   const input = vi.mocked(runCodexReview).mock.calls[0]![0];
   expect(input.checkoutReads).toBe(false); expect(input.prompt).not.toContain("read-only checkout of");
 });
+it("passes the configured service tier on the normal review-local path", async () => {
+  const config = join(root, "config.json");
+  fs.writeFileSync(config, JSON.stringify({ codexRuntime: { serviceTier: "priority" } }));
+  await runReviewLocal({ ...args(), config });
+  expect(runCodexReview).toHaveBeenCalledWith(expect.objectContaining({ serviceTier: "priority" }), expect.any(Object));
+});
 it("fails head mismatch before runtime or output and returns a nonzero CLI exit", async () => {
   await expect(runReviewLocal({ ...args(), head: base })).rejects.toThrow(/head.*mismatch/i);
   expect(runCodexReview).not.toHaveBeenCalled(); expect(fs.existsSync(args().out)).toBe(false);
@@ -113,11 +119,12 @@ it("drops the tab Git appends to unquoted ---/+++ paths that contain a space", (
 it("honors chunk budgeting locally and preserves only findings from each chunk", async () => {
   fs.writeFileSync(join(repo, "two.ts"), "hi\n"); git("add", "."); git("commit", "-qm", "two");
   const config = join(root, "config.json"), diff = join(root, "big.patch");
-  fs.writeFileSync(config, JSON.stringify({ codexRuntime: { contextWindowTokens: 9000 }, contextBudget: { overflow: "chunk", reservedOutputTokens: 10 } }));
+  fs.writeFileSync(config, JSON.stringify({ codexRuntime: { contextWindowTokens: 9000, serviceTier: "priority" }, contextBudget: { overflow: "chunk", reservedOutputTokens: 10 } }));
   const patch = (name: string) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-${"a".repeat(11000)}\n+${"b".repeat(11000)}\n`;
   fs.writeFileSync(diff, patch("file.ts") + patch("two.ts"));
   await runReviewLocal({ ...args(), config, "diff-file": diff });
   expect(runCodexReview).toHaveBeenCalledTimes(2);
+  for (const [input] of vi.mocked(runCodexReview).mock.calls) expect(input.serviceTier).toBe("priority");
   expect(JSON.parse(fs.readFileSync(args().out, "utf8"))).toHaveLength(1);
 });
 it("decodes every Git C-style path escape, including bell and vertical tab", () => {
