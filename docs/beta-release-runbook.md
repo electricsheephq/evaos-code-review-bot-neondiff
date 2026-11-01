@@ -772,13 +772,15 @@ The release event also runs the npm workflows. `release-npm.yml` skips prereleas
   - update `MAC_RELEASE_METADATA.beta` in `src/lib/paid-beta-release-gate.ts`;
   - update the pinned artifact and download label in `scripts/paid-beta-funnel.test.mjs`.
 - Run `npm run check:paid-beta-funnel` and `npm run check:appcast-security` (the site's prebuild runs both). Then merge and publish the site.
-- Dispatch `paid-beta-public-download-canary.yml` with these inputs, then wait for all three jobs:
+- Dispatch `paid-beta-public-download-canary.yml` with these inputs, then wait for both install jobs:
   - `release_tag=v1.1.0-beta.N`;
   - `artifact_name` = the zip's file name;
   - `artifact_sha256` from step 5;
   - `reviewed_source_sha` = the tag's peeled commit from step 1.
 
-  The canary does a clean install on macOS 14, 15 and 26 and checks the feed, signature and team ID. If a job fails for a reason that is not transient, go to Rollback: the feed has moved.
+  The canary does a clean install on macOS 15 and 26 and checks the feed, signature and team ID. If a job fails for a reason that is not transient, go to Rollback: the feed has moved.
+
+  GitHub retires its macOS 14 runners on 2026-11-02, so the canary no longer covers macOS 14. It is still the app's minimum supported version. When a release changes install, signing or launch behaviour, do a clean install on a macOS 14 machine or VM by hand and record the result on the release issue. If it fails, go to Rollback, as for a canary failure.
 - Optional: once the canary is green, dispatch `desktop-accepted-release-packet.yml` from `main` with `release_tag=v1.1.0-beta.N`. It writes the beta's accepted packet and the artifact-source attestation, which only the stable-transition machinery reads. It needs the declaration from step 1 on `main` and a zip without AppleDouble entries, so beta.90's hosted zip cannot produce one.
 
 **Rollback.**
