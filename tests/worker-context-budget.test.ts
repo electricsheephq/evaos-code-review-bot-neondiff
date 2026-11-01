@@ -947,10 +947,10 @@ describe("worker context budget preflight", () => {
         try {
           expect(await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
           if (useCodex) {
-            expect(main).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }));
+            expect(main).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }), expect.any(Object));
             expect(verifier).toHaveBeenCalledTimes(1);
             expect(verifier).toHaveBeenCalledWith(expect.objectContaining({ artifactPrefix: "severe-verifier", timeoutMs: timeoutMs ?? 300_000,
-              ...(restricted ? { restrictTools: true, readConfinement: expect.objectContaining({ command: "/unused/codex" }) } : {}) }));
+              ...(restricted ? { restrictTools: true, readConfinement: expect.objectContaining({ command: "/unused/codex" }) } : {}) }), expect.any(Object));
           } else {
             expect(zcode.runZCodeRawJson).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: timeoutMs ?? 180_000 }));
           }
@@ -1820,7 +1820,7 @@ describe("worker context budget preflight", () => {
         state, repo: "electricsheephq/WorldOS", pull, dryRun: true, useZCode: true })).toBe("reviewed");
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true,
-        prompt: expect.stringContaining("The working directory is a read-only checkout") }));
+        prompt: expect.stringContaining("The working directory is a read-only checkout") }), expect.any(Object));
       expect(spy.mock.calls[0]![0].prompt).not.toContain("Do not call Bash");
       expect(spy.mock.calls[0]![0].cliPath).toBe(realpathSync(join(trusted, "codex")));
       expect(available).toHaveBeenCalledWith(expect.objectContaining({ sensitivePaths: expect.objectContaining({ config: configPath, "state DB": config.statePath, evidence: config.evidenceDir }) }));
@@ -2005,7 +2005,7 @@ describe("worker context budget preflight", () => {
         repo: "electricsheephq/lcm-x", pull, dryRun: false, useZCode: true })).toBe("reviewed");
       const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__lcm-x", `pr-${pull.number}`, pull.head.sha);
       expect(readFileSync(join(evidenceDir, "review-prompt.txt"), "utf8")).toContain("The working directory is a read-only checkout");
-      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true }));
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ checkoutReads: true }), expect.any(Object));
       expect(JSON.parse(readFileSync(join(evidenceDir, "codex-commands.json"), "utf8"))).toMatchObject({ counts: { total: 1, flagged: 0 } });
       const plan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
       expect(plan.deterministicGate.dropReasonCounts.evidence_unverified).toBe(1);

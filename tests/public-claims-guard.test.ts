@@ -64,10 +64,10 @@ describe("public claims guard", () => {
     expect(result.stderr).toMatch(/README\.md:1: public-free claim must name its scope/);
   });
 
-  it("requires the #1203 pointer for the surfaces that still need a key", () => {
-    const result = runGuardWith("", (text) => text.replace(/#1203/g, "the tracker"));
+  it("requires the Mac app keyless public-review claim", () => {
+    const result = runGuardWith("", (text) => text.replace(/Mac app reviews public repositories without a key/gi, "Mac app setup"));
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/missing required public boundary .*#1203/);
+    expect(result.stderr).toMatch(/missing required public boundary .*Mac app/);
   });
 
   it("requires the 1.0.x qualifier on the every-repository activation claim", () => {
@@ -93,6 +93,7 @@ it.each([
 it.each([
   "Public repos are free through `neondiff review-pr --ci`.",
   "Public repos are free through the self-hosted worker.",
+  "Public repos are free through the Mac app with Public repositories only selected.",
   "Free review for public repositories through the GitHub Action.",
   "NeonDiff is free for open source through `neondiff review-pr --ci`.",
   "NeonDiff is not free for private repositories.",
@@ -107,4 +108,25 @@ it.each([
   "Public repositories are free everywhere and never need a license."
 ])("rejects a broad public-free claim despite negation or a single surface: %s", (claim) => {
   expect(runGuardWith(claim).status).toBe(1);
+});
+// #1203: the stale "Mac app needs a key everywhere" claim is blocked; the true private-repository rule is not.
+it.each([
+  "The Mac app still requires a license key for every repository.",
+  "The Mac app needs activation even for public repositories."
+])("rejects the stale Mac app key claim: %s", (claim) => {
+  const result = runGuardWith(claim);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
+});
+// A named surface does not scope a claim that covers every surface.
+it.each([
+  "Public repos are free on every interface, including the Mac app.",
+  "Public repositories are free everywhere, including the GitHub Action."
+])("rejects an all-surfaces public-free claim that names one surface: %s", (claim) => {
+  const result = runGuardWith(claim);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toMatch(/README\.md: forbidden public claims phrase/);
+});
+it("allows the Mac app private-repository license rule", () => {
+  expect(runGuardWith("The Mac app needs a Solo or Team license for private repositories.").status).toBe(0);
 });

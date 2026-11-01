@@ -341,6 +341,9 @@ import Testing
         #expect(overview.contains("model.reopenOnboarding(at: .welcome)"))
         #expect(overview.contains("readiness.licenseStatus"))
         #expect(overview.contains(#""PUBLIC · FREE""#))
+        // The keyless free path shows PUBLIC · FREE, never ACTIVE, without changing the readiness gate.
+        #expect(overview.contains("licenseStatus = publicRepositoryLicenseNotRequired || model.publicFreeReviewPath"))
+        #expect(overview.contains("license = publicRepositoryLicenseNotRequired || licenseIsActive"))
         #expect(overview.contains("model.licenseSetupReady"))
         #expect(overview.contains("canRunDryRun = model.scopedReviewExecutionAvailable"))
         #expect(overview.contains("Config and secrets stay on this Mac"))

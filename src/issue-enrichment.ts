@@ -20,7 +20,7 @@ import {
   type IssueAnalysisEvidenceContext,
   type IssueAnalysisPolicyContext
 } from "./issue-analysis.js";
-import { resolveCheckoutReadsStatus, type CodexReasoningEffort } from "./codex-runtime.js";
+import { resolveCheckoutReadsStatus, type CodexReasoningEffort, type CodexServiceTier } from "./codex-runtime.js";
 import type { BotConfig, PublicRepoAuthorGateConfig } from "./config.js";
 import {
   isAuthorBlockedOnPublicRepo,
@@ -222,6 +222,7 @@ export interface IssueAnalysisRunnerInput {
   cliPath: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   timeoutMs: number;
   maxOutputBytes: number;
 }
@@ -806,6 +807,7 @@ export async function runIssueEnrichmentCycle(input: {
       cliPath: string;
       model: string;
       reasoningEffort: CodexReasoningEffort;
+      serviceTier?: CodexServiceTier;
       timeoutMs: number;
       maxOutputBytes: number;
     };
@@ -1362,6 +1364,7 @@ export async function runIssueEnrichmentCycle(input: {
           cliPath: runtime?.cliPath ?? "",
           model: runtime?.model ?? "injected-issue-analysis",
           reasoningEffort: runtime?.reasoningEffort ?? "low",
+          serviceTier: runtime?.serviceTier,
           timeoutMs: runtime?.timeoutMs ?? 1,
           maxOutputBytes: runtime?.maxOutputBytes ?? 1
         });

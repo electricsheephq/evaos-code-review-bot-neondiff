@@ -28,7 +28,8 @@ struct DesktopSetupReadiness {
             }?.visibility == .public
         let licenseIsActive = model.licenseSetupReady
         license = publicRepositoryLicenseNotRequired || licenseIsActive
-        licenseStatus = publicRepositoryLicenseNotRequired
+        // The keyless free path never reads ACTIVE; its readiness still waits for a verified public repository.
+        licenseStatus = publicRepositoryLicenseNotRequired || model.publicFreeReviewPath
             ? "PUBLIC · FREE"
             : (licenseIsActive ? "ACTIVE" : "ACTIVATION REQUIRED")
         targetSelectionRequired = model.activationTargetSelectionRequired

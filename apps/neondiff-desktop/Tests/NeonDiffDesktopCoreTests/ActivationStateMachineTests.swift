@@ -64,7 +64,8 @@ import Testing
         (.serviceError, .reenterKey, .keyReady),
         (.serviceError, .verifyExistingEntitlement, .activationPending),
 
-        (.publicFreeSkip, .choosePrivatePath, .purchaseRequired)
+        (.publicFreeSkip, .choosePrivatePath, .purchaseRequired),
+        (.publicFreeSkip, .provideExistingKey, .keyReady)
     ]
 
     @Test func allTwelveStatesExist() {

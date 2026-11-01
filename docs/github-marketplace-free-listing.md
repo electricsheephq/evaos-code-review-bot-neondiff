@@ -9,8 +9,8 @@ work. No Marketplace billing or listing is shipped by this packet.
 
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
 free with no license key through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
-worker (`daemon`, `run-once`, `review-pr`, `providers verify`)
-(the Mac app still requires a license key, #1203); private, internal, and unknown-visibility repositories
+worker (`daemon`, `run-once`, `review-pr`, `providers verify`), and through the Mac app when you choose
+"Public repositories only" during setup; private, internal, and unknown-visibility repositories
 require an active NeonDiff license. A Marketplace listing is a separate decision
 and is not part of that change.
 

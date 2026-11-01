@@ -338,7 +338,9 @@ evidence path together. The proof packet should show `visibility_result`,
 `visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.
 From 1.1.0, public repos with no license pass this gate through the GitHub
 Action, `neondiff review-pr --ci`, and the self-hosted worker. The Mac app
-(#1203) and npm CLI 1.0.x still require a key.
+reviews public repositories without a key (choose "Public repositories only"
+in onboarding); private repositories need Solo or Team. The npm CLI 1.0.x
+still requires a key.
 Private repos without an active private entitlement, expired or
 revoked entitlements, and unknown visibility fail it. Every denial must happen before checkout, provider calls, or GitHub
 review posting. A provider API key alone is not repository entitlement evidence.
@@ -377,7 +379,7 @@ For private `review-pr --ci`, follow the [CI license key-file setup](ci-runner.m
 From NeonDiff 1.1.0, review of repositories that GitHub reports as public is
 free with no license key through the GitHub Action, `neondiff review-pr --ci`, and the self-hosted
 worker (`daemon`, `run-once`, `review-pr`, `providers verify`).
-The Mac app still requires a license key ([#1203](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/1203)). The visibility comes from GitHub's repository metadata
+The Mac app reviews public repositories without a key (choose "Public repositories only" in onboarding); private repositories need Solo or Team. The visibility comes from GitHub's repository metadata
 read with the App installation token. Private, internal, and unknown-visibility
 repositories require live API-backed activation before any work.
 Legacy `publicReposFree` and `privateReposRequireEntitlement` values in user

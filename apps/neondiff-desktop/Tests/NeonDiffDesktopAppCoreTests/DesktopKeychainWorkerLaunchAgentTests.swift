@@ -390,6 +390,9 @@ import NeonDiffDesktopCore
         let object = try #require(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
+        #expect(Set(object.keys) == [
+            "schemaVersion", "githubAppId", "githubPrivateKey", "licenseKey", "licenseMachineId"
+        ])
         #expect(object["schemaVersion"] as? Int == 2)
         #expect(object["githubAppId"] as? String == appID)
         #expect(object["githubPrivateKey"] as? String == privateKey)
@@ -397,6 +400,31 @@ import NeonDiffDesktopCore
             object["licenseKey"] as? String
                 == "nd_live_runtime_fixture_1234"
         )
+        #expect(object["licenseMachineId"] as? String == licenseMachineID)
+    }
+
+    @Test func keylessRuntimeEnvelopeHasExactlyTheV3Fields() throws {
+        let privateKeyLabel = "PRIVATE" + " KEY"
+        let privateKey = """
+        -----BEGIN \(privateKeyLabel)-----
+        ZmFrZS1maXh0dXJlLXByaXZhdGUta2V5
+        -----END \(privateKeyLabel)-----
+        """
+        let data = try DesktopRuntimeCredentialEnvelope(
+            appID: appID,
+            privateKey: privateKey,
+            licenseKey: nil,
+            licenseMachineID: licenseMachineID
+        ).encodedData()
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        #expect(Set(object.keys) == [
+            "schemaVersion", "githubAppId", "githubPrivateKey", "licenseMachineId"
+        ])
+        #expect(object["schemaVersion"] as? Int == 3)
+        #expect(object["githubAppId"] as? String == appID)
+        #expect(object["githubPrivateKey"] as? String == privateKey)
         #expect(object["licenseMachineId"] as? String == licenseMachineID)
     }
 

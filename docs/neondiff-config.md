@@ -16,7 +16,7 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
   from 1.1.0, review of repositories that GitHub reports as public is free (no
   Activation Key) through the GitHub Action, `neondiff review-pr --ci`, and the
   self-hosted worker (`daemon`, `run-once`, `review-pr`, `providers verify`)
-  (the Mac app still requires activation, #1203),
+  (and the Mac app when you choose "Public repositories only", #1203),
   and private, internal,
   and unknown-visibility repository work requires mandatory API-backed
   activation. The npm CLI 1.0.x requires activation for every repository. The

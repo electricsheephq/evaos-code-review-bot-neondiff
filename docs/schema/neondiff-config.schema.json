@@ -92,6 +92,7 @@
         "cliPath": { "type": "string", "pattern": "\\S", "default": "codex" },
         "model": { "type": "string", "pattern": "\\S", "default": "gpt-6.1-sol" },
         "reasoningEffort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "default": "high" },
+        "serviceTier": { "type": "string", "enum": ["default", "priority"] },
         "timeoutMs": { "type": "integer", "minimum": 1, "default": 600000 },
         "maxOutputBytes": { "type": "integer", "minimum": 1, "default": 20971520 },
         "contextWindowTokens": { "type": "integer", "minimum": 1, "default": 500000 }

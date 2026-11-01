@@ -227,7 +227,7 @@ struct ReposView: View {
                             Text(cue.label)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(
-                                    cue == .licenseRequired || cue == .insufficientReadAccess
+                                    cue == .licenseRequired || cue == .soloOrTeamLicenseRequired || cue == .insufficientReadAccess
                                         ? NeonDiffTheme.warning
                                         : NeonDiffTheme.accent
                                 )
@@ -298,7 +298,7 @@ struct ReposView: View {
                                     Text(cue.label)
                                         .font(.caption.weight(.semibold))
                                         .foregroundStyle(
-                                            cue == .licenseRequired || cue == .insufficientReadAccess
+                                            cue == .licenseRequired || cue == .soloOrTeamLicenseRequired || cue == .insufficientReadAccess
                                                 ? NeonDiffTheme.warning
                                                 : NeonDiffTheme.accent
                                         )

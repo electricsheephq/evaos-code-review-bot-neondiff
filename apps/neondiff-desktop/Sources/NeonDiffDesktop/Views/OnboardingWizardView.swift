@@ -221,6 +221,15 @@ struct OnboardingWizardView: View {
                 )
             }
 
+            Picker("Review Mode", selection: $model.onboardingFlow.mode) {
+                Text("Public repositories only").tag(OnboardingMode.publicReposOnly)
+                Text("Private repositories").tag(OnboardingMode.privateRepos)
+            }
+            .onAppear { model.syncActivationEntryFromOnboardingMode() }
+            .onChange(of: model.onboardingFlow.mode) { _, _ in
+                model.syncActivationEntryFromOnboardingMode()
+            }
+
             Text("This public paid BYO beta uses a GitHub App owned by you. Paste the App ID and its unencrypted private-key PEM. The private key is stored only in this Mac's Keychain and plaintext input is cleared after every attempt.")
                 .operatorBodyText()
                 .fixedSize(horizontal: false, vertical: true)
@@ -769,10 +778,7 @@ struct OnboardingWizardView: View {
                     LabeledContent("Repository", value: repository)
                         .foregroundStyle(NeonDiffTheme.textPrimary)
                 }
-                LabeledContent(
-                    "License",
-                    value: model.licenseSetupReady ? "active" : "activation required"
-                )
+                LabeledContent("License", value: model.setupSummaryLicenseText)
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                 if model.existingLocalBotReconciliationMode {
                     Text("This existing setup remains read-only until current GitHub and repository entitlement checks pass for new work.")

@@ -8,7 +8,8 @@ import {
   type CodexExecInvocation,
   type CodexProcessResult,
   type CodexReadConfinement,
-  type CodexReasoningEffort
+  type CodexReasoningEffort,
+  type CodexServiceTier
 } from "./codex-runtime.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
@@ -228,6 +229,7 @@ export async function runIssueAnalysis(input: {
   cliPath: string;
   model: string;
   reasoningEffort: CodexReasoningEffort;
+  serviceTier?: CodexServiceTier;
   timeoutMs: number;
   maxOutputBytes: number;
 }, dependencies: {
@@ -250,6 +252,7 @@ export async function runIssueAnalysis(input: {
     cliPath: input.cliPath,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
+    serviceTier: input.serviceTier,
     evidenceDir: input.evidenceDir,
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,
@@ -271,6 +274,7 @@ export async function runIssueAnalysis(input: {
     cliPath: input.cliPath,
     model: input.model,
     reasoningEffort: input.reasoningEffort,
+    serviceTier: input.serviceTier,
     evidenceDir: input.evidenceDir,
     timeoutMs: input.timeoutMs,
     maxOutputBytes: input.maxOutputBytes,

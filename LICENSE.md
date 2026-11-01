@@ -24,8 +24,9 @@ You may use NeonDiff 1.1.0 or later through the GitHub Action,
 `neondiff review-pr --ci`, or the self-hosted worker (`daemon`, `run-once`,
 `review-pr`, `providers verify`) to review repositories that GitHub reports as
 public without a license key, including commercial and company-owned public
-repositories. Earlier releases and the Mac app still require a license key for
-every repository; keyless Mac review is tracked in issue #1203. You supply your
+repositories. The same applies to the Mac app in builds that offer the "Public
+repositories only" setup choice, when that choice is selected. Earlier releases
+require a license key for every repository. You supply your
 own model provider account and key, and you are responsible for its costs and terms.
 
 ## Paid License

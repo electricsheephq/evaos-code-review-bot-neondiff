@@ -95,6 +95,19 @@ function expectCredentialSmokeClean(fixture: string, text: string): void {
 }
 
 describe("NeonDiff config schema draft", () => {
+  it("validates optional Codex service tiers without assigning a default", () => {
+    const validate = compileSchema();
+    const base = readJson(join(fixtureRoot, "valid-minimal.json"));
+    for (const serviceTier of [undefined, "default", "priority"]) {
+      expect(validateConfig(validate, { ...base, codexRuntime: serviceTier === undefined ? {} : { serviceTier } })).toEqual([]);
+    }
+    for (const serviceTier of ["flex", "fast", "", 1]) {
+      expect(errorPaths(validateConfig(validate, { ...base, codexRuntime: { serviceTier } })))
+        .toContain("/codexRuntime/serviceTier");
+    }
+    expect(get("properties.codexRuntime.properties.serviceTier.default", readJson(schemaPath))).toBeUndefined();
+  });
+
   it("publishes a conservative public .neondiff.yml schema contract for issue 109", () => {
     const schema = readJson(schemaPath);
     const properties = asRecord(schema.properties);
