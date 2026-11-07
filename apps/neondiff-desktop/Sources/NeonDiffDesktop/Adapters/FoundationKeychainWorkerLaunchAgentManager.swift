@@ -89,22 +89,34 @@ struct FoundationKeychainWorkerLaunchAgentManager:
 
             try writeAtomically(data, to: plistURL)
             do {
-            try restartLaunchAgent(
+                try restartLaunchAgent(
                     label: request.launchdLabel,
                     plistURL: plistURL
                 )
-            } catch {
+            } catch let restartError {
                 if let previousData {
-                    try? writeAtomically(previousData, to: plistURL)
-                    try? restartLaunchAgent(
+                    let restoreWritten =
+                        (try? writeAtomically(previousData, to: plistURL)) != nil
+                    let restoredRestarted = (try? restartLaunchAgent(
                         label: request.launchdLabel,
                         plistURL: plistURL
+                    )) != nil
+                    let previousPlist = try? PropertyListSerialization.propertyList(
+                        from: previousData,
+                        options: [],
+                        format: nil
+                    ) as? [String: Any]
+                    throw WorkerLaunchAgentRuntimeError.restartFailed(
+                        reason: restartError.localizedDescription,
+                        restoreWritten: restoreWritten,
+                        restoredRestarted: restoredRestarted,
+                        previousProcessType: previousPlist?["ProcessType"] as? String
                     )
                 } else {
                     try? bootoutLaunchAgent(label: request.launchdLabel)
                     try? fileManager.removeItem(at: plistURL)
                 }
-                throw error
+                throw restartError
             }
             return "Installed and started the Keychain-backed background worker. The background worker reviews new pull requests on the repositories you enrolled and posts its reviews; in dry-run mode it writes them to local evidence instead. One-off native live PR posts outside the background worker still require an exact scoped dry review and same-head confirmation."
         }.value
@@ -162,6 +174,12 @@ struct FoundationKeychainWorkerLaunchAgentManager:
 
 private enum WorkerLaunchAgentRuntimeError: Error, LocalizedError {
     case conflictingLaunchAgent
+    case restartFailed(
+        reason: String,
+        restoreWritten: Bool,
+        restoredRestarted: Bool,
+        previousProcessType: String?
+    )
     case invalidCoordinates
     case launchctlFailed
     case launchctlTimedOut
@@ -172,6 +190,13 @@ private enum WorkerLaunchAgentRuntimeError: Error, LocalizedError {
         switch self {
         case .conflictingLaunchAgent:
             "The existing LaunchAgent does not match the selected Keychain-only NeonDiff worker."
+        case let .restartFailed(reason, restoreWritten, restoredRestarted, previousProcessType):
+            DesktopKeychainWorkerLaunchAgentContract.restartFailureMessage(
+                reason: reason,
+                restoreWritten: restoreWritten,
+                restoredRestarted: restoredRestarted,
+                previousProcessType: previousProcessType
+            )
         case .invalidCoordinates:
             "The signed app, account config, or sealed worker could not be validated."
         case .launchctlFailed:

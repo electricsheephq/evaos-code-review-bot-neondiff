@@ -60,6 +60,29 @@ import NeonDiffDesktopCore
         )
     }
 
+    @Test func restartFailureMessageReportsRollbackOutcome() {
+        let reason = "The worker could not be restarted."
+        let cases: [(restoreWritten: Bool, restoredRestarted: Bool, processType: String?, detail: String)] = [
+            (true, true, "Background", "The previous LaunchAgent was restored and restarted, so its launch policy did not change (ProcessType stays Background)."),
+            (true, true, "Standard", "The previous LaunchAgent was restored and restarted, so its launch policy did not change (ProcessType stays Standard)."),
+            (true, true, nil, "The previous LaunchAgent was restored and restarted, so its launch policy did not change."),
+            (true, true, "", "The previous LaunchAgent was restored and restarted, so its launch policy did not change."),
+            (true, false, "Background", "The previous LaunchAgent file was restored, but launchd could not restart it. Press Install & Start or Start/Restart again, or check daemon status."),
+            (false, true, "Background", "The previous LaunchAgent could not be restored; the new LaunchAgent is running."),
+            (false, false, "Background", "The previous LaunchAgent could not be restored, and launchd could not start the worker. Check daemon status before retrying.")
+        ]
+        for testCase in cases {
+            let message = DesktopKeychainWorkerLaunchAgentContract.restartFailureMessage(
+                reason: reason,
+                restoreWritten: testCase.restoreWritten,
+                restoredRestarted: testCase.restoredRestarted,
+                previousProcessType: testCase.processType
+            )
+            #expect(message == "\(reason) \(testCase.detail)")
+            #expect(message.hasPrefix("\(reason) "))
+        }
+    }
+
     @Test func restartObservationCoversDelayedLaunchdSpawn() {
         let observationWindowMicroseconds =
             DesktopKeychainWorkerLaunchAgentContract
@@ -87,6 +110,14 @@ import NeonDiffDesktopCore
             request: request,
             appExecutableURL: appExecutable
         )
+        let root = try #require(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        #expect(root["ProcessType"] as? String == "Standard")
         let text = String(decoding: data, as: UTF8.self)
 
         #expect(!text.localizedCaseInsensitiveContains("private key"))
@@ -103,6 +134,63 @@ import NeonDiffDesktopCore
             )
         )
         #expect(parsed == request)
+    }
+
+    @Test func plistAcceptsOnlySupportedProcessTypes() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let request = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: config.path,
+            launchdLabel: label,
+            homeDirectory: home
+        )
+        let data = try DesktopKeychainWorkerLaunchAgentContract.propertyListData(
+            request: request,
+            appExecutableURL: appExecutable
+        )
+        let root = try #require(
+            PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        let cases: [(value: Any?, accepted: Bool)] = [
+            ("Background", true),
+            ("Standard", true),
+            ("Adaptive", false),
+            ("Interactive", false),
+            ("", false),
+            (1, false),
+            (nil, false)
+        ]
+        for testCase in cases {
+            var variant = root
+            variant["ProcessType"] = testCase.value
+            let variantData = try PropertyListSerialization.data(
+                fromPropertyList: variant,
+                format: .xml,
+                options: 0
+            )
+            let parsed = DesktopKeychainWorkerLaunchAgentContract.parsePropertyList(
+                variantData,
+                expectedLabel: label,
+                homeDirectory: home,
+                appExecutableIsSafe: { $0 == self.appExecutable },
+                configExists: { $0 == config }
+            )
+            #expect(parsed == (testCase.accepted ? request : nil))
+            #expect(DesktopKeychainWorkerLaunchAgentContract.propertyListMatchesRequest(
+                variantData,
+                request: request,
+                homeDirectory: home,
+                appExecutableIsSafe: { $0 == self.appExecutable },
+                configExists: { $0 == config }
+            ) == testCase.accepted)
+        }
     }
 
     @Test func sealedWorkerDaemonArgumentsAreLiveAndSecretFree() throws {
@@ -234,7 +322,7 @@ import NeonDiffDesktopCore
         ))
         #expect(preview.contains("EnvironmentVariables: none"))
         #expect(preview.contains(
-            "RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua"
+            "RunAtLoad=true; KeepAlive=true; ProcessType=Standard; Session=Aqua"
         ))
         #expect(preview.contains("stdout=/dev/null; stderr=/dev/null"))
         #expect(preview.contains("The background worker reviews new pull requests on the repositories you enrolled and posts its reviews"))
@@ -282,7 +370,10 @@ import NeonDiffDesktopCore
         ) == nil)
     }
 
-    @Test func exactLegacyLaunchAgentCanBeReplacedWithDeviceBoundContract() throws {
+    @Test(arguments: ["Background", "Standard"])
+    func exactLegacyLaunchAgentCanBeReplacedWithDeviceBoundContract(
+        processType: String
+    ) throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
         )
@@ -308,6 +399,7 @@ import NeonDiffDesktopCore
         var arguments = try #require(legacy["ProgramArguments"] as? [String])
         arguments.removeLast(2)
         legacy["ProgramArguments"] = arguments
+        legacy["ProcessType"] = processType
         let legacyData = try PropertyListSerialization.data(
             fromPropertyList: legacy,
             format: .xml,
@@ -329,6 +421,13 @@ import NeonDiffDesktopCore
             configExists: { $0 == config },
             legacyLicenseMachineID: licenseMachineID
         ) == request)
+        #expect(DesktopKeychainWorkerLaunchAgentContract.propertyListMatchesRequest(
+            legacyData,
+            request: request,
+            homeDirectory: home,
+            appExecutableIsSafe: { $0 == self.appExecutable },
+            configExists: { $0 == config }
+        ))
     }
 
     @Test func legacyReplacementMustMatchTheSelectedBotCoordinates() throws {
