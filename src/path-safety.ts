@@ -31,8 +31,20 @@ export function getProtectedCheckoutRoots(): string[] {
   ]);
 }
 
+// Read once while this module evaluates. In the sealed Desktop worker (a Node single-executable
+// application with an ES module main), import.meta.url reads as undefined once the event loop has
+// idled, so a late read made every config load throw before the daemon's first cycle.
+const moduleUrlAtLoad: unknown = import.meta.url;
+
 export function getInstalledPackageRoot(): string | undefined {
-  return findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+  return packageRootFromModuleUrl(moduleUrlAtLoad);
+}
+
+export function packageRootFromModuleUrl(moduleUrl: unknown): string | undefined {
+  // Without a file URL there is no installed package around this code to protect (a sealed worker
+  // has no package.json above its executable), so this root is omitted; the other roots still apply.
+  if (typeof moduleUrl !== "string" || !moduleUrl.startsWith("file:")) return undefined;
+  return findPackageRoot(dirname(fileURLToPath(moduleUrl)));
 }
 
 export function findPackageRoot(startPath: string): string | undefined {
