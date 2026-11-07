@@ -57,6 +57,12 @@ export async function resolveRuntimeGitHubCredentials(
   return { appId, privateKey };
 }
 
+// The signed Desktop runner writes this envelope only after it has verified the running worker's code
+// signature. On a loaded Mac at the LaunchAgent's background priority that check took 95 s for the
+// 139 MB worker, so the old 5 s wait ended most starts. The runner is the only writer and closes the
+// pipe after one envelope, so a closed pipe still fails fast.
+export const RUNTIME_CREDENTIAL_STDIN_TIMEOUT_MS = 300_000;
+
 export async function resolveRuntimeCredentialEnvelope(input: {
   command?: string;
   subcommand?: string;
@@ -76,7 +82,7 @@ export async function resolveRuntimeCredentialEnvelope(input: {
     || input.runtimeCredentialsStdin !== "true") {
     throw new Error("--runtime-credentials-stdin must be supplied exactly once with value true");
   }
-  const raw = await readSecretFromStdin(input.stdin, 72 * 1024, 5_000);
+  const raw = await readSecretFromStdin(input.stdin, 72 * 1024, RUNTIME_CREDENTIAL_STDIN_TIMEOUT_MS);
   let envelope: unknown;
   try {
     envelope = JSON.parse(raw);
