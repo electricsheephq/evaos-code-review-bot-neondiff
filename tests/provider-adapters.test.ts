@@ -1,3 +1,4 @@
+import { fetchErrorMessages } from "./fetch-error-fixtures.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -17,6 +18,10 @@ import type { ProviderRegistryEntry } from "../src/providers.js";
 import { createZCodeReviewFixtureAdapter } from "../src/zcode.js";
 
 describe("provider adapter fixtures", () => {
+  it.each(fetchErrorMessages)("ignores fetch cause diagnostics: $full", ({ base, full }) => {
+    expect(classifyProviderAdapterError(full)).toBe(classifyProviderAdapterError(base));
+  });
+
   it("runs one shared review fixture through mocked ZCode and local OpenAI-compatible adapters", async () => {
     const reviewJson = '{"findings":[],"summary":"No validated current-diff findings."}';
     const sharedFixture = makeFixture({

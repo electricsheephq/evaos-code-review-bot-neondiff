@@ -28,6 +28,7 @@ for the semver/GA-line and npm dist-tag policy.
   To manage it from the older app again, set `ProcessType` back to `Background`,
   or remove the plist and press Install & Start.
   Refs #1253.
+- GitHub transport failures retain their existing text and include bounded, redacted cause-chain diagnostics without changing error classification. Refs #1254.
 
 ## [1.1.1] - docs/releases/v1.1.1.md
 

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripFetchCauseChain } from "./fetch-error-detail.js";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
   buildCommandStatusBody,
@@ -4278,7 +4279,7 @@ export function buildRetryDegradedRuntimeNote(attempts: number, degradedRecovery
 }
 
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = stripFetchCauseChain(error instanceof Error ? error.message : String(error));
   const normalized = message.toLowerCase();
   const providerCode = extractProviderCode(message);
   const providerRequestId = extractProviderRequestId(message);
@@ -4319,7 +4320,7 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
   // Persistent model-output-schema/parse failures (#304): retryable within runWithProviderRetry's
   // bounded attempt budget (attempt < maxAttempts), but NOT a provider cooldown — it is a model
   // formatting problem, not a rate/quota/overload signal. The bound guarantees no infinite loop.
-  if (isZCodeSchemaFailureError(error)) {
+  if (isZCodeSchemaFailureError(message)) {
     return { ...base, category: "model_output_schema", reason: "model_output_schema_failure", retryable: true, cooldown: false };
   }
   return {

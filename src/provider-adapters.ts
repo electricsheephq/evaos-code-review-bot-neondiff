@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { stripFetchCauseChain } from "./fetch-error-detail.js";
 import {
   REVIEW_FINDINGS_JSON_SCHEMA,
   REVIEW_FINDINGS_JSON_SCHEMA_NAME,
@@ -188,6 +189,7 @@ export async function runProviderAdapterFixture(input: {
 }
 
 export function classifyProviderAdapterError(message: string): ProviderAdapterErrorClass {
+  message = stripFetchCauseChain(message);
   const normalized = message.toLowerCase();
   if (/\b(unauthorized|forbidden|invalid[ _-]api[ _-]key|missing[ _-]api[ _-]key|401|403)\b/.test(normalized)) return "auth";
   if (/\b(rate[ _-]limit|quota|too many requests|429|insufficient[ _-]quota|throttl(?:e|ed|ing))\b/.test(normalized)) return "throttle";

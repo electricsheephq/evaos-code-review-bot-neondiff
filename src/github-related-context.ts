@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stripFetchCauseChain } from "./fetch-error-detail.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary } from "./types.js";
 
@@ -754,7 +755,7 @@ function isRateLimitLikeError(error: unknown): boolean {
   const status = typeof error === "object" && error !== null && "status" in error
     ? Number((error as { status?: unknown }).status)
     : undefined;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = stripFetchCauseChain(error instanceof Error ? error.message : String(error));
   return status === 403 || status === 429 || /\b(rate limit|abuse|secondary rate limit)\b/i.test(message);
 }
 
