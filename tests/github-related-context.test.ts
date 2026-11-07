@@ -324,6 +324,29 @@ describe("GitHub related context packets", () => {
     ]);
   });
 
+  it("keeps fetching when only a fetch failure's cause chain mentions a rate limit", async () => {
+    const calls: string[] = [];
+    const result = await buildGitHubRelatedContextPacket({
+      repo: "owner/repo",
+      pull: pull({ body: "Refs #1 #2" }),
+      config: config(),
+      reader: {
+        async getIssueOrPull(repo, number) {
+          calls.push(`${repo}#${number}`);
+          throw new Error(`GitHub API fetch failed for GET /repos/${repo}/issues/${number} [cause-chain: code=ECONNRESET; Error: upstream rate limit proxy]`);
+        }
+      },
+      generatedAt: "2026-07-02T00:00:00.000Z"
+    });
+
+    expect(calls).toEqual(["owner/repo#1", "owner/repo#2"]);
+    if (!result.ok) throw new Error("expected packet build to pass");
+    expect(result.packet.omittedReferences).toEqual([
+      expect.objectContaining({ id: "owner/repo#1", reason: "fetch_failed", detail: expect.stringContaining("[cause-chain: code=ECONNRESET") }),
+      expect.objectContaining({ id: "owner/repo#2", reason: "fetch_failed" })
+    ]);
+  });
+
   it("adds GitHub related context to the review prompt as advisory context", async () => {
     const result = await buildGitHubRelatedContextPacket({
       repo: "owner/repo",

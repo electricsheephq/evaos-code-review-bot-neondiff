@@ -7,6 +7,7 @@ import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import { readIssueEventHistory, type IssueEventPaginationReceipt, type IssueEventTerminal } from "./issue-event-pagination-state.js";
 import type { IssueEnrichmentIssueList } from "./issue-enrichment.js";
 import { redactSecrets } from "./secrets.js";
+import { describeFetchErrorCauseChain, stripFetchCauseChain } from "./fetch-error-detail.js";
 import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
@@ -944,7 +945,7 @@ function describeGitHubAccessError(error: unknown): Pick<
     };
   }
   return {
-    github_api_error_class: error instanceof Error && /fetch failed|timed out|AbortError/i.test(error.message) ? "network" : "unknown",
+    github_api_error_class: error instanceof Error && /fetch failed|timed out|AbortError/i.test(stripFetchCauseChain(error.message)) ? "network" : "unknown",
     github_api_error: redactSecrets(error instanceof Error ? error.message : String(error))
   };
 }
@@ -962,6 +963,7 @@ function classifyGitHubApiRequestError(error: GitHubApiRequestError): GitHubRepo
 }
 
 function isIssueLookupMissingOrUnreadable(message: string, path: string): boolean {
+  message = stripFetchCauseChain(message);
   const marker = `for ${path}:`;
   const markerIndex = message.indexOf(marker);
   if (markerIndex === -1) return false;
@@ -985,7 +987,9 @@ function describeFetchError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const cause = "cause" in error ? (error as Error & { cause?: unknown }).cause : undefined;
   const causeMessage = cause instanceof Error ? `${cause.name}: ${cause.message}` : cause ? String(cause) : "";
-  return causeMessage ? `${error.message}; cause=${causeMessage}` : error.message;
+  const base = causeMessage ? `${error.message}; cause=${causeMessage}` : error.message;
+  const detail = describeFetchErrorCauseChain(error);
+  return detail ? `${base} [cause-chain: ${detail}]` : base;
 }
 
 export function createAppJwt(appId: string, privateKey: string, nowSeconds = Math.floor(Date.now() / 1000)): string {

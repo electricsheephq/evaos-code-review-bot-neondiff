@@ -73,6 +73,7 @@ describe("portable defaults and supported LaunchAgent example", () => {
     expect(plist).toContain("gated generated installation");
     expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<false\/>/);
     expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<false\/>/);
+    expect(plist).toMatch(/<key>ProcessType<\/key>\s*<string>Standard<\/string>/);
     expect(plist).not.toContain("EnvironmentVariables");
     expect(plist).not.toMatch(/node_modules|tsx|private-key|secret|token/i);
   });

@@ -42,6 +42,7 @@ evaos-review-bot status --config config.local.json
   every PR head is covered but a durable queue row is failed or ready to retry.
   Durable queue summaries include the oldest waiting repo/head age so burst
   backlogs can be diagnosed without hand-querying SQLite.
+  In failure evidence, `[cause-chain: ...]` adds bounded transport cause diagnostics; the readiness reason may be truncated at 500 characters while `last_error` keeps the full text.
 - `dashboard --operator true`: read-only PR review dashboard over coverage, durable queue,
   readiness lifecycle rows, GitHub PR links, and local evidence-path hints.
   Filter with `--repo`, `--status`, `--priority`, `--stale-head-reason`, and

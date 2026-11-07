@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { textMentionsHost } from "./url-safety.js";
+import { stripFetchCauseChain } from "./fetch-error-detail.js";
 
 export interface ProviderThrottleReportOptions {
   statePath: string;
@@ -387,6 +388,7 @@ function emptyCounts(): ProviderThrottleCounts {
 }
 
 function classifyProviderThrottle(error: string): ProviderThrottleCategory | undefined {
+  error = stripFetchCauseChain(error);
   const normalized = error.toLowerCase();
   const codes = extractProviderCodes(error);
 
@@ -486,6 +488,7 @@ function addRetryOutcome(report: ProviderThrottleReport, event: ProviderThrottle
 }
 
 function extractProviderCodes(error: string): string[] {
+  error = stripFetchCauseChain(error);
   const codes = new Set<string>();
   for (const match of error.matchAll(EXPLICIT_PROVIDER_CODES)) {
     if (match[1]) codes.add(match[1]);
