@@ -206,6 +206,14 @@ describe("GitHub App read authentication", () => {
     }
   });
 
+  it("does not read a GitHub status found only in the cause chain as a missing issue", async () => {
+    const inner = new Error("GitHub API 404 Not Found for /repos/owner/repo/issues/1: upstream proxy");
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed", { cause: Object.assign(new Error("socket hang up"), { cause: inner }) }));
+    await expect(new GitHubApi({}).getIssueOrPull("owner/repo", 1, { tolerateUnreadable: true })).rejects.toThrow(
+      "GitHub API fetch failed for /repos/owner/repo/issues/1: fetch failed; cause=Error: socket hang up [cause-chain: Error: GitHub API 404 Not Found"
+    );
+  });
+
   it("binds a created review to the validated expected commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-create-review-head-"));
     roots.push(root);
