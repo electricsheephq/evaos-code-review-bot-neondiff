@@ -149,6 +149,8 @@ import {
 
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
+// Read while the module evaluates; see moduleUrlAtLoad in path-safety.ts for why a late read fails.
+const cliModuleUrlAtLoad: unknown = import.meta.url;
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -2752,7 +2754,10 @@ function buildInitializedConfig(exampleConfig: string, configPath: string): stri
 }
 
 function resolvePackageRoot(): string {
-  for (const start of [dirname(fileURLToPath(import.meta.url)), process.cwd()]) {
+  const starts = typeof cliModuleUrlAtLoad === "string" && cliModuleUrlAtLoad.startsWith("file:")
+    ? [dirname(fileURLToPath(cliModuleUrlAtLoad)), process.cwd()]
+    : [process.cwd()];
+  for (const start of starts) {
     let cursor = resolve(start);
     while (true) {
       if (isNeonDiffPackageRoot(cursor)) {
