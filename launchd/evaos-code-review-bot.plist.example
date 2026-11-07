@@ -33,7 +33,7 @@
   <key>KeepAlive</key>
   <false/>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
   <key>ThrottleInterval</key>

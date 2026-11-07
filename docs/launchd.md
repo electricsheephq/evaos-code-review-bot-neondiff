@@ -107,3 +107,20 @@ operator-owned path with `--plist`; an external path still requires
 After a confirmed start, verify a new PID and a current heartbeat with `daemon
 status` or `runtime-inventory`. A plist on disk, `RunAtLoad`, or `KeepAlive`
 alone is not proof that the service is registered or healthy.
+
+## Desktop worker launch policy
+
+From 1.1.0-beta.95, the Desktop worker LaunchAgent runs at
+`ProcessType=Standard`. The previous `Background` policy means low CPU priority
+and I/O throttling, which starved reviews under load. The app accepts both
+policies. Existing Background installs upgrade the next time the user presses
+Install & Start or Start/Restart in the onboarding daemon step; there is no automatic migration
+on app launch or after a Sparkle update.
+
+On beta.94 or older, a `Standard` plist is not recognized. Install & Start reports
+a conflicting LaunchAgent, and scoped review says no verified local agent is
+connected. The running worker keeps running. Stop works only when a separately
+installed `neondiff` CLI is on the app's search path; otherwise stop the worker
+with `launchctl bootout gui/$(id -u)/com.electricsheephq.evaos-code-review-bot`.
+To manage it from the older app again, set `ProcessType` back to `Background`,
+or remove the plist and press Install & Start.

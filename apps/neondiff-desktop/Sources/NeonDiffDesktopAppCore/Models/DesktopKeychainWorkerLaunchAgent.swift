@@ -161,6 +161,8 @@ package enum DesktopKeychainWorkerLaunchAgentRestartOutcome: Equatable {
 }
 
 package enum DesktopKeychainWorkerLaunchAgentContract {
+    package static let installedProcessType = "Standard"
+    package static let acceptedProcessTypes: Set<String> = ["Background", "Standard"]
     package static let headlessFlag = "--neondiff-worker-daemon"
     package static let issueRunFlag = "--neondiff-worker-issue-run"
     package static let restartObservationAttempts = 120
@@ -189,6 +191,30 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             return .accepted
         }
         return bootstrapStatus == 0 ? .notReady : .launchctlRejected
+    }
+
+    package static func restartFailureMessage(
+        reason: String,
+        restoreWritten: Bool,
+        restoredRestarted: Bool,
+        previousProcessType: String?
+    ) -> String {
+        guard restoreWritten else {
+            if restoredRestarted {
+                return "\(reason) The previous LaunchAgent could not be restored; the new LaunchAgent is running."
+            }
+            return "\(reason) The previous LaunchAgent could not be restored, and launchd could not start the worker. Check daemon status before retrying."
+        }
+        guard restoredRestarted else {
+            return "\(reason) The previous LaunchAgent file was restored, but launchd could not restart it. Press Install & Start or Start/Restart again, or check daemon status."
+        }
+        let processTypeNote: String
+        if let previousProcessType, !previousProcessType.isEmpty {
+            processTypeNote = " (ProcessType stays \(previousProcessType))"
+        } else {
+            processTypeNote = ""
+        }
+        return "\(reason) The previous LaunchAgent was restored and restarted, so its launch policy did not change\(processTypeNote)."
     }
 
     package static func headlessArguments(
@@ -296,7 +322,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         ProgramArguments: \(redactedArguments)
         Sealed worker: \(sealedWorkerPath)
         EnvironmentVariables: none
-        Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua; stdout=/dev/null; stderr=/dev/null.
+        Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=\(installedProcessType); Session=Aqua; stdout=/dev/null; stderr=/dev/null.
         The background worker reviews new pull requests on the repositories you enrolled and posts its reviews; in dry-run mode it writes them to local evidence instead.
         One-off native live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only.
         Credentials: Keychain-only at runtime; no secret values in the plist, arguments, or environment.
@@ -321,7 +347,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
                 [executable.path] + headlessArguments(request: request),
             "RunAtLoad": true,
             "KeepAlive": true,
-            "ProcessType": "Background",
+            "ProcessType": installedProcessType,
             "LimitLoadToSessionType": "Aqua",
             "ThrottleInterval": 10,
             "StandardOutPath": "/dev/null",
@@ -366,7 +392,8 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         root["Label"] as? String == expectedLabel,
         root["RunAtLoad"] as? Bool == true,
         root["KeepAlive"] as? Bool == true,
-        root["ProcessType"] as? String == "Background",
+        let processType = root["ProcessType"] as? String,
+        acceptedProcessTypes.contains(processType),
         root["LimitLoadToSessionType"] as? String == "Aqua",
         root["ThrottleInterval"] as? Int == 10,
         root["StandardOutPath"] as? String == "/dev/null",

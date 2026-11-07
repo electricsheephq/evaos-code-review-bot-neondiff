@@ -14,6 +14,21 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Desktop worker LaunchAgents use `ProcessType=Standard` from 1.1.0-beta.95
+  to avoid Background CPU priority and I/O throttling starving reviews under
+  load. Existing Background installs remain recognized and upgrade the next time
+  the user presses Install & Start or Start/Restart in the onboarding daemon step.
+  On beta.94 or older, a `Standard` plist is not recognized. Install & Start reports
+  a conflicting LaunchAgent, and scoped review says no verified local agent is
+  connected. The running worker keeps running. Stop works only when a separately
+  installed `neondiff` CLI is on the app's search path; otherwise stop the worker
+  with `launchctl bootout gui/$(id -u)/com.electricsheephq.evaos-code-review-bot`.
+  To manage it from the older app again, set `ProcessType` back to `Background`,
+  or remove the plist and press Install & Start.
+  Refs #1253.
+
 ## [1.1.1] - docs/releases/v1.1.1.md
 
 ### Fixed
