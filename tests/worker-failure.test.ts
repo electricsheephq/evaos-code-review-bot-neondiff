@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import type { GitNexusCommandRunner } from "../src/gitnexus-context.js";
-import type { GitHubApi } from "../src/github.js";
+import { GitHubApiRequestError, GitHubApiTimeoutError, type GitHubApi } from "../src/github.js";
+import { GitCommandError } from "../src/git.js";
 import { ReviewRunBudget } from "../src/review-budget.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary, RepositorySummary } from "../src/types.js";
@@ -18,6 +19,7 @@ import {
   buildGitHubRelatedContext,
   buildSkillPackContext,
   classifyProviderError,
+  classifyAutoRetry,
   createGitHubRelatedContextReader,
   isSuccessfulRetryStatus,
   localDateFolder,
@@ -53,6 +55,52 @@ describe("worker review failures", () => {
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each<[string, unknown, boolean]>([
+    ...(["timeout", "exit_nonzero", "spawn_error"] as const).map((failureKind) => [
+      `git ${failureKind}`, new GitCommandError({ failureKind, timeoutMs: 100 }), failureKind === "timeout"
+    ] as [string, unknown, boolean]),
+    ["GitHub timeout", new GitHubApiTimeoutError({ path: "/x", timeoutMs: 100 }), true],
+    ...[500, 502, 503, 504, 404, 422].map((status) => [
+      `GitHub ${status}`, new GitHubApiRequestError({ status, statusText: "fixture", path: "/x", responseText: "" }), status >= 500
+    ] as [string, unknown, boolean]),
+    ["transport", new Error("GitHub API fetch failed for /x: fetch failed; cause=SocketError: other side closed"), true],
+    ["codex nonzero", new Error("codex_runtime_nonzero_exit: 1"), true],
+    ["secret", new Error("codex_runtime_secret_output: fixture"), false],
+    ["unsafe write", new Error("codex_runtime_unsafe_write_attempt: fixture"), false],
+    ["POST attempted", Object.assign(new GitHubApiTimeoutError({ path: "/x", timeoutMs: 100 }), { reviewPostAttempted: true }), false],
+    ["authorization consumed", Object.assign(new Error("codex_runtime_nonzero_exit"), { eventAuthorizationConsumed: true }), false],
+    ["already posted", Object.assign(new Error("codex_runtime_nonzero_exit"), { reviewAlreadyPosted: true }), false],
+    ["unknown", new Error("unknown"), false],
+    ["cause", new Error("wrapper", { cause: new GitCommandError({ failureKind: "timeout", timeoutMs: 100 }) }), true],
+    ["terminal wrapper", new Error("codex_runtime_secret_output", { cause: new GitCommandError({ failureKind: "timeout", timeoutMs: 100 }) }), false],
+    ["deep cause excluded", new Error("wrapper", { cause: new Error("wrapper", { cause: new GitCommandError({ failureKind: "timeout", timeoutMs: 100 }) }) }), false]
+  ])("classifies auto-retry %s", (_name, error, retryable) => {
+    expect(classifyAutoRetry(error).retryable).toBe(retryable);
+  });
+
+  it("leaves provider failures to their owner and caps ZCode hard timeouts at one retry", () => {
+    expect(classifyAutoRetry(new Error("rate limit reached"))).toEqual({ retryable: false, reason: "provider_classified" });
+    expect(classifyAutoRetry(new Error("ZCode failed before completion: ETIMEDOUT"))).toMatchObject({ retryable: true, maxRetries: 1 });
+  });
+
+  it("a successful manual retry cancels pending automatic work without rewriting a claimed auto job", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-manual-auto-retry-")); roots.push(root);
+    const config = minimalConfig(root); const state = new ReviewStateStore(config.statePath);
+    const repo = "electricsheephq/WorldOS"; const pull = pullSummary(593, "d".repeat(40));
+    const key = { repo, pullNumber: pull.number, headSha: pull.head.sha };
+    state.recordProcessed({ ...key, status: "failed", error: "fixture" });
+    state.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 2, delaysMs: [600000, 1800000] });
+    const job = state.enqueueReviewQueueJob({ ...key, attemptId: "automatic:fixture:auto-retry=1" }).job;
+    try {
+      const result = await retryFailedHeadWithDeps({ config, state, github: { getPull: async () => pull, canPost: () => false } as unknown as GitHubApi,
+        budget: new ReviewRunBudget(1), options: { ...key, dryRun: false },
+        reviewPullImpl: async () => { state.recordProcessed({ ...key, status: "posted", event: "COMMENT" }); return "reviewed"; } });
+      expect(result.status).toBe("reviewed");
+      expect(state.getAutoRetry(repo, pull.number, pull.head.sha)).toMatchObject({ nextEligibleAt: null, lastReason: "superseded_by_manual_retry", attempts: 1 });
+      expect(state.getReviewQueueJob(job.jobId)?.state).toBe("queued");
+    } finally { state.close(); }
   });
 
   it("denies private failed-head retries before review or status posts", async () => {
@@ -3590,6 +3638,7 @@ function minimalConfig(root: string): BotConfig {
       maxActiveRuns: 1,
       leaseTtlMs: 60_000
     },
+    reviewAutoRetry: { enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] },
     providerCooldown: {
       enabled: true,
       durationMs: 15 * 60_000,

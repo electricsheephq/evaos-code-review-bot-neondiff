@@ -78,6 +78,14 @@ export interface BotConfig {
   /** Review mode router (#266, default off / absent). Absent ⇒ byte-identical + zero evidence. */
   reviewModes?: ReviewModesConfig;
   calibrationLoop?: CalibrationLoopConfig;
+  /** Minute-scale automatic retries stack on the existing second-scale in-run retries.
+   * Default worst case: three full runs per head, each with its own untrusted-lane attempts.
+   */
+  reviewAutoRetry: {
+    enabled: boolean;
+    maxRetries: number;
+    delaysMs: number[];
+  };
   providerCooldown: {
     enabled: boolean;
     durationMs: number;
@@ -391,6 +399,7 @@ const DEFAULT_CONFIG: BotConfig = {
   riskWeightedQueue: {
     enabled: false
   },
+  reviewAutoRetry: { enabled: true, maxRetries: 2, delaysMs: [600_000, 1_800_000] },
   providerCooldown: {
     enabled: true,
     durationMs: 15 * 60_000,
@@ -772,6 +781,13 @@ function validateConfig(config: BotConfig): void {
     validateReviewModesConfig(config.reviewModes, "config.reviewModes", config);
   }
   if (config.calibrationLoop !== undefined) validateCalibrationLoopConfig(config.calibrationLoop, "config.calibrationLoop");
+  validateBoolean(config.reviewAutoRetry.enabled, "config.reviewAutoRetry.enabled");
+  validateNonNegativeInteger(config.reviewAutoRetry.maxRetries, "config.reviewAutoRetry.maxRetries");
+  if (config.reviewAutoRetry.maxRetries > 5) throw new Error("config.reviewAutoRetry.maxRetries must be at most 5");
+  if (!Array.isArray(config.reviewAutoRetry.delaysMs) || config.reviewAutoRetry.delaysMs.length < config.reviewAutoRetry.maxRetries) {
+    throw new Error("config.reviewAutoRetry.delaysMs must contain at least maxRetries delays");
+  }
+  for (const delay of config.reviewAutoRetry.delaysMs) validatePositiveInteger(delay, "config.reviewAutoRetry.delaysMs[]");
   validateBoolean(config.providerCooldown.enabled, "config.providerCooldown.enabled");
   validatePositiveInteger(config.providerCooldown.durationMs, "config.providerCooldown.durationMs");
   validatePositiveInteger(config.providerCooldown.requestRateLimitDurationMs, "config.providerCooldown.requestRateLimitDurationMs");

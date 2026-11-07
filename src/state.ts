@@ -8,6 +8,22 @@ import { ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP, ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS
 import type { IssueEnrichmentLaneReceipt } from "./issue-enrichment-receipt.js";
 import type { ReviewEvent } from "./types.js";
 
+export interface ReviewAutoRetryRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  attempts: number;
+  nextEligibleAt: string | null;
+  lastReason: string | null;
+  pinnedError: string | null;
+  pinnedProcessedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type AutoRetryKey = { repo: string; pullNumber: number; headSha: string };
+type AutoRetryScheduleResult = { granted: true; attempt: number; nextEligibleAt: string } | { granted: false };
+
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
 export type ProcessedCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
@@ -74,6 +90,15 @@ export interface ProcessedReviewRecord {
 
 export interface StoredProcessedReviewRecord extends ProcessedReviewRecord {
   createdAt: string;
+}
+
+export function autoRetryOwnsGrant(
+  retry: ReviewAutoRetryRecord | undefined,
+  attempt: number | undefined,
+  processed: StoredProcessedReviewRecord | undefined
+): boolean {
+  return processed?.status === "failed" && retry !== undefined && attempt === retry.attempts &&
+    (processed.error ?? null) === (retry.pinnedError ?? null) && processed.createdAt === retry.pinnedProcessedAt;
 }
 
 export type FindingOutcomeLabelSource =
@@ -937,6 +962,20 @@ export class ReviewStateStore {
         primary key (repo, pull_number, head_sha)
       );
 
+      create table if not exists review_auto_retries (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        attempts integer not null,
+        next_eligible_at text,
+        last_reason text,
+        pinned_error text,
+        pinned_processed_at text,
+        created_at text not null,
+        updated_at text not null,
+        primary key (repo, pull_number, head_sha)
+      );
+
       create table if not exists finishing_touch_drafts (
         repo text not null,
         pull_number integer not null,
@@ -1603,6 +1642,19 @@ export class ReviewStateStore {
   }
 
   retireFailedReview(input: RetireFailedReviewInput): StoredProcessedReviewRecord {
+    this.db.exec("begin immediate");
+    try {
+      const retired = this.retireFailedReviewInTransaction(input);
+      this.cancelPendingAutoRetry({ ...input, reason: "retired_by_operator" });
+      this.db.exec("commit");
+      return retired;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  private retireFailedReviewInTransaction(input: RetireFailedReviewInput): StoredProcessedReviewRecord {
     const existing = this.getProcessedReview(input.repo, input.pullNumber, input.headSha);
     if (!existing) {
       throw new Error(`Refusing to retire missing review row for ${input.repo}#${input.pullNumber}@${input.headSha}`);
@@ -1624,13 +1676,13 @@ export class ReviewStateStore {
 
     const reason = normalizeRetirementReason(input.reason);
     const retiredError = buildRetiredFailedHeadError({ reason, previousError: existing.error });
-    this.recordProcessed({
-      repo: input.repo,
-      pullNumber: input.pullNumber,
-      headSha: input.headSha,
-      status: "skipped",
-      error: retiredError
-    });
+    // The caller owns BEGIN IMMEDIATE; mirror recordProcessed's retirement without nesting it.
+    this.db.prepare(`update processed_reviews set status = 'skipped', error = ?, created_at = ?,
+      config_revision = null, event = null, review_url = null, base_ref = null, base_sha = null,
+      diff_fingerprint = null, carried_from_head = null where repo = ? and pull_number = ? and head_sha = ?`)
+      .run(retiredError, new Date().toISOString(), input.repo, input.pullNumber, input.headSha);
+    this.db.prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
+      .run(input.repo, input.pullNumber, input.headSha);
     this.retireFailedReviewQueueJobs({
       repo: input.repo,
       pullNumber: input.pullNumber,
@@ -2727,6 +2779,144 @@ export class ReviewStateStore {
       this.expireDrainedReviewerSessionIfComplete(existing.sessionId);
     }
     return updated;
+  }
+
+  getAutoRetry(repo: string, pullNumber: number, headSha: string): ReviewAutoRetryRecord | undefined {
+    const key = autoRetryKey({ repo, pullNumber, headSha });
+    return this.db.prepare(`select repo, pull_number as pullNumber, head_sha as headSha, attempts,
+      next_eligible_at as nextEligibleAt, last_reason as lastReason, pinned_error as pinnedError,
+      pinned_processed_at as pinnedProcessedAt, created_at as createdAt, updated_at as updatedAt
+      from review_auto_retries where repo = ? and pull_number = ? and head_sha = ?`)
+      .get(key.repo, key.pullNumber, key.headSha) as ReviewAutoRetryRecord | undefined;
+  }
+
+  scheduleAutoRetry(input: AutoRetryKey & {
+    reason: string; maxRetries: number; delaysMs: number[]; maxRetriesForError?: number; now?: Date;
+    expected?: { attempt: number };
+  }): AutoRetryScheduleResult {
+    const key = autoRetryKey(input);
+    const now = input.now ?? new Date();
+    const nowIso = now.toISOString();
+    this.db.exec("begin immediate");
+    try {
+      const failedRow = this.db.prepare(`select * from processed_reviews
+        where repo = ? collate nocase and pull_number = ? and head_sha = ? collate nocase and status = 'failed'`)
+        .get(key.repo, key.pullNumber, key.headSha) as ProcessedReviewRow | undefined;
+      const failed = failedRow ? mapProcessedReviewRow(failedRow) : undefined;
+      const previous = this.getAutoRetry(key.repo, key.pullNumber, key.headSha);
+      if (input.expected && !autoRetryOwnsGrant(previous, input.expected.attempt, failed)) {
+        this.db.exec("commit");
+        return { granted: false };
+      }
+      const attempts = previous?.attempts ?? 0;
+      const max = Math.min(input.maxRetries, input.maxRetriesForError ?? input.maxRetries);
+      if (failed?.status !== "failed" || attempts >= max) {
+        if (previous) this.db.prepare(`update review_auto_retries set last_reason = ?, updated_at = ?
+          where repo = ? and pull_number = ? and head_sha = ?`)
+          .run(input.reason, nowIso, key.repo, key.pullNumber, key.headSha);
+        this.db.exec("commit");
+        return { granted: false };
+      }
+      const delay = input.delaysMs[attempts]!;
+      // SHA-derived jitter is stable across restarts and lies in [0, 10% of delay].
+      const fraction = Number.parseInt((/^[0-9a-f]{40}$/i.test(key.headSha) ? key.headSha : createHash("sha256").update(key.headSha).digest("hex")).slice(0, 8), 16) / 0xffffffff;
+      const nextEligibleAt = new Date(now.getTime() + delay + Math.floor(delay * 0.1 * fraction)).toISOString();
+      this.db.prepare(`insert into review_auto_retries
+        (repo, pull_number, head_sha, attempts, next_eligible_at, last_reason, pinned_error, pinned_processed_at, created_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict(repo, pull_number, head_sha) do update set
+        attempts = excluded.attempts, next_eligible_at = excluded.next_eligible_at,
+        pinned_error = excluded.pinned_error, pinned_processed_at = excluded.pinned_processed_at,
+        last_reason = excluded.last_reason, updated_at = excluded.updated_at`)
+        .run(key.repo, key.pullNumber, key.headSha, attempts + 1, nextEligibleAt, input.reason,
+          failed.error ?? null, failed.createdAt, previous?.createdAt ?? nowIso, nowIso);
+      this.db.exec("commit");
+      return { granted: true, attempt: attempts + 1, nextEligibleAt };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  claimDueAutoRetry(input: AutoRetryKey & { now?: Date }): number | undefined {
+    const key = autoRetryKey(input);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const row = this.db.prepare(`update review_auto_retries set next_eligible_at = null, updated_at = ?
+      where repo = ? and pull_number = ? and head_sha = ?
+        and next_eligible_at is not null and next_eligible_at <= ?
+        and exists (select 1 from processed_reviews p where p.repo = review_auto_retries.repo collate nocase
+          and p.pull_number = review_auto_retries.pull_number and p.head_sha = review_auto_retries.head_sha collate nocase
+          and p.status = 'failed') returning attempts`)
+      .get(nowIso, key.repo, key.pullNumber, key.headSha, nowIso) as { attempts: number } | undefined;
+    return row?.attempts;
+  }
+
+  cancelPendingAutoRetry(input: AutoRetryKey & { reason: string; now?: Date }): void {
+    const key = autoRetryKey(input);
+    this.db.prepare(`update review_auto_retries set next_eligible_at = null, last_reason = ?, updated_at = ?
+      where repo = ? and pull_number = ? and head_sha = ? and next_eligible_at is not null`)
+      .run(input.reason, (input.now ?? new Date()).toISOString(), key.repo, key.pullNumber, key.headSha);
+  }
+
+  invalidateAutoRetryGrant(input: AutoRetryKey & { reason: string; now?: Date }): void {
+    const key = autoRetryKey(input);
+    this.db.prepare(`update review_auto_retries
+      set next_eligible_at = null, pinned_processed_at = null, last_reason = ?, updated_at = ?
+      where repo = ? and pull_number = ? and head_sha = ?`)
+      .run(input.reason, (input.now ?? new Date()).toISOString(), key.repo, key.pullNumber, key.headSha);
+  }
+
+  rearmAutoRetry(input: AutoRetryKey & { now?: Date }): void {
+    const key = autoRetryKey(input);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    this.db.prepare(`update review_auto_retries set next_eligible_at = ?, updated_at = ?
+      where repo = ? and pull_number = ? and head_sha = ? and next_eligible_at is null
+        and exists (select 1 from processed_reviews p where p.repo = review_auto_retries.repo collate nocase
+          and p.pull_number = review_auto_retries.pull_number and p.head_sha = review_auto_retries.head_sha collate nocase
+          and p.status = 'failed' and nullif(p.error, '') is review_auto_retries.pinned_error
+          and p.created_at = review_auto_retries.pinned_processed_at)`)
+      .run(nowIso, nowIso, key.repo, key.pullNumber, key.headSha);
+  }
+
+  cancelPendingAutoRetriesForPull(input: {
+    repo: string; pullNumber: number; exceptHeadSha?: string; reason: string; now?: Date;
+  }): void {
+    this.db.prepare(`update review_auto_retries set next_eligible_at = null, last_reason = ?, updated_at = ?
+      where repo = ? collate nocase and pull_number = ? and next_eligible_at is not null
+        and (? is null or head_sha != ? collate nocase)`)
+      .run(input.reason, (input.now ?? new Date()).toISOString(), input.repo, input.pullNumber,
+        input.exceptHeadSha ?? null, input.exceptHeadSha ?? null);
+  }
+
+  cancelPendingAutoRetriesForClosedPulls(input: { repo: string; openPullNumbers: number[]; now?: Date }): void {
+    // Only call after a complete, successful open-PR listing, never a targeted or failed poll.
+    this.db.prepare(`update review_auto_retries set next_eligible_at = null, last_reason = 'closed', updated_at = ?
+      where repo = ? collate nocase and next_eligible_at is not null
+        and pull_number not in (select value from json_each(?))`)
+      .run((input.now ?? new Date()).toISOString(), input.repo, JSON.stringify(input.openPullNumbers));
+  }
+
+  enqueueDueAutoRetry(input: Parameters<ReviewStateStore["enqueueReviewQueueJob"]>[0]): ReviewQueueEnqueueResult | undefined {
+    this.db.exec("begin immediate");
+    try {
+      const retry = this.getAutoRetry(input.repo, input.pullNumber, input.headSha);
+      const now = input.now ?? new Date();
+      if (!retry?.nextEligibleAt || retry.nextEligibleAt > now.toISOString()) {
+        this.db.exec("commit");
+        return undefined;
+      }
+      const attemptId = `${buildReviewQueueAttemptId({ ...input, source: "automatic" })}:auto-retry=${retry.attempts}`;
+      // A refused insert must leave the pending claim untouched, including already_queued.
+      const queued = this.enqueueReviewQueueJob({ ...input, source: "automatic", attemptId, priority: (input.priority ?? 50) + 10, now });
+      if (queued.enqueued && this.claimDueAutoRetry({ ...input, now }) === undefined) {
+        this.db.exec("rollback");
+        return undefined;
+      }
+      this.db.exec("commit");
+      return queued;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   enqueueReviewQueueJob(input: {
@@ -4185,6 +4375,11 @@ function validateReviewQueueInput(
   if (commentId !== undefined && (!Number.isInteger(commentId) || commentId < 1)) {
     throw new Error("commentId must be a positive integer");
   }
+}
+
+function autoRetryKey(input: AutoRetryKey): AutoRetryKey {
+  const normalized = canonicalReviewQueueIdentity(input.repo, input.headSha);
+  return { repo: normalized?.repoKey ?? input.repo, pullNumber: input.pullNumber, headSha: normalized?.headShaKey ?? input.headSha };
 }
 
 function canonicalReviewQueueIdentity(repo: unknown, headSha: unknown): { repoKey: string; headShaKey: string } | undefined {

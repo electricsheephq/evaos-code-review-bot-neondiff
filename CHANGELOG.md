@@ -29,6 +29,12 @@ for the semver/GA-line and npm dist-tag policy.
   or remove the plist and press Install & Start.
   Refs #1253.
 - GitHub transport failures retain their existing text and include bounded, redacted cause-chain diagnostics without changing error classification. Refs #1254.
+- A review that fails for a temporary reason (a git or GitHub timeout, a GitHub
+  transport failure or 5xx, a Codex nonzero exit, or, once, a ZCode hard timeout)
+  is retried automatically, at most twice per head, after about 10 and then
+  30 minutes. Each retry is pinned to the exact failure it was granted for and
+  never posts twice. `reviewAutoRetry` configures it; `enabled: false` turns it off.
+  Refs #1255.
 
 ## [1.1.1] - docs/releases/v1.1.1.md
 
