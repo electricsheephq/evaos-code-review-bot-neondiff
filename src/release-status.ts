@@ -39,6 +39,7 @@ export interface ReleaseLaunchdStatus {
 export interface ReleaseDatabaseStatus {
   rowCount: number;
   errorCount: number;
+  pendingAutoRetries?: number;
   recentUnrecoveredErrorCount?: number;
   lastErrorAt?: string;
   skippedCount?: number;
@@ -2738,7 +2739,7 @@ function readReviewQueueBudgetJobs(
 }
 
 function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_000): ReleaseDatabaseStatus {
-  if (!existsSync(statePath)) return { rowCount: 0, errorCount: 0 };
+  if (!existsSync(statePath)) return { rowCount: 0, errorCount: 0, pendingAutoRetries: 0 };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
     const row = db
@@ -2814,6 +2815,13 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
     const reviewRunLeases = readReviewRunLeaseCounts(db, now);
     const staleActiveReviewQueueJobCount = readStaleActiveReviewQueueJobCount(db, now, leaseTtlMs);
     return {
+      pendingAutoRetries: db.prepare("select 1 from sqlite_master where type = 'table' and name = 'review_auto_retries'").get()
+        ? (db.prepare(`select count(*) as n from review_auto_retries where next_eligible_at is not null
+            and exists (select 1 from processed_reviews p where p.repo = review_auto_retries.repo collate nocase
+              and p.pull_number = review_auto_retries.pull_number and p.head_sha = review_auto_retries.head_sha collate nocase
+              and p.status = 'failed' and nullif(p.error, '') is review_auto_retries.pinned_error
+              and p.created_at = review_auto_retries.pinned_processed_at)`).get() as { n: number }).n
+        : 0,
       rowCount: row.rowCount ?? 0,
       skippedCount: row.skippedCount ?? 0,
       reviewerSessionCount: reviewerSessions.total,

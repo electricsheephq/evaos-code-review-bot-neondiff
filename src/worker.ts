@@ -17,7 +17,7 @@ import {
 import { configFilePaths, loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -35,7 +35,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi, isAuthoredBy } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, GitHubApiRequestError, GitHubApiTimeoutError, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import { activateCiLicenseForReview, ciGitAuthToken, unlinkConsumedCiLicenseKey } from "./ci-mode.js";
@@ -109,6 +109,7 @@ import {
   POST_REVIEW_HEAD_UNVERIFIED_ERROR,
   REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
+  autoRetryOwnsGrant,
   parseProviderCooldownError,
   ReviewStateStore,
   type ProcessedStatus,
@@ -150,7 +151,7 @@ import {
 import { canonicalizeSevereVerificationReceipt } from "./severe-verification-receipt-canonical.js";
 import { SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, type SevereVerificationCode } from "./severe-verification-receipt-schema.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
-import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
+import { formatZCodeTimeoutFailureError, isZCodeTimeoutError } from "./zcode-timeout.js";
 import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
@@ -984,6 +985,7 @@ export async function retryFailedHeadWithDeps(input: {
       status: "skipped_stale_head"
     };
   }
+  if (!options.dryRun) state.cancelPendingAutoRetry({ ...options, reason: "superseded_by_manual_retry" });
   const retryTarget = prepareFailedHeadRetry({
     state,
     repo: options.repo,
@@ -1227,7 +1229,7 @@ function updateRetryQueueJobsAfterRetry(input: {
       pullNumber: input.pullNumber,
       states: retryStates
     })
-    .filter((job) => job.headSha === input.headSha);
+    .filter((job) => job.headSha === input.headSha && (job.state === "failed" || !job.attemptId.includes(":auto-retry=")));
   const targetJobs = isRetryCommandRecordedStatus(input.status)
     ? activeJobs.filter((job) => job.source === "manual_command")
     : activeJobs;
@@ -1580,6 +1582,8 @@ export interface ReviewPullInput {
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run" | "retry_failed_head";
   manualQueueJob?: boolean;
+  autoRetryJob?: boolean;
+  autoRetryAttempt?: number;
   onReviewStarted?: () => Promise<void>;
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
@@ -1641,6 +1645,13 @@ export function recordRestrictedReviewUnavailable(
 
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
+  let autoRetryGrant: ReturnType<ReviewStateStore["getAutoRetry"]>;
+  if (input.autoRetryJob) {
+    // A grant belongs to one failed row, not whatever failure happens to exist when it runs.
+    const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+    autoRetryGrant = typeof state.getAutoRetry === "function" ? state.getAutoRetry(repo, pull.number, pull.head.sha) : undefined;
+    if (!autoRetryOwnsGrant(autoRetryGrant, input.autoRetryAttempt, processed)) return "skipped_processed";
+  }
   const repoPolicy = resolveRepoProfile(config, repo);
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
@@ -1935,8 +1946,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const activeCooldown = config.providerCooldown.enabled && typeof state.getActiveRepoProviderCooldown === "function"
     ? state.getActiveRepoProviderCooldown(repo)
     : undefined;
-  if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
+  if (activeCooldown && (input.processedHeadPolicy !== "retry_failed_head" || input.autoRetryJob)) {
     if (
+      !input.autoRetryJob &&
       !retryableApprovedDryRunPrePostFailure &&
       !(
         processed?.status === "dry_run" &&
@@ -1953,8 +1965,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     return "skipped_provider_cooldown";
   }
+  const retryProcessed = input.processedHeadPolicy === "retry_failed_head"
+    ? state.getProcessedReview(repo, pull.number, pull.head.sha)
+    : undefined;
+  const retryProcessedError = input.autoRetryJob ? autoRetryGrant?.pinnedError : retryProcessed?.error;
   if (input.processedHeadPolicy === "retry_failed_head") {
-    const current = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    const current = retryProcessed;
+    if (input.autoRetryJob && !autoRetryOwnsGrant(
+      typeof state.getAutoRetry === "function" ? state.getAutoRetry(repo, pull.number, pull.head.sha) : undefined,
+      input.autoRetryAttempt, current
+    )) return "skipped_processed";
     if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
       return "skipped_processed";
     }
@@ -1969,6 +1989,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const budget = input.budget ?? new ReviewRunBudget(config.reviewConcurrency.maxActiveRuns);
   let lease: ReviewRunLease | undefined;
   let headClaim: ReviewHeadClaim | undefined;
+  let eventAuthorizationConsumed = false;
   let budgetStarted = false;
   let ensembleEvidencePromise: Promise<void> | undefined;
   let startShadowLeaves: (() => void) | undefined;
@@ -2603,14 +2624,18 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             requiredProcessedConfigRevisionForSupersession: input.configRevision,
             consumeProcessedApprovalOnAcquire: true
           }
-        // A carried skip read before the claim authorizes replacing only that skip; the claim
-        // transaction re-checks it so a review posted in between is never superseded.
-        : baseMergeOnlySupersession && !otherProcessedOwnerSupersession
+        : input.processedHeadPolicy === "retry_failed_head" && retryProcessed
           ? {
-              requiredProcessedStatusForSupersession: "skipped" as const,
-              requiredProcessedErrorForSupersession: "base_merge_only"
+              requiredProcessedStatusForSupersession: retryProcessed.status,
+              ...(retryProcessedError != null ? { requiredProcessedErrorForSupersession: retryProcessedError } : {})
             }
-          : {})
+          // A carried skip authorizes replacing only that same skip at the claim boundary.
+          : baseMergeOnlySupersession && !otherProcessedOwnerSupersession
+            ? {
+                requiredProcessedStatusForSupersession: "skipped" as const,
+                requiredProcessedErrorForSupersession: "base_merge_only"
+              }
+            : {})
     });
     if (headClaimAttempt.status === "blocked") {
       if (headClaimAttempt.reason === "active_claim") {
@@ -2700,6 +2725,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       dryRun: false
     });
+    eventAuthorizationConsumed = reviewEventResolution.consumed;
     const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
     if (reviewEventResolution.consumed) {
       // Re-read after consumption so an external close wins before any public POST.
@@ -2812,16 +2838,22 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
     );
     const preservedPriorVerifiedBlockingRow = preservedPriorBlockingRow && !priorPosted?.error;
-    const review = await reviewGithub.createReview({
-      repo,
-      pullNumber: pull.number,
-      headSha: pull.head.sha,
-      event: plan.event,
-      body: isLcmReviewRepository(repo)
-        ? appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo)
-        : appendReviewAttribution(appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo), buildReviewProviderMetadata(reviewConfig).model),
-      comments
-    });
+    let review: Awaited<ReturnType<GitHubApi["createReview"]>>;
+    try {
+      review = await reviewGithub.createReview({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        event: plan.event,
+        body: isLcmReviewRepository(repo)
+          ? appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo)
+          : appendReviewAttribution(appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo), buildReviewProviderMetadata(reviewConfig).model),
+        comments
+      });
+    } catch (error) {
+      if (error && typeof error === "object") Object.assign(error, { reviewPostAttempted: true });
+      throw error;
+    }
     try {
       if (reviewEventResolution.consumed) {
         if (
@@ -2949,6 +2981,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     return manualReviewRequested ? "reviewed_command" : "reviewed";
   } catch (error) {
+    if (eventAuthorizationConsumed && error && typeof error === "object") Object.assign(error, { eventAuthorizationConsumed: true });
     if (error instanceof UntrustedProviderUnavailable) return recordRestrictedReviewUnavailable(state, repo, pull, "untrusted_author_provider_unavailable");
     throw error;
   } finally {
@@ -4032,6 +4065,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   error: unknown;
   now?: Date;
   preserveExistingDryRun?: boolean;
+  preserveProcessedRow?: boolean;
 }): boolean {
   if (!input.config.providerCooldown.enabled) return false;
   const classification = classifyProviderError(input.error);
@@ -4052,6 +4086,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
       reason: classification.reason
     });
   }
+  if (input.preserveProcessedRow) return true;
   if (
     input.preserveExistingDryRun &&
     previous?.status === "skipped" &&
@@ -4275,6 +4310,32 @@ export function applyRetryDegradedConfidencePenalty(
 export function buildRetryDegradedRuntimeNote(attempts: number, degradedRecovery: boolean): string | undefined {
   if (!degradedRecovery) return undefined;
   return `Findings recovered via the strict-JSON retry path (degraded): parsed on attempt ${attempts} of the ZCode review, not the first pass.`;
+}
+
+export function classifyAutoRetry(error: unknown): { retryable: boolean; reason: string; maxRetries?: number } {
+  const classify = (value: unknown): ReturnType<typeof classifyAutoRetry> | undefined => {
+    if (classifyProviderError(value).category !== "none") return { retryable: false, reason: "provider_classified" };
+    if (value && typeof value === "object") {
+      const tags = value as { reviewPostAttempted?: boolean; eventAuthorizationConsumed?: boolean };
+      if (tags.reviewPostAttempted) return { retryable: false, reason: "review_post_attempted" };
+      if (tags.eventAuthorizationConsumed) return { retryable: false, reason: "event_authorization_consumed" };
+    }
+    if (value instanceof ReviewPostPersistenceError || reviewWasAlreadyPosted(value)) return { retryable: false, reason: "review_already_posted" };
+    const message = value instanceof Error ? value.message : String(value);
+    if (message.startsWith("codex_runtime_secret_output") || message.startsWith("codex_runtime_unsafe_write_attempt")) {
+      return { retryable: false, reason: "codex_safety_rejection" };
+    }
+    if (value instanceof GitHubApiRequestError && value.status >= 400 && value.status < 500) return { retryable: false, reason: "github_4xx" };
+    if (value instanceof GitCommandError) return { retryable: value.failureKind === "timeout", reason: `git_${value.failureKind}` };
+    if (value instanceof GitHubApiTimeoutError) return { retryable: true, reason: "github_timeout" };
+    if (value instanceof GitHubApiRequestError && [500, 502, 503, 504].includes(value.status)) return { retryable: true, reason: "github_5xx" };
+    if (value instanceof Error && message.startsWith("GitHub API fetch failed for ")) return { retryable: true, reason: "github_transport" };
+    if (message.startsWith("codex_runtime_nonzero_exit")) return { retryable: true, reason: "codex_nonzero_exit" };
+    if (isZCodeTimeoutError(value)) return { retryable: true, reason: "zcode_timeout", maxRetries: 1 };
+    return undefined;
+  };
+  return classify(error) ?? classify(error && typeof error === "object" ? (error as { cause?: unknown }).cause : undefined) ??
+    { retryable: false, reason: "unclassified" };
 }
 
 export function classifyProviderError(error: unknown): ProviderErrorClassification {

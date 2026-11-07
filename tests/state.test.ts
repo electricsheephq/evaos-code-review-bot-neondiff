@@ -24,6 +24,120 @@ describe("review state store", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("persists a two-attempt auto-retry budget and atomically claims each due insertion", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-state-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const key = { repo: "Org/Repo", pullNumber: 1, headSha: "a".repeat(40) };
+    const now = new Date("2026-11-07T00:00:00.000Z");
+    const schedule = () => store.scheduleAutoRetry({ ...key, reason: "git_timeout", delaysMs: [600000, 1800000], maxRetries: 2, now });
+    try {
+      expect(schedule()).toEqual({ granted: false });
+      store.recordProcessed({ ...key, status: "failed", error: "fixture" });
+      const first = schedule(); expect(first).toMatchObject({ granted: true, attempt: 1 });
+      if (!first.granted) throw new Error("retry refused");
+      const due = new Date(first.nextEligibleAt);
+      expect(due.getTime() - now.getTime()).toBeGreaterThanOrEqual(600000);
+      expect(due.getTime() - now.getTime()).toBeLessThanOrEqual(660000);
+      expect(store.claimDueAutoRetry({ ...key, now })).toBeUndefined();
+      const job = store.enqueueDueAutoRetry({ ...key, priority: 50, now: due });
+      expect(job?.job).toMatchObject({ priority: 60, attemptId: expect.stringContaining(":auto-retry=1") });
+      expect(store.enqueueDueAutoRetry({ ...key, now: due })).toBeUndefined();
+      expect(store.claimDueAutoRetry({ ...key, now: due })).toBeUndefined();
+      store.recordProcessed({ ...key, status: "skipped", error: "untrusted_author_public_repo" });
+      expect(store.clearAuthorGateSkip(key.repo, key.pullNumber, key.headSha)).toBe(true);
+      expect(store.tryRecordDryRun(key)).toBe(true);
+      expect(store.tryRecordDryRun(key)).toBe(true); // exercise the insert-or-replace path too
+      store.recordProcessed({ ...key, status: "failed" });
+      expect(schedule()).toMatchObject({ granted: true, attempt: 2 });
+      const retry = store.getAutoRetry(key.repo.toLowerCase(), key.pullNumber, key.headSha.toUpperCase());
+      expect(retry?.attempts).toBe(2);
+      expect(Date.parse(retry!.nextEligibleAt!) - now.getTime()).toBeGreaterThanOrEqual(1800000);
+      expect(schedule()).toEqual({ granted: false });
+      expect(store.getAutoRetry(key.repo, 1, key.headSha)?.attempts).toBe(2);
+    } finally { store.close(); }
+  });
+
+  it.each(["posted", "skipped", "retired"])("refuses an auto-retry of a %s head", (status) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-terminal-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    try {
+      store.recordProcessed({ ...key, status: status === "posted" ? "posted" : "skipped", error: status === "retired" ? "retired_failed_head: fixture" : "fixture" });
+      expect(store.scheduleAutoRetry({ ...key, reason: "fixture", delaysMs: [1], maxRetries: 1 })).toEqual({ granted: false });
+    } finally { store.close(); }
+  });
+
+  it("caps classifier-specific retries at one and rolls back retirement plus cancellation together", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-retire-atomic-")); roots.push(root);
+    const path = join(root, "state.sqlite"); const store = new ReviewStateStore(path);
+    const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    try {
+      store.recordProcessed({ ...key, status: "failed", error: "fixture" });
+      const schedule = () => store.scheduleAutoRetry({ ...key, reason: "zcode_timeout", maxRetries: 2, maxRetriesForError: 1, delaysMs: [600000, 1800000] });
+      expect(schedule()).toMatchObject({ granted: true, attempt: 1 });
+      expect(schedule()).toEqual({ granted: false });
+      const db = new DatabaseSync(path);
+      db.exec("create trigger refuse_retry_cancellation before update of next_eligible_at on review_auto_retries begin select raise(abort, 'fixture cancellation failure'); end");
+      try {
+        expect(() => store.retireFailedReview({ ...key, reason: "closed_or_stale" })).toThrow("fixture cancellation failure");
+        expect(store.getProcessedReview(key.repo, 1, key.headSha)?.status).toBe("failed");
+        expect(store.getAutoRetry(key.repo, 1, key.headSha)?.nextEligibleAt).not.toBeNull();
+      } finally { db.close(); }
+    } finally { store.close(); }
+  });
+
+  it("creates the auto-retry table when opening an old database and preserves its budget on reopen", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-upgrade-")); roots.push(root);
+    const path = join(root, "state.sqlite");
+    const old = new DatabaseSync(path);
+    old.exec(`create table processed_reviews (repo text not null, pull_number integer not null, head_sha text not null,
+      status text not null, event text, review_url text, error text, created_at text not null default (datetime('now')),
+      primary key (repo, pull_number, head_sha))`); old.close();
+    const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    const store = new ReviewStateStore(path);
+    store.recordProcessed({ ...key, status: "failed" });
+    store.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 1, delaysMs: [1] }); store.close();
+    const reopened = new ReviewStateStore(path);
+    try { expect(reopened.getAutoRetry(key.repo, 1, key.headSha)?.attempts).toBe(1); }
+    finally { reopened.close(); }
+  });
+
+  it.each(["posted", "retired", "other_skip"])("pins both processed status and error against a concurrent %s change", (change) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retry-claim-pin-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    try {
+      store.recordProcessed({ ...key, status: "skipped", error: "provider_rate_limit_cooldown_until=fixture" });
+      const current = store.getProcessedReview(key.repo, 1, key.headSha)!;
+      store.recordProcessed({ ...key, status: change === "posted" ? "posted" : "skipped", error: change === "retired" ? "retired_failed_head: fixture" : "other" });
+      expect(store.tryClaimReviewHeadWithOutcome({ ...key, claimTtlMs: 1000, allowProcessedOwnerSupersession: true,
+        requiredProcessedStatusForSupersession: current.status, requiredProcessedErrorForSupersession: current.error })).toEqual({ status: "blocked", reason: "processed" });
+    } finally { store.close(); }
+  });
+
+  it("rolls back a queue insertion when its retry CAS fails and does not consume a refused insertion", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-atomic-")); roots.push(root);
+    const path = join(root, "state.sqlite"); const store = new ReviewStateStore(path);
+    const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    try {
+      store.recordProcessed({ ...key, status: "failed" });
+      const retry = store.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 2, delaysMs: [1, 1] });
+      if (!retry.granted) throw new Error("retry refused");
+      const now = new Date(retry.nextEligibleAt);
+      store.recordProcessed({ ...key, status: "posted" });
+      expect(store.enqueueDueAutoRetry({ ...key, now })).toBeUndefined();
+      expect(store.listReviewQueueJobs()).toEqual([]);
+      expect(store.getAutoRetry(key.repo, 1, key.headSha)?.nextEligibleAt).toBe(retry.nextEligibleAt);
+      store.recordProcessed({ ...key, status: "failed" });
+      const blocker = store.enqueueReviewQueueJob({ ...key, attemptId: `automatic:org/repo#1@${key.headSha}:base=unknown:auto-retry=1`, now });
+      expect(blocker.enqueued).toBe(true);
+      expect(store.enqueueDueAutoRetry({ ...key, now })).toMatchObject({ enqueued: false });
+      expect(store.getAutoRetry(key.repo, 1, key.headSha)?.nextEligibleAt).toBe(retry.nextEligibleAt);
+      expect(store.claimDueAutoRetry({ ...key, now })).toBe(1);
+      expect(store.claimDueAutoRetry({ ...key, now })).toBeUndefined();
+    } finally { store.close(); }
+  });
+
   it("EXPECTED_NEGATIVE: admits one whole lane receipt snapshot", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-state-"));
     roots.push(root);

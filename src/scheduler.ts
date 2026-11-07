@@ -44,6 +44,7 @@ import {
   POST_REVIEW_HEAD_UNVERIFIED_ERROR,
   REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
+  autoRetryOwnsGrant,
   parseProviderCooldownError,
   ReviewStateStore,
   type ProcessedStatus,
@@ -75,6 +76,7 @@ import {
   classifyProviderError,
   recordProviderRateLimitCooldownIfNeeded,
   providerCooldownDurationMs,
+  classifyAutoRetry,
   reviewPull,
   localDateFolder,
   type ReviewPullInput,
@@ -210,6 +212,10 @@ export async function runScheduledCycleWithDeps(input: {
       continue;
     }
     result.pullsSeen += pulls.length;
+    if (input.options.pullNumber === undefined && pulls.length < 100) {
+      // Offset pagination can omit an open PR when pages shift; cancel only for a single short page.
+      input.state.cancelPendingAutoRetriesForClosedPulls({ repo, openPullNumbers: pulls.map((pull) => pull.number), now });
+    }
     const activation = activateRepoForNewOnlyReview({
       config,
       state: input.state,
@@ -596,6 +602,7 @@ async function enqueuePullIfEligible(input: {
       await retireSupersededQueueJobsForPull(input);
     }
     const queued = enqueueReviewJob(input, commandDecision);
+    if (!queued) return "skipped_processed";
     if (commandDecision.action === "request-changes") {
       input.state.recordProcessedCommand({
         repo: input.repo,
@@ -681,7 +688,11 @@ async function enqueuePullIfEligible(input: {
     });
     return "skipped_processed";
   }
-  if (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
+  const pendingAutoRetry = input.config.reviewAutoRetry.enabled && input.config.reviewAutoRetry.maxRetries > 0 && processed?.status === "failed"
+    ? input.state.getAutoRetry(input.repo, input.pull.number, input.pull.head.sha)
+    : undefined;
+  const dueAutoRetry = Boolean(pendingAutoRetry?.nextEligibleAt && pendingAutoRetry.nextEligibleAt <= input.now.toISOString());
+  if (!dueAutoRetry && (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha))) {
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     await repairProcessedHeadStatusCommentIfNeeded({ ...input, processed });
     return "skipped_processed";
@@ -696,7 +707,7 @@ async function enqueuePullIfEligible(input: {
   if (!hasRepoQueueCapacity(input.state, input.repo, maxQueuedHeads)) {
     const overflowAction = repoScheduler?.overflowAction ?? "defer";
     const deferredDetails = `Repo review queue capacity is full for this repo (limit ${maxQueuedHeads}).`;
-    if (overflowAction === "skip") {
+    if (overflowAction === "skip" && !dueAutoRetry) {
       // Explicit policy escape hatch: "skip" is terminal for this exact head.
       // The default "defer" path keeps transient burst heads eligible once capacity frees.
       input.state.recordProcessed({
@@ -753,7 +764,8 @@ async function enqueuePullIfEligible(input: {
 
   const activeRepoCooldown = input.state.getActiveRepoProviderCooldown(input.repo, input.now);
   if (activeRepoCooldown) {
-    const queued = enqueueReviewJob(input);
+    const queued = enqueueReviewJob(input, undefined, dueAutoRetry);
+    if (!queued) return "skipped_processed";
     input.state.updateReviewQueueJobState({
       jobId: queued.job.jobId,
       state: "provider_deferred",
@@ -789,7 +801,8 @@ async function enqueuePullIfEligible(input: {
   // surface to derive a risk tier. Disabled (default) ⇒ no extra GitHub call, flat priority.
   input.automaticPriorityOverride = await resolveRiskWeightedPriorityOverride(input);
 
-  const enqueued = enqueueReviewJob(input);
+  const enqueued = enqueueReviewJob(input, undefined, dueAutoRetry);
+  if (!enqueued) return "skipped_processed";
   recordReadinessForEnqueue({
     state: input.state,
     repo: input.repo,
@@ -822,13 +835,16 @@ function enqueueReviewJob(input: {
   providerId: string;
   now: Date;
   automaticPriorityOverride?: number;
-}, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>) {
+}, commandDecision?: Exclude<CommandDecision, { action: "none"; shouldReview: false }>, autoRetry = false) {
   const source: ReviewQueueJobSource = commandDecision ? "manual_command" : "automatic";
   const sessionId = shouldAssignReviewerSession(commandDecision)
     ? assignReviewerSessionForQueueJob(input, source, commandDecision)?.session?.sessionId
     : undefined;
   const automaticPriority = input.automaticPriorityOverride ?? automaticQueuePriority(input.config, input.repo);
-  return input.state.enqueueReviewQueueJob({
+  const enqueue = autoRetry
+    ? input.state.enqueueDueAutoRetry.bind(input.state)
+    : input.state.enqueueReviewQueueJob.bind(input.state);
+  return enqueue({
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha,
@@ -1069,6 +1085,8 @@ async function retireSupersededQueueJobsForPull(input: {
   now: Date;
   onStatusCommentFailure?: () => void;
 }): Promise<void> {
+  input.state.cancelPendingAutoRetriesForPull({ repo: input.repo, pullNumber: input.pull.number,
+    exceptHeadSha: input.pull.head.sha, reason: "superseded", now: input.now });
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -1115,6 +1133,8 @@ async function retireQueuedJobsForClosedPull(input: {
   now: Date;
   onStatusCommentFailure?: () => void;
 }): Promise<void> {
+  input.state.cancelPendingAutoRetriesForPull({ repo: input.repo, pullNumber: input.pull.number,
+    reason: "closed", now: input.now });
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -1350,6 +1370,8 @@ async function runLeasedQueueJob(input: {
   clock?: () => Date;
 }): Promise<ReviewPullResult | "failed" | "closed_retired" | "stale_retired"> {
   const now = input.clock?.() ?? input.now ?? new Date();
+  const autoRetryAttempt = input.job.source === "automatic" ? parseAutoRetryAttempt(input.job.attemptId) : undefined;
+  const autoRetryJob = autoRetryAttempt !== undefined;
   input.state.updateReviewQueueJobState({
     jobId: input.job.jobId,
     state: "running",
@@ -1377,6 +1399,15 @@ async function runLeasedQueueJob(input: {
       lastError: errorMessage,
       now
     });
+    if (autoRetryJob && input.config.reviewAutoRetry.enabled) {
+      const classification = classifyAutoRetry(error);
+      if (classification.retryable) input.state.scheduleAutoRetry({
+        repo: input.job.repo, pullNumber: input.job.pullNumber, headSha: input.job.headSha,
+        reason: classification.reason, maxRetries: input.config.reviewAutoRetry.maxRetries,
+        maxRetriesForError: classification.maxRetries, delaysMs: input.config.reviewAutoRetry.delaysMs, now,
+        expected: { attempt: autoRetryAttempt }
+      });
+    }
     recordReadinessTransition({
       state: input.state,
       repo: input.job.repo,
@@ -1407,6 +1438,8 @@ async function runLeasedQueueJob(input: {
   }
 
   if (isClosedPull(pull)) {
+    input.state.cancelPendingAutoRetriesForPull({ repo: input.job.repo, pullNumber: input.job.pullNumber,
+      reason: "closed", now });
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "closed_retired",
@@ -1480,6 +1513,9 @@ async function runLeasedQueueJob(input: {
       lastError: `base_changed_before_review live=${pull.base.sha}`,
       now
     });
+    if (autoRetryJob) {
+      input.state.rearmAutoRetry({ repo: input.job.repo, pullNumber: input.job.pullNumber, headSha: input.job.headSha, now });
+    }
     recordReadinessTransition({
       state: input.state,
       repo: input.job.repo,
@@ -1531,7 +1567,10 @@ async function runLeasedQueueJob(input: {
       budget: input.budget,
       licenseAdmission: input.licenseAdmission,
       processedHeadPolicy: processedHeadPolicyForQueueJob(input.state, input.job, pull),
-      manualQueueJob: input.job.source === "manual_command", onReviewStarted,
+      manualQueueJob: input.job.source === "manual_command",
+      autoRetryJob,
+      ...(autoRetryJob ? { autoRetryAttempt } : {}),
+      onReviewStarted,
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
@@ -1567,12 +1606,37 @@ async function runLeasedQueueJob(input: {
     return status;
   } catch (error) {
     const failureNow = input.clock?.() ?? now;
+    const processedBefore = autoRetryJob
+      ? input.state.getProcessedReview(input.job.repo, input.job.pullNumber, input.job.headSha)
+      : undefined;
+    if (autoRetryJob && !autoRetryOwnsGrant(
+      input.state.getAutoRetry(input.job.repo, input.job.pullNumber, input.job.headSha), autoRetryAttempt,
+      processedBefore
+    )) {
+      const postEvidence = ["review_post_attempted", "event_authorization_consumed", "review_already_posted"].includes(classifyAutoRetry(error).reason);
+      if (postEvidence) {
+        input.state.invalidateAutoRetryGrant({ repo: input.job.repo, pullNumber: input.job.pullNumber,
+          headSha: input.job.headSha, reason: "superseded_after_post_attempt", now: failureNow });
+      }
+      if (!postEvidence || processedBefore?.status !== "failed") {
+        recordProviderRateLimitCooldownIfNeeded({ config: input.config, state: input.state,
+          repo: input.job.repo, pull, error, preserveProcessedRow: true, now: failureNow });
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired",
+          lastError: `auto_retry_superseded: ${errorMessage}`, now: failureNow });
+        updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) }, now: failureNow }, "skipped", "skipped");
+        return "stale_retired";
+      }
+      // Preserve ambiguous POST evidence on a still-failed head; its terminal classification grants no retry.
+    }
+    // The ownership check and failure write are synchronous, with no await between them.
     if (recordProviderRateLimitCooldownIfNeeded({
       config: input.config,
       state: input.state,
       repo: input.job.repo,
       pull,
       error,
+      preserveProcessedRow: autoRetryJob,
       now: failureNow
     })) {
       markQueueJobProviderDeferredFromProcessed({ state: input.state, job: input.job, pull, error, config: input.config, now: failureNow });
@@ -1611,12 +1675,26 @@ async function runLeasedQueueJob(input: {
       lastError: errorMessage,
       now: failureNow
     });
+    // v1 covers thrown automatic review failures only: not internal context/chunk failures,
+    // initial pre-start failures, lease-expiry requeues, manual commands, or CLI retry-failed.
+    // A granted retry's transient refetch failure is handled separately above.
+    const classification = classifyAutoRetry(error);
+    const retryMax = Math.min(input.config.reviewAutoRetry.maxRetries, classification.maxRetries ?? input.config.reviewAutoRetry.maxRetries);
+    const retry = input.config.reviewAutoRetry.enabled && input.job.source === "automatic" && classification.retryable
+      ? input.state.scheduleAutoRetry({
+          repo: input.job.repo, pullNumber: pull.number, headSha: pull.head.sha,
+          reason: classification.reason, maxRetries: input.config.reviewAutoRetry.maxRetries,
+          maxRetriesForError: classification.maxRetries, delaysMs: input.config.reviewAutoRetry.delaysMs, now: failureNow
+        })
+      : { granted: false as const };
     recordReadinessTransition({
       state: input.state,
       repo: input.job.repo,
       pull,
       readinessState: "failed",
-      reason: `review_failed: ${errorMessage}`,
+      reason: retry.granted
+        ? `review_failed: auto_retry=${retry.attempt}/${retryMax} next=${retry.nextEligibleAt}; ${errorMessage}`
+        : `review_failed: ${errorMessage}`,
       now: failureNow
     });
     await syncReviewStatusComment({
@@ -1626,13 +1704,18 @@ async function runLeasedQueueJob(input: {
       repo: input.job.repo,
       pull,
       state: "failed",
-      details: "Review failed; see bot evidence for operator-only details.",
+      details: retry.granted ? "Review failed; an automatic retry is scheduled." : "Review failed; see bot evidence for operator-only details.",
       onStatusCommentFailure: input.onStatusCommentFailure,
       now: failureNow
     });
     updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) }, now: failureNow }, "failed", "failed");
     return "failed";
   }
+}
+
+function parseAutoRetryAttempt(attemptId: string): number | undefined {
+  const match = attemptId.match(/:auto-retry=(\d+)(?::|$)/);
+  return match ? Number(match[1]) : undefined;
 }
 
 async function syncReviewStatusComment(input: {
@@ -2398,6 +2481,11 @@ function updateQueueJobAfterReviewStatus(input: {
       return;
     }
     case "skipped_processed":
+      if (input.job.source === "automatic" && input.job.attemptId.includes(":auto-retry=")) {
+        input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired",
+          lastError: "auto_retry_superseded", now: input.now });
+        return;
+      }
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       if (parseProviderCooldownError(processed?.error)) {
         markQueueJobProviderDeferredFromProcessed({ ...input, now: input.now });
@@ -2660,7 +2748,7 @@ function processedHeadPolicyForQueueJob(
   job: ReviewQueueJobRecord,
   pull: PullRequestSummary
 ): ReviewPullInput["processedHeadPolicy"] {
-  if (isProviderDeferredRetryJob(job)) return "retry_failed_head";
+  if (job.attemptId.includes(":auto-retry=") || isProviderDeferredRetryJob(job)) return "retry_failed_head";
   const processed = state.getProcessedReview(job.repo, pull.number, pull.head.sha);
   return processed?.status === "failed" || parseProviderCooldownError(processed?.error)
     ? "retry_failed_head"

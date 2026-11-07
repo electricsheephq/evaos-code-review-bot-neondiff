@@ -1,3 +1,4 @@
+import { autoRetryOwnsGrant } from "./state.js";
 import type {
   ReviewQueueJobRecord,
   ReviewReadinessRecord,
@@ -36,7 +37,7 @@ export interface ReviewHeadGateResult {
 }
 
 export function buildReviewHeadGate(input: {
-  state: Pick<ReviewStateStore, "getProcessedReview" | "getReviewReadiness" | "listReviewQueueJobsForPull">;
+  state: Pick<ReviewStateStore, "getProcessedReview" | "getReviewReadiness" | "listReviewQueueJobsForPull"> & Partial<Pick<ReviewStateStore, "getAutoRetry">>;
   repo: string;
   pullNumber: number;
   headSha: string;
@@ -56,13 +57,16 @@ export function buildReviewHeadGate(input: {
   const decision = decideReviewHeadGate({ processed, readiness, queueJobs,
     ...(anchor?.status === "posted" ? { carriedDecision: decisionFromProcessed(anchor) } : {}) });
   const ok = decision === "passed";
+  const retry = input.state.getAutoRetry?.(input.repo, input.pullNumber, input.headSha);
+  const retryDetail = retry?.nextEligibleAt && autoRetryOwnsGrant(retry, retry.attempts, processed)
+    ? `; automatic retry scheduled at ${retry.nextEligibleAt}` : "";
   const gates = [
     {
       name: "exact_head_has_recorded_nonblocking_evaos_review",
       ok,
       detail: anchor?.status === "posted" && decision === decisionFromProcessed(anchor)
         ? `processed_reviews status=${anchor.status} event=${anchor.event ?? "unknown"} reviewUrl=${anchor.reviewUrl ?? "none"}; carried from ${anchor.headSha.slice(0, 12)} via a base-merge-only push`
-        : gateDetail(decision, processed, readiness, queueJobs)
+        : gateDetail(decision, processed, readiness, queueJobs) + retryDetail
     }
   ];
 

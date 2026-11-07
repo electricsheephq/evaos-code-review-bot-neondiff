@@ -14,6 +14,9 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+- Retry thrown transient automatic review failures with a durable per-head budget,
+  delayed lower-priority jobs, operator cancellation, and guards against duplicate posting (#1255).
+
 ## [1.1.1] - docs/releases/v1.1.1.md
 
 ### Fixed

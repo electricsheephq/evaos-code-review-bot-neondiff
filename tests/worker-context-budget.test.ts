@@ -161,7 +161,8 @@ const {
   recoverPostedReviewReceipt,
   recoverPostedReviewReceiptForCurrentHead,
   reviewPull: reviewPullImpl,
-  reviewWasAlreadyPosted
+  reviewWasAlreadyPosted,
+  classifyAutoRetry
 } = await import("../src/worker.js");
 const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
   ...input,
@@ -1319,6 +1320,75 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it.each(["posted", "retired", "no_error"])("pins the retry worker's observed row before a concurrent %s change", async (change) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-retry-pin-")); roots.push(root);
+    const config = minimalConfig(root); const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(594, "d".repeat(40)); const repo = "electricsheephq/WorldOS";
+    const key = { repo, pullNumber: pull.number, headSha: pull.head.sha };
+    const previousError = "provider_rate_limit_cooldown_until=2020-01-01T00:00:00.000Z; reason=fixture";
+    state.recordProcessed({ ...key, status: change === "no_error" ? "failed" : "skipped", ...(change !== "no_error" ? { error: previousError } : {}) });
+    const claim = state.tryClaimReviewHeadWithOutcome.bind(state);
+    const observed: unknown[] = [];
+    vi.spyOn(state, "tryClaimReviewHeadWithOutcome").mockImplementation((input) => {
+      observed.push(input);
+      state.recordProcessed({ ...key, status: change === "retired" ? "skipped" : "posted", error: change === "retired" ? "retired_failed_head: fixture" : undefined });
+      return claim(input);
+    });
+    try {
+      expect(await reviewPull({ config, state, github: githubForPull(pull, [pullFile("src/a.ts", 200)]), repo, pull,
+        dryRun: false, useZCode: true, processedHeadPolicy: "retry_failed_head" })).toBe("skipped_processed");
+      expect(observed).toEqual([expect.objectContaining({ requiredProcessedStatusForSupersession: change === "no_error" ? "failed" : "skipped" })]);
+      if (change === "no_error") expect(observed[0]).not.toHaveProperty("requiredProcessedErrorForSupersession");
+      else expect(observed[0]).toHaveProperty("requiredProcessedErrorForSupersession", previousError);
+      expect(createdReviews).toHaveLength(0);
+    } finally { state.close(); }
+  });
+
+  it("tags the original review POST timeout without changing its message", async () => {
+    const { GitHubApiTimeoutError } = await vi.importActual<typeof import("../src/github.js")>("../src/github.js");
+    const error = new GitHubApiTimeoutError({ path: "/reviews", timeoutMs: 100 });
+    const originalMessage = error.message;
+    reviewPostControl.error = error;
+    const scenario = await runOwnerPolicyReview({ roots, pullNumber: 590 });
+    try {
+      expect(scenario.error).toBe(error);
+      expect(error.message).toBe(originalMessage);
+      expect(error).toMatchObject({ reviewPostAttempted: true });
+      expect(classifyAutoRetry(error)).toMatchObject({ retryable: false });
+    } finally { scenario.state.close(); }
+  });
+
+  it("tags a transient error after authorization consumption and before any POST", async () => {
+    const error = new Error("GitHub API fetch failed for /pulls/591: fixture");
+    const scenario = await runOwnerPolicyReview({ roots, pullNumber: 591, commandComment: requestChangesComment(591, 591, "b".repeat(40)), commandCommentId: 591,
+      afterConsumeError: error });
+    try {
+      expect(scenario.error).toBe(error);
+      expect(error.message).toBe("GitHub API fetch failed for /pulls/591: fixture");
+      expect(error).toMatchObject({ eventAuthorizationConsumed: true });
+      expect(classifyAutoRetry(error)).toMatchObject({ retryable: false });
+      expect(createdReviews).toHaveLength(0);
+    } finally { scenario.state.close(); }
+  });
+
+  it("retains the repo cooldown gate for automatic retries while manual retries can proceed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-worker-cooldown-")); roots.push(root);
+    const config = minimalConfig(root); config.providerCooldown.enabled = true;
+    const state = new ReviewStateStore(config.statePath); const pull = pullSummary(592, "c".repeat(40));
+    const key = { repo: "electricsheephq/WorldOS", pullNumber: pull.number, headSha: pull.head.sha };
+    state.recordProcessed({ ...key, status: "failed", error: "fixture" });
+    state.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 1, delaysMs: [1] });
+    state.recordRepoProviderCooldown({ repo: key.repo, cooldownUntil: new Date("2999-01-01T00:00:00Z"), reason: "fixture" });
+    try {
+      expect(await reviewPull({ config, state, github: githubForPull(pull, [pullFile("src/a.ts", 200)]), repo: key.repo, pull, dryRun: false,
+        useZCode: true, processedHeadPolicy: "retry_failed_head", autoRetryJob: true, autoRetryAttempt: 1 })).toBe("skipped_provider_cooldown");
+      expect(zcodePrompts).toHaveLength(0); expect(createdReviews).toHaveLength(0);
+      expect(await reviewPull({ config, state, github: githubForPull(pull, [pullFile("src/a.ts", 200)]), repo: key.repo, pull, dryRun: false,
+        useZCode: true, processedHeadPolicy: "retry_failed_head" })).toBe("reviewed");
+      expect(zcodePrompts.length).toBeGreaterThan(0);
+    } finally { state.close(); }
+  });
+
   it("marks a post-success receipt persistence failure as already posted", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-post-receipt-failure-"));
     roots.push(root);
@@ -1364,6 +1434,7 @@ describe("worker context budget preflight", () => {
 
     expect(createdReviews).toHaveLength(1);
     expect(reviewWasAlreadyPosted(caught)).toBe(true);
+    expect(classifyAutoRetry(caught)).toMatchObject({ retryable: false });
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain(
       "review posted but its durable receipt could not be recorded"
@@ -3433,6 +3504,7 @@ async function runOwnerPolicyReview(input: {
   moveHeadAfterConsume?: string;
   moveHeadAfterAuxiliaryPost?: string;
   closeAfterConsume?: boolean;
+  afterConsumeError?: Error;
   closeAfterHeadClaimWithSha?: string;
   postReviewHeadLookupError?: Error;
   enableWalkthrough?: boolean;
@@ -3472,18 +3544,20 @@ async function runOwnerPolicyReview(input: {
       return outcome;
     });
   }
-  if (input.moveHeadAfterConsume || input.closeAfterConsume) {
+  let afterConsumeError: Error | undefined;
+  if (input.moveHeadAfterConsume || input.closeAfterConsume || input.afterConsumeError) {
     const consume = state.tryConsumeReviewEventAuthorization.bind(state);
     vi.spyOn(state, "tryConsumeReviewEventAuthorization").mockImplementation((authorization) => {
       const consumed = consume(authorization);
+      if (consumed) afterConsumeError = input.afterConsumeError;
       if (input.closeAfterConsume) {
         livePull = {
           ...pull,
           state: "closed",
           merged_at: "2026-07-20T10:01:55.000Z"
         };
-      } else {
-        livePull = pullSummary(input.pullNumber, input.moveHeadAfterConsume!);
+      } else if (input.moveHeadAfterConsume) {
+        livePull = pullSummary(input.pullNumber, input.moveHeadAfterConsume);
       }
       return consumed;
     });
@@ -3509,6 +3583,7 @@ async function runOwnerPolicyReview(input: {
   let postReviewHeadLookupError: Error | undefined;
   const github = {
     getPull: async () => {
+      if (afterConsumeError) throw afterConsumeError;
       if (postReviewHeadLookupError) {
         const error = postReviewHeadLookupError;
         postReviewHeadLookupError = undefined;
@@ -3596,6 +3671,7 @@ function minimalConfig(root: string): BotConfig {
       maxActiveRuns: 1,
       leaseTtlMs: 60_000
     },
+    reviewAutoRetry: { enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] },
     providerCooldown: {
       enabled: false,
       durationMs: 15 * 60_000,

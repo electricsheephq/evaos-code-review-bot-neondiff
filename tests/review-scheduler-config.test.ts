@@ -11,6 +11,16 @@ describe("review scheduler config", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("defaults and validates the durable automatic retry budget", () => {
+    expect(loadConfig(writeConfig({})).reviewAutoRetry).toEqual({ enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] });
+    for (const reviewAutoRetry of [
+      { enabled: "true" }, { maxRetries: -1 }, { maxRetries: 6 }, { maxRetries: 1.5 },
+      { maxRetries: 3 }, { delaysMs: [0, 1] }, { delaysMs: [1.5, 1] }, { delaysMs: "bad" }
+    ]) expect(() => loadConfig(writeConfig({ reviewAutoRetry }))).toThrow("config.reviewAutoRetry");
+    expect(loadConfig(writeConfig({ reviewAutoRetry: { maxRetries: 0, delaysMs: [] } })).reviewAutoRetry.maxRetries).toBe(0);
+    expect(loadConfig(writeConfig({ reviewAutoRetry: { maxRetries: 5, delaysMs: [1, 2, 3, 4, 5] } })).reviewAutoRetry.maxRetries).toBe(5);
+  });
+
   it("loads disabled-by-default provider-aware queue settings", () => {
     const config = loadConfig(writeConfig({}));
 
