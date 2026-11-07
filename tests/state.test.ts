@@ -24,6 +24,13 @@ describe("review state store", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("parses semicolon cooldown fields identically with fetch cause diagnostics", () => {
+    const base = "provider_rate_limit_cooldown_until=2026-07-01T08:05:00.000Z; reason=provider_request_rate_limit; provider_code=1302; retry_attempt=2; retry_after_ms=9000; original_error=GitHub API fetch failed: fetch failed; cause=Error: Request was cancelled.";
+    const full = `${base} [cause-chain: AbortError: The operation was aborted.; code=UND_ERR_SOCKET]`;
+    expect(parseProviderCooldownError(full)).toEqual(parseProviderCooldownError(base));
+    expect(parseProviderCooldownError(full)).toMatchObject({ reason: "provider_request_rate_limit", providerCode: "1302", retryAttempt: 2, retryAfterMs: 9000 });
+  });
+
   it("EXPECTED_NEGATIVE: admits one whole lane receipt snapshot", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-receipt-state-"));
     roots.push(root);

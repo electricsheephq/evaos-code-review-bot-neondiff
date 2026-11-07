@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stripFetchCauseChain } from "./fetch-error-detail.js";
 import {
   MAX_EVIDENCE_BYTES, MAX_MODULES, type ChangedHunkMetadata, type SevereVerificationEvidenceResult
 } from "./severe-verification-evidence.js";
@@ -59,7 +60,8 @@ export function parseSevereVerificationTransport(
 /** Reduce provider/parser failures to fixed suppressing codes; unknown never confirms. */
 export function severeVerificationTransportFailure(error: unknown): SevereVerificationCode {
   const shape = error && typeof error === "object" ? error as { code?: unknown; name?: unknown } : {};
-  const text = [error instanceof Error ? error.message : typeof error === "string" ? error : "", providerField(shape.code), providerField(shape.name)].join(" ").toLowerCase();
+  const message = stripFetchCauseChain(error instanceof Error ? error.message : typeof error === "string" ? error : "");
+  const text = [message, providerField(shape.code), providerField(shape.name)].join(" ").toLowerCase();
   const providerClass = classifyProviderAdapterError(text);
   if (providerClass === "timeout" || /\baborterror\b/.test(text)) return "timeout";
   if (providerClass === "network" || providerClass === "auth" || providerClass === "throttle" || /\b(?:provider[_ -]?unavailable|unavailable|http 50[234])\b/.test(text)) return "unavailable";

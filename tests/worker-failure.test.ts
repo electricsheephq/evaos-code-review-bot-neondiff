@@ -1,3 +1,4 @@
+import { fetchErrorMessages } from "./fetch-error-fixtures.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -933,6 +934,15 @@ describe("worker review failures", () => {
     } finally {
       globalThis.fetch = previousFetch;
     }
+  });
+
+  it.each(fetchErrorMessages)("ignores fetch cause diagnostics and metadata: $full", ({ base, full }) => {
+    const result = classifyProviderError(new Error(full));
+    expect(result).toEqual(classifyProviderError(new Error(base)));
+    expect(result).toMatchObject({ category: "none", cooldown: false });
+    expect(result.providerCode).toBeUndefined();
+    expect(result.providerRequestId).toBeUndefined();
+    expect(result.retryAfterMs).toBeUndefined();
   });
 
   it("classifies provider throttle, overload, and true quota separately", () => {

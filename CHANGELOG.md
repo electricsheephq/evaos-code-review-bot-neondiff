@@ -14,6 +14,8 @@ for the semver/GA-line and npm dist-tag policy.
 
 ## [Unreleased]
 
+- GitHub transport failures retain their existing text and include bounded, redacted cause-chain diagnostics without changing error classification.
+
 ## [1.1.1] - docs/releases/v1.1.1.md
 
 ### Fixed

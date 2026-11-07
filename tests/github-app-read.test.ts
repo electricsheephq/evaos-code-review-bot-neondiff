@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitHubApi, normalizeAndValidateGitHubInstallationIdentity } from "../src/github.js";
+import { fetchErrorMessages } from "./fetch-error-fixtures.js";
 
 describe("GitHub App read authentication", () => {
   const roots: string[] = [];
@@ -140,6 +141,69 @@ describe("GitHub App read authentication", () => {
       failureKind: "timeout",
       timeoutMs: 10
     });
+  });
+
+  it.each([
+    [new TypeError("fetch failed"), "fetch failed"],
+    [new TypeError("fetch failed", { cause: "plain cause" }), "fetch failed; cause=plain cause"],
+    [new TypeError("fetch failed", { cause: 0 }), "fetch failed"],
+    [new TypeError("fetch failed", { cause: "" }), "fetch failed"],
+    [new TypeError("fetch failed", { cause: new Error("one level") }), "fetch failed; cause=Error: one level"],
+    [new TypeError("fetch failed", { cause: new DOMException("Request was cancelled.") }), "fetch failed; cause=Error: Request was cancelled."]
+  ])("preserves old fetch text byte for byte: %s", async (error, expected) => {
+    globalThis.fetch = vi.fn().mockRejectedValue(error);
+    await expect(new GitHubApi({}).getRepo("owner/repo")).rejects.toMatchObject({ message: `GitHub API fetch failed for /repos/owner/repo: ${expected}` });
+  });
+
+  it.each([
+    ["SocketError", "other side closed", "UND_ERR_SOCKET", "fetch"],
+    ["Error", "read ECONNRESET", "ECONNRESET", "fetch"],
+    ["Error", "connect ECONNREFUSED 127.0.0.1:12345", "ECONNREFUSED", "fetch"],
+    ["SocketError", "other side closed", "UND_ERR_SOCKET", "body"],
+    ["ResponseContentLengthMismatchError", "Response body length does not match content-length header", "UND_ERR_RES_CONTENT_LENGTH_MISMATCH", "body"]
+  ])("adds a code for %s: %s (%s, %s)", async (name, message, code, phase) => {
+    class TransportError extends Error { constructor() { super(message); this.name = name; } }
+    const error = new TypeError(phase === "body" ? "terminated" : "fetch failed", { cause: Object.assign(new TransportError(), { code }) });
+    globalThis.fetch = phase === "body" ? vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockRejectedValue(error) }) : vi.fn().mockRejectedValue(error);
+    await expect(new GitHubApi({}).getRepo("owner/repo")).rejects.toMatchObject({
+      message: `GitHub API fetch failed for /repos/owner/repo: ${error.message}; cause=${name}: ${message} [cause-chain: code=${code}]`
+    });
+  });
+
+  it("adds the cancelled wrapper's inner AbortError without changing its prefix", async () => {
+    const cause = Object.assign(new DOMException("Request was cancelled."), { cause: new DOMException("The operation was aborted.", "AbortError") });
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed", { cause }));
+    await expect(new GitHubApi({}).getRepo("owner/repo")).rejects.toMatchObject({
+      message: "GitHub API fetch failed for /repos/owner/repo: fetch failed; cause=Error: Request was cancelled. [cause-chain: AbortError: The operation was aborted.]"
+    });
+  });
+
+  it("terminates cycles and depth limits in the appended segment", async () => {
+    const a = new Error("a"), b = new Error("b", { cause: a }); a.cause = b;
+    let deep = new Error("level 6");
+    for (let level = 5; level >= 1; level -= 1) deep = new Error(`level ${level}`, { cause: deep });
+    for (const [cause, suffix] of [[a, "; cycle]"], [deep, "; depth-limit]"]] as const) {
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed", { cause }));
+      const error = await new GitHubApi({}).getRepo("owner/repo").catch((error: Error) => error);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message.endsWith(suffix)).toBe(true);
+    }
+  });
+
+  it("keeps GitHub access and tolerant issue lookup classification unchanged", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-fetch-detail-access-")); roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    for (const { base, full } of fetchErrorMessages) {
+      for (const message of [base, full]) {
+        globalThis.fetch = vi.fn().mockRejectedValue(new Error(message));
+        const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+        const proof = await github.probeRepositoryAccess("owner/repo");
+        expect(proof.github_api_error_class).toBe("network");
+        await expect(new GitHubApi({}).getIssueOrPull("owner/repo", 1, { tolerateUnreadable: true })).rejects.toThrow("GitHub API fetch failed");
+      }
+    }
   });
 
   it("binds a created review to the validated expected commit", async () => {

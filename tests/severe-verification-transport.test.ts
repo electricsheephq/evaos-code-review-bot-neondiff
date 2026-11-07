@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { fetchErrorMessages } from "./fetch-error-fixtures.js";
 import { describe, expect, it } from "vitest";
 import { buildFindingFingerprint } from "../src/findings.js";
 import {
@@ -25,6 +26,11 @@ const receipt = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("severe verification transport", () => {
+  it.each(fetchErrorMessages)("ignores fetch cause diagnostics: $full", ({ base, full }) => {
+    expect(severeVerificationTransportFailure(new Error(full))).toBe(severeVerificationTransportFailure(new Error(base)));
+    if (base.includes("Request was cancelled.")) expect(severeVerificationTransportFailure(full)).toBe("unavailable");
+  });
+
   it("keeps trusted guidance separate from bounded injection and secret-like user data", () => {
     const messages = buildSevereVerificationTransport(input), parsed = JSON.parse(messages[1].content);
     expect(messages.map(({ role }) => role)).toEqual(["system", "user"]); expect(messages[0].content).not.toContain(input.finding.title); expect(messages[0].content).not.toContain(input.finding.body);

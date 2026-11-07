@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectProviderThrottleReport } from "../src/provider-throttle-report.js";
+import { fetchErrorMessages } from "./fetch-error-fixtures.js";
 import { ReviewStateStore } from "../src/state.js";
 
 describe("provider throttle report", () => {
@@ -11,6 +12,26 @@ describe("provider throttle report", () => {
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(fetchErrorMessages)("keeps stored fetch diagnostics out of throttle classification: $full", ({ base, full }) => {
+    const root = mkdtempSync(join(tmpdir(), "provider-throttle-fetch-detail-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      const reports = [base, full].map((message) => {
+        db.exec("delete from review_queue_jobs");
+        insertQueueJob(db, { repo: "owner/repo", pullNumber: 1, headSha: "fetch-head", providerId: "fixture",
+          state: "failed", lastError: `GitHub API fetch failed for /repos/owner/repo: ${message}`,
+          createdAt: "2026-07-01T11:00:00.000Z", updatedAt: "2026-07-01T11:01:00.000Z" });
+        return collectProviderThrottleReport({ statePath, now: new Date("2026-07-02T00:00:00.000Z"), since: "7d" });
+      });
+      expect(reports[1].summary).toEqual(reports[0].summary);
+      expect(reports[1].summary.networkOrGithubDependency).toBe(1);
+      expect(reports[1].codes).toEqual([]);
+    } finally { db.close(); }
   });
 
   it("classifies provider throttle categories, retry outcomes, and local-hour buckets without raw payloads", () => {
