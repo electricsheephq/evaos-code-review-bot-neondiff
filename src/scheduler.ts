@@ -1372,6 +1372,11 @@ async function runLeasedQueueJob(input: {
   const now = input.clock?.() ?? input.now ?? new Date();
   const autoRetryAttempt = input.job.source === "automatic" ? parseAutoRetryAttempt(input.job.attemptId) : undefined;
   const autoRetryJob = autoRetryAttempt !== undefined;
+  if (autoRetryJob && !input.config.reviewAutoRetry.enabled) {
+    // Turning automatic retries off also ends retry jobs queued while they were on.
+    input.state.updateReviewQueueJobState({ jobId: input.job.jobId, state: "stale_retired", lastError: "auto_retry_disabled", now });
+    return "stale_retired";
+  }
   input.state.updateReviewQueueJobState({
     jobId: input.job.jobId,
     state: "running",

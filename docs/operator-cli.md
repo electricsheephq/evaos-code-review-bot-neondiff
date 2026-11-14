@@ -621,16 +621,20 @@ gate or write, so a manual retry, a manual review command, a retire or a post
 since the grant voids it. A provider cooldown during a retry keeps its pin and
 resumes the same attempt. A retry that loses its grant after attempting a POST ends
 the automatic retries for that head, and the failure records the POST attempt.
-An automatic retry does not post if GitHub already shows a NeonDiff review from
+An automatic retry submits no PR review if GitHub already shows a NeonDiff review from
 the posting identity on that head. A review listing that reaches 500 reviews
-counts as unknown: the retry fails with `github_receipt_unknown` and posts
-nothing. The check can still miss an existing review in three cases, so
+counts as unknown: the retry fails with `github_receipt_unknown` and submits no
+review. The check can still miss an existing review in three cases, so
 automatic retries are off by default (#1260):
 - a GitHub App other than the NeonDiff App, because the posting identity
   defaults to the NeonDiff App's bot login;
 - a personal access token, when reading the token's identity fails temporarily;
 - in the LCM review repository, a review posted without its walkthrough or
   assessment, which carries no marker that the check recognizes.
+
+The check runs just before the review is submitted, so a retry may update its
+walkthrough comment first. Turning automatic retries off also ends retry jobs
+already queued (`auto_retry_disabled`).
 A non-dry-run `retry-failed` cancels a pending automatic
 retry before attempting the manual retry. `retire-failed` clears the pending retry
 in the retirement transaction, and a new head or a closed PR cancels it.

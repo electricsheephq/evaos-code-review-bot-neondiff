@@ -144,6 +144,16 @@ describe("automatic retry round two", () => {
     expect(f.state.listReviewQueueJobs().at(-1)?.state).toBe("posted");
   });
 
+  it("turning automatic retries off retires a retry job queued while they were on", async () => {
+    const f = fixture(); const job = f.queue();
+    const before = f.state.getProcessedReview(f.repo, 1, f.key.headSha);
+    f.config.reviewAutoRetry.enabled = false;
+    await f.cycle();
+    expect(f.post).not.toHaveBeenCalled();
+    expect(f.state.getReviewQueueJob(job.jobId)).toMatchObject({ state: "stale_retired", lastError: "auto_retry_disabled" });
+    expect(f.state.getProcessedReview(f.repo, 1, f.key.headSha)).toEqual(before);
+  });
+
   it("R18 walkthrough-only body counts as a receipt (LCM review repositories post no footer)", async () => {
     const f = fixture(); const job = f.queue(); const review = receipt(f.key.headSha);
     review.body = [`<!-- evaos-code-review-bot:walkthrough repo=${f.repo} pr=1 -->`,
