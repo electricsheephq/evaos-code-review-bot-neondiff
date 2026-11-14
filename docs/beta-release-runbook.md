@@ -503,8 +503,9 @@ automatic retries are off by default (#1260):
   assessment, which carries no marker that the check recognizes.
 
 The check runs just before the review is submitted, so a retry may update its
-walkthrough comment first. Turning automatic retries off also ends retry jobs
-already queued (`auto_retry_disabled`).
+walkthrough comment first. Setting `enabled` to false also ends retry jobs
+already queued (`auto_retry_disabled`); setting `maxRetries` to 0 stops only
+new ones.
 
 Failed rows remain release-blocking until they are retried, superseded by a
 successful current-head review, or explicitly retired with evidence that the

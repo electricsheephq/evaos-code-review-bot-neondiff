@@ -594,9 +594,10 @@ Mutating commands remain explicit:
 - `daemon --dry-run false`
 - `daemon start|stop --dry-run false --confirm true`
 
-Automatic thrown review failures retry the same head twice by default: after
-10 minutes, then 30 minutes after the next failure, plus deterministic jitter
-of up to 10% of each delay. Git timeouts, GitHub timeouts/transport failures and
+When automatic retries are on (`reviewAutoRetry.enabled`, off by default), a
+thrown review failure is retried on the same head up to twice with the default
+settings: after 10 minutes, then 30 minutes after the next failure, plus
+deterministic jitter of up to 10% of each delay. Git timeouts, GitHub timeouts/transport failures and
 500/502/503/504 responses, and Codex nonzero exits qualify. ZCode hard timeouts
 allow one retry. Safety rejections, ambiguous review POST failures, errors after
 event authorization consumption, and already-posted reviews never auto-retry.
@@ -608,7 +609,7 @@ GitHub refetch failure before it starts gets the next attempt, and a base-branch
 move re-arms it without spending one.
 
 `reviewAutoRetry` is off by default: `{ "enabled": false, "maxRetries": 2,
-"delaysMs": [600000, 1800000] }`. Set `"enabled": true` to turn it on. `maxRetries` accepts 0–5 (0 disables);
+"delaysMs": [600000, 1800000] }`. Set `"enabled": true` to turn it on. `maxRetries` accepts 0–5 (0 grants no retries);
 `delaysMs` must contain at least that many positive integer delays. These
 minute-scale full-run retries stack on the existing second-scale in-run retries.
 The durable per-head budget survives processed-row replacement. Fresh heads take
@@ -633,8 +634,9 @@ automatic retries are off by default (#1260):
   assessment, which carries no marker that the check recognizes.
 
 The check runs just before the review is submitted, so a retry may update its
-walkthrough comment first. Turning automatic retries off also ends retry jobs
-already queued (`auto_retry_disabled`).
+walkthrough comment first. Setting `enabled` to false also ends retry jobs
+already queued (`auto_retry_disabled`); setting `maxRetries` to 0 stops only
+new ones.
 A non-dry-run `retry-failed` cancels a pending automatic
 retry before attempting the manual retry. `retire-failed` clears the pending retry
 in the retirement transaction, and a new head or a closed PR cancels it.
