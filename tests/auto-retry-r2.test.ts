@@ -12,7 +12,7 @@ import { collectReleaseStatus } from "../src/release-status.js";
 import { runScheduledCycleWithDeps } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
-import { classifyAutoRetry, retryFailedHeadWithDeps, reviewPull } from "../src/worker.js";
+import { classifyAutoRetry, recordFailedReview, retryFailedHeadWithDeps, reviewPull } from "../src/worker.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 vi.mock("../src/git.js", async (importOriginal) => {
@@ -64,6 +64,8 @@ describe("automatic retry round two", () => {
       listPullFiles: vi.fn(async () => []), canPost: () => true,
       postingIdentity: async () => ({ login: "neondiff[bot]", type: "Bot" })
     } as unknown as GitHubApi;
+    const reviews = vi.spyOn(GitHubApi.prototype, "listPullReviews").mockResolvedValue([]);
+    const identity = vi.spyOn(GitHubApi.prototype, "postingIdentity").mockResolvedValue({ login: "poster", type: "User" });
     const post = vi.spyOn(GitHubApi.prototype, "createReview").mockResolvedValue({ id: 1, html_url: "https://github.com/org/repo/pull/1#pullrequestreview-1" });
     const cycle = (reviewPullImpl = reviewPull) => runScheduledCycleWithDeps({ config, state, github, options: { dryRun: false, useZCode: false },
       reviewPullImpl, licenseAdmission: testLicenseAdmission, now: new Date(), clock: () => new Date() });
@@ -82,8 +84,120 @@ describe("automatic retry round two", () => {
     const manual = (dryRun = false) => retryFailedHeadWithDeps({ config, state, github, budget: new ReviewRunBudget(1),
       options: { ...key, dryRun, useZCode: false }, reviewPullImpl: reviewPull, licenseAdmission: testLicenseAdmission });
     const cooldown = () => state.recordRepoProviderCooldown({ repo, cooldownUntil: new Date(Date.now() + 60000), reason: "fixture" });
-    return { root, repo, key, config, state, pull, github, post, cycle, grant, queue, manual, cooldown };
+    return { root, repo, key, config, state, pull, github, post, reviews, identity, cycle, grant, queue, manual, cooldown };
   }
+
+  function receipt(headSha: string, state = "COMMENTED") {
+    return { id: 17, html_url: "https://github.com/org/repo/pull/1#pullrequestreview-17",
+      commit_id: headSha.toUpperCase(), state, user: { login: "poster", type: "User" },
+      body: "<!-- lcm-x-ai-review:v2 -->" };
+  }
+
+  it("R18 finding 1: normal failure over an accepted CLI POST recovers the receipt", async () => {
+    const f = fixture(); f.config.reviewConcurrency.maxActiveRuns = 2;
+    f.post.mockImplementationOnce(async () => {
+      f.reviews.mockResolvedValue([receipt(f.key.headSha, "CHANGES_REQUESTED")]);
+      throw new GitHubApiTimeoutError({ path: "/reviews", timeoutMs: 100 });
+    });
+    vi.spyOn(f.github, "listPullFiles").mockImplementationOnce(async () => {
+      // J0 is still preparing; a CLI run claims and posts on the same head first.
+      await expect(reviewPull({ config: f.config, github: f.github, state: f.state, repo: f.repo,
+        pull: f.pull, dryRun: false, useZCode: false, licenseAdmission: testLicenseAdmission }))
+        .rejects.toThrow("timed out");
+      recordFailedReview({ config: f.config, state: f.state, repo: f.repo, pull: f.pull,
+        error: new GitHubApiTimeoutError({ path: "/reviews", timeoutMs: 100 }) });
+      throw new Error("codex_runtime_nonzero_exit: J0 fixture");
+    });
+    await f.cycle();
+    const grant = f.state.getAutoRetry(f.repo, 1, f.key.headSha)!;
+    expect(grant.attempts).toBe(1);
+    vi.setSystemTime(new Date(grant.nextEligibleAt!)); await f.cycle();
+    expect(f.post).toHaveBeenCalledTimes(1);
+    expect(f.state.getProcessedReview(f.repo, 1, f.key.headSha)).toMatchObject({ status: "posted",
+      event: "REQUEST_CHANGES", reviewUrl: receipt(f.key.headSha).html_url });
+    expect(f.state.getAutoRetry(f.repo, 1, f.key.headSha)).toMatchObject({
+      pinnedProcessedAt: null, nextEligibleAt: null, lastReason: "already_posted_on_github" });
+    expect(f.state.listReviewQueueJobs().at(-1)?.state).toBe("posted");
+  });
+
+  it("R18 finding 2: owned regrant over invalidation recovers copy B's receipt", async () => {
+    const f = fixture(); f.queue();
+    const update = f.state.updateReviewQueueJobState.bind(f.state);
+    vi.spyOn(f.state, "updateReviewQueueJobState").mockImplementation((input) => {
+      if (input.state === "failed") {
+        // Copy B posts after A's ownership check/failure write, before A's grant.
+        f.reviews.mockResolvedValue([receipt(f.key.headSha)]);
+        f.state.invalidateAutoRetryGrant({ ...f.key, reason: "superseded_after_post_attempt" });
+        f.state.recordProcessed({ ...f.key, status: "failed", error: "copy B POST timed out" });
+      }
+      return update(input);
+    });
+    await f.cycle(async () => { throw new Error("codex_runtime_nonzero_exit: copy A fixture"); });
+    const grant = f.state.getAutoRetry(f.repo, 1, f.key.headSha)!;
+    expect(grant).toMatchObject({ attempts: 2, pinnedError: "copy B POST timed out" });
+    vi.setSystemTime(new Date(grant.nextEligibleAt!)); await f.cycle();
+    expect(f.post).not.toHaveBeenCalled();
+    expect(f.state.getProcessedReview(f.repo, 1, f.key.headSha)).toMatchObject({ status: "posted",
+      event: "COMMENT", reviewUrl: receipt(f.key.headSha).html_url });
+    expect(f.state.getAutoRetry(f.repo, 1, f.key.headSha)).toMatchObject({
+      pinnedProcessedAt: null, nextEligibleAt: null, lastReason: "already_posted_on_github" });
+    expect(f.state.listReviewQueueJobs().at(-1)?.state).toBe("posted");
+  });
+
+  it("R18 walkthrough-only body counts as a receipt (LCM review repositories post no footer)", async () => {
+    const f = fixture(); const job = f.queue(); const review = receipt(f.key.headSha);
+    review.body = [`<!-- evaos-code-review-bot:walkthrough repo=${f.repo} pr=1 -->`,
+      `<!-- evaos-code-review-bot:walkthrough-state version=1 repo=${f.repo} pr=1 sha=${f.key.headSha} verdict=COMMENT hash=0 -->`,
+      "## Walkthrough"].join("\n");
+    f.reviews.mockResolvedValue([review]);
+    await f.cycle();
+    expect(f.post).not.toHaveBeenCalled();
+    expect(f.state.getReviewQueueJob(job.jobId)?.state).toBe("posted");
+    expect(f.state.getProcessedReview(f.repo, 1, f.key.headSha)).toMatchObject({ status: "posted", reviewUrl: review.html_url });
+  });
+
+  it.each(["different head", "another identity", "no attribution"])("R18 nonreceipt: %s does not block the post", async (kind) => {
+    const f = fixture(); const job = f.queue(); const review = receipt(f.key.headSha);
+    if (kind === "different head") review.commit_id = "b".repeat(40);
+    if (kind === "another identity") review.user.login = "someone-else";
+    if (kind === "no attribution") review.body = "Ordinary review";
+    f.reviews.mockResolvedValue([review]);
+    await f.cycle();
+    expect(f.post).toHaveBeenCalledTimes(1);
+    expect(f.state.getReviewQueueJob(job.jobId)?.state).toBe("posted");
+  });
+
+  it("R18 transient receipt listing failure grants the next attempt without posting", async () => {
+    const f = fixture(); const job = f.queue();
+    f.reviews.mockRejectedValueOnce(new GitHubApiTimeoutError({ path: "/reviews", timeoutMs: 100 }));
+    await f.cycle();
+    expect(f.post).not.toHaveBeenCalled();
+    expect(f.state.getReviewQueueJob(job.jobId)?.state).toBe("failed");
+    const grant = f.state.getAutoRetry(f.repo, 1, f.key.headSha)!;
+    expect(grant).toMatchObject({ attempts: 2, lastReason: "github_timeout", nextEligibleAt: expect.any(String) });
+    vi.setSystemTime(new Date(grant.nextEligibleAt!)); await f.cycle();
+    expect(f.post).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("R18 500-review listing is final (matching receipt=%s)", async (matching) => {
+    const f = fixture(); const job = f.queue();
+    const reviews = Array.from({ length: 500 }, (_, id) => ({ ...receipt("b".repeat(40)), id }));
+    if (matching) reviews[0] = receipt(f.key.headSha);
+    f.reviews.mockResolvedValue(reviews);
+    await f.cycle();
+    expect(f.post).not.toHaveBeenCalled();
+    const processed = f.state.getProcessedReview(f.repo, 1, f.key.headSha)!;
+    expect(processed).toMatchObject({ status: "failed", error: expect.stringContaining("github_receipt_unknown") });
+    expect(classifyAutoRetry(new Error(processed.error))).toEqual({ retryable: false, reason: "github_receipt_unknown" });
+    expect(f.state.getReviewQueueJob(job.jobId)?.state).toBe("failed");
+    expect(f.state.getAutoRetry(f.repo, 1, f.key.headSha)).toMatchObject({ attempts: 1, nextEligibleAt: null });
+  });
+
+  it("R18 a normal job never lists receipts", async () => {
+    const f = fixture(); f.reviews.mockRejectedValue(new Error("must not list for a normal job"));
+    await f.cycle();
+    expect(f.reviews).not.toHaveBeenCalled(); expect(f.post).toHaveBeenCalledTimes(1);
+  });
 
   it("R1 queued retry cannot post after CLI retry-failed has an ambiguous POST timeout", async () => {
     const f = fixture(); const job = f.queue();

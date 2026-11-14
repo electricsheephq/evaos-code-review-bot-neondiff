@@ -621,9 +621,15 @@ gate or write, so a manual retry, a manual review command, a retire or a post
 since the grant voids it. A provider cooldown during a retry keeps its pin and
 resumes the same attempt. A retry that loses its grant after attempting a POST ends
 the automatic retries for that head, and the failure records the POST attempt.
+An automatic retry never posts if GitHub already shows a NeonDiff review from
+the posting identity on that head.
 A non-dry-run `retry-failed` cancels a pending automatic
 retry before attempting the manual retry. `retire-failed` clears the pending retry
 in the retirement transaction, and a new head or a closed PR cancels it.
+With 100 or more open PRs, poll-time closed-PR cancellation is skipped; a due
+retry ends when its refetch confirms the PR is closed, rather than at the next
+poll. An omitted PR may stay pending until a targeted refetch or a complete
+single-page poll confirms closure.
 
 `retire-failed` defaults to dry-run and prints the normalized retirement reason
 plus any failed queue jobs that a live run would reconcile. If the processed row

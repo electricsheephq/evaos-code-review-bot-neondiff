@@ -482,11 +482,17 @@ configuration. Each full run keeps its existing in-run retry layer.
 
 A pending retry shows its scheduled time; wait for it when no operator action is
 needed. An explicit non-dry-run `retry-failed` cancels a pending unclaimed retry;
-retirement clears it atomically, and a new head or a closed PR cancels it. A retry
+retirement clears it atomically, and a new head or a closed PR cancels it.
+With 100 or more open PRs, poll-time closed-PR cancellation is skipped; a due
+retry ends when its refetch confirms the PR is closed, rather than at the next
+poll. An omitted PR may stay pending until a targeted refetch or a complete
+single-page poll confirms closure. A retry
 runs only while the head's failed record is exactly the one it was granted for. Auto jobs retain repo cooldown and capacity gates.
 A provider cooldown during a retry keeps its pin and resumes the same attempt.
 A retry that loses its grant after attempting a POST ends the automatic retries
 for that head, and the failure records the POST attempt.
+An automatic retry never posts if GitHub already shows a NeonDiff review from
+the posting identity on that head.
 
 Failed rows remain release-blocking until they are retried, superseded by a
 successful current-head review, or explicitly retired with evidence that the

@@ -39,7 +39,7 @@ import {
 import { DEFAULT_BOT_LOGIN, GitHubApi, GitHubApiRequestError, GitHubApiTimeoutError, isAuthoredBy } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
-import { activateCiLicenseForReview, ciGitAuthToken, unlinkConsumedCiLicenseKey } from "./ci-mode.js";
+import { activateCiLicenseForReview, ciGitAuthToken, findPostedCiReview, unlinkConsumedCiLicenseKey } from "./ci-mode.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -2830,6 +2830,26 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       if (lifecycleResult) return lifecycleResult;
     }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (input.autoRetryJob) {
+      // The claim is held, but another process may have regranted over an ambiguous
+      // POST. GitHub's exact-head receipt is authoritative even if local pins match.
+      const posted = await findPostedCiReview(reviewGithub, repo, pull.number, pull.head.sha, { requireCompleteListing: true });
+      if (posted) {
+        const event = posted.state === "CHANGES_REQUESTED" ? "REQUEST_CHANGES" : "COMMENT";
+        const reviewUrl = posted.html_url ?? `${pull.html_url}#pullrequestreview-${posted.id}`;
+        recordPostedReviewReceipt({ state, repo, pull, receipt: {
+          ...reviewDiff, event, reviewUrl, preserveExistingBlocking: false,
+          ...(reviewEventResolution.consumed && reviewEventResolution.authorization.status === "eligible"
+            ? { authorization: { commentId: reviewEventResolution.authorization.commentId, author: reviewEventResolution.authorization.author } }
+            : {})
+        } });
+        state.invalidateAutoRetryGrant({ repo, pullNumber: pull.number, headSha: pull.head.sha, reason: "already_posted_on_github" });
+        writeRedactedJsonBestEffort(join(evidenceDir, "github-review-receipt.json"), {
+          reason: "already_posted_on_github", reviewId: posted.id, reviewUrl, event, headSha: pull.head.sha
+        });
+        return manualReviewRequested ? "reviewed_command" : "reviewed";
+      }
+    }
     // This deliberately stays the final server read before createReview: PR state
     // can change independently even when the preceding local work is synchronous.
     const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
@@ -4167,6 +4187,17 @@ export function recoverPostedReviewReceipt(input: {
   if (!receipt?.reviewUrl || !receipt.event) {
     throw new Error("review posted but its recovery receipt is incomplete");
   }
+  recordPostedReviewReceipt({ ...input, receipt });
+  return true;
+}
+
+function recordPostedReviewReceipt(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  receipt: PostedReviewReceipt;
+}): void {
+  const { receipt } = input;
   if (receipt.authorization) {
     input.state.recordAuthorizedReviewPosted({
       repo: input.repo,
@@ -4190,7 +4221,6 @@ export function recoverPostedReviewReceipt(input: {
       reviewUrl: receipt.reviewUrl
     });
   }
-  return true;
 }
 
 export async function recoverPostedReviewReceiptForCurrentHead(input: {
@@ -4323,6 +4353,7 @@ export function classifyAutoRetry(error: unknown): { retryable: boolean; reason:
     }
     if (value instanceof ReviewPostPersistenceError || reviewWasAlreadyPosted(value)) return { retryable: false, reason: "review_already_posted" };
     const message = value instanceof Error ? value.message : String(value);
+    if (message.startsWith("github_receipt_unknown:")) return { retryable: false, reason: "github_receipt_unknown" };
     if (message.startsWith("codex_runtime_secret_output") || message.startsWith("codex_runtime_unsafe_write_attempt")) {
       return { retryable: false, reason: "codex_safety_rejection" };
     }
