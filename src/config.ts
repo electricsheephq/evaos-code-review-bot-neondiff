@@ -79,7 +79,8 @@ export interface BotConfig {
   reviewModes?: ReviewModesConfig;
   calibrationLoop?: CalibrationLoopConfig;
   /** Minute-scale automatic retries stack on the existing second-scale in-run retries.
-   * Default worst case: three full runs per head, each with its own untrusted-lane attempts.
+   * Off by default until the receipt check covers token identities and every LCM body shape.
+   * When enabled, the worst case is three full runs per head, each with its own untrusted-lane attempts.
    */
   reviewAutoRetry: {
     enabled: boolean;
@@ -399,7 +400,7 @@ const DEFAULT_CONFIG: BotConfig = {
   riskWeightedQueue: {
     enabled: false
   },
-  reviewAutoRetry: { enabled: true, maxRetries: 2, delaysMs: [600_000, 1_800_000] },
+  reviewAutoRetry: { enabled: false, maxRetries: 2, delaysMs: [600_000, 1_800_000] },
   providerCooldown: {
     enabled: true,
     durationMs: 15 * 60_000,

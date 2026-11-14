@@ -468,8 +468,8 @@ Rows recorded as `status=skipped` with a baseline activation reason are not
 release-blocking errors. They are the expected way to prevent retroactive review
 spam when a live beta starts monitoring existing open PR heads.
 
-Automatic thrown transient review failures now have a durable two-retry budget
-per head: 10 minutes, then 30 minutes, each plus up to 10% deterministic jitter.
+When `reviewAutoRetry.enabled` is set (it is off by default), automatic thrown
+transient review failures have a durable two-retry budget per head: 10 minutes, then 30 minutes, each plus up to 10% deterministic jitter.
 Git timeouts, GitHub timeout/transport and 500/502/503/504 errors, and Codex
 nonzero exits qualify; ZCode hard timeouts allow only one retry. Provider-classified
 errors retain cooldown handling. Safety rejections, attempted review POSTs,
@@ -491,8 +491,16 @@ runs only while the head's failed record is exactly the one it was granted for. 
 A provider cooldown during a retry keeps its pin and resumes the same attempt.
 A retry that loses its grant after attempting a POST ends the automatic retries
 for that head, and the failure records the POST attempt.
-An automatic retry never posts if GitHub already shows a NeonDiff review from
-the posting identity on that head.
+An automatic retry does not post if GitHub already shows a NeonDiff review from
+the posting identity on that head. A review listing that reaches 500 reviews
+counts as unknown: the retry fails with `github_receipt_unknown` and posts
+nothing. The check can still miss an existing review in three cases, so
+automatic retries are off by default (#1260):
+- a GitHub App other than the NeonDiff App, because the posting identity
+  defaults to the NeonDiff App's bot login;
+- a personal access token, when reading the token's identity fails temporarily;
+- in the LCM review repository, a review posted without its walkthrough or
+  assessment, which carries no marker that the check recognizes.
 
 Failed rows remain release-blocking until they are retried, superseded by a
 successful current-head review, or explicitly retired with evidence that the

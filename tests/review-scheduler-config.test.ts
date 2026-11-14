@@ -12,7 +12,8 @@ describe("review scheduler config", () => {
   });
 
   it("defaults and validates the durable automatic retry budget", () => {
-    expect(loadConfig(writeConfig({})).reviewAutoRetry).toEqual({ enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] });
+    expect(loadConfig(writeConfig({})).reviewAutoRetry).toEqual({ enabled: false, maxRetries: 2, delaysMs: [600000, 1800000] });
+    expect(loadConfig(writeConfig({ reviewAutoRetry: { enabled: true } })).reviewAutoRetry).toEqual({ enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] });
     for (const reviewAutoRetry of [
       { enabled: "true" }, { maxRetries: -1 }, { maxRetries: 6 }, { maxRetries: 1.5 },
       { maxRetries: 3 }, { delaysMs: [0, 1] }, { delaysMs: [1.5, 1] }, { delaysMs: "bad" }
