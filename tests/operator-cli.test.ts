@@ -1,3 +1,5 @@
+import { buildReviewHeadGate } from "../src/review-head-gate.js";
+import { ReviewStateStore } from "../src/state.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +40,30 @@ describe("operator CLI summaries", () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("shows a durable retry schedule in queue/readiness actions while the exact-head gate remains failed", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-operator-auto-retry-")); tempDirs.push(root);
+    const path = join(root, "state.sqlite"); const state = new ReviewStateStore(path);
+    const key = { repo: "owner/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    const now = new Date("2026-11-07T00:00:00.000Z");
+    try {
+      state.recordProcessed({ ...key, status: "failed", error: "fixture" });
+      state.recordReviewReadiness({ ...key, state: "failed", reason: "review_failed: fixture" });
+      const job = state.enqueueReviewQueueJob({ ...key, now }).job;
+      state.updateReviewQueueJobState({ jobId: job.jobId, state: "failed", now });
+      const retry = state.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 2, delaysMs: [600000, 1800000], now });
+      if (!retry.granted) throw new Error("retry refused");
+      const dashboard = (readiness: boolean) => buildOperatorDashboard({ coverage: coverageReport({}), durableQueue: collectOperatorReviewQueue(path),
+        ...(readiness ? { readiness: collectOperatorReviewReadiness(path) } : {}) });
+      for (const withReadiness of [false, true]) expect(dashboard(withReadiness).items[0]?.nextAction)
+        .toBe(`automatic retry scheduled at ${retry.nextEligibleAt}; no action needed`);
+      const gate = buildReviewHeadGate({ state, ...key });
+      expect(gate.decision).toBe("failed"); expect(gate.ok).toBe(false);
+      expect(gate.gates[0]?.detail).toContain(retry.nextEligibleAt);
+      state.cancelPendingAutoRetry({ ...key, reason: "superseded_by_manual_retry" });
+      expect(dashboard(true).items[0]?.nextAction).toBe("inspect failure evidence and retry or retire the head");
+    } finally { state.close(); }
   });
 
   it("combines release health, coverage, agents, and cooldown backlog into one operator status", () => {

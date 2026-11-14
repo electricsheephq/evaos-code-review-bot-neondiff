@@ -6,6 +6,7 @@ import { configFilePaths, type BotConfig } from "./config.js";
 import { resolveTrustedCodexPath, type CodexReasoningEffort } from "./codex-runtime.js";
 import { isAuthoredBy, type GitHubApi } from "./github.js";
 import { REVIEW_ATTRIBUTION_PREFIX } from "./walkthrough-post.js";
+import { WALKTHROUGH_MARKER_PREFIX } from "./walkthrough.js";
 import { callLicenseApi } from "./license.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { readProductionFileLicenseSecret } from "./license-secret-store.js";
@@ -116,14 +117,25 @@ export async function findPostedCiReview(
   github: Pick<GitHubApi, "listPullReviews" | "postingIdentity">,
   repo: string,
   pullNumber: number,
-  headSha: string
-): Promise<{ id: number; html_url?: string } | undefined> {
+  headSha: string,
+  options: { requireCompleteListing?: boolean } = {}
+): Promise<{ id: number; html_url?: string; state?: string } | undefined> {
   const identity = await github.postingIdentity();
   const head = headSha.toLowerCase();
-  const review = (await github.listPullReviews(repo, pullNumber)).find((candidate) =>
+  const reviews = await github.listPullReviews(repo, pullNumber);
+  // Automatic retries must fail closed when the bounded listing may be incomplete.
+  // Keep CI callers' established behavior unless they opt into this guard.
+  if (options.requireCompleteListing && reviews.length >= 500) {
+    throw new Error("github_receipt_unknown: review listing reached the 500-review cap");
+  }
+  // LCM review repositories post no attribution footer and only an optional assessment
+  // marker, so a walkthrough body without either is still a NeonDiff review.
+  const review = reviews.find((candidate) =>
     candidate.commit_id?.toLowerCase() === head &&
     isAuthoredBy(candidate.user, identity) &&
-    (candidate.body?.includes(REVIEW_ATTRIBUTION_PREFIX) || candidate.body?.includes("<!-- lcm-x-ai-review:v2"))
+    (candidate.body?.includes(REVIEW_ATTRIBUTION_PREFIX) ||
+      candidate.body?.includes("<!-- lcm-x-ai-review:v2") ||
+      candidate.body?.includes(WALKTHROUGH_MARKER_PREFIX))
   );
-  return review ? { id: review.id, ...(review.html_url ? { html_url: review.html_url } : {}) } : undefined;
+  return review ? { id: review.id, ...(review.html_url ? { html_url: review.html_url } : {}), ...(review.state ? { state: review.state } : {}) } : undefined;
 }

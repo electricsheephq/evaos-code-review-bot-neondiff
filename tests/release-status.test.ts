@@ -29,6 +29,18 @@ describe("beta release status", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("reports pending automatic retries and tolerates an older read-only database without the table", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-release-auto-retry-")); roots.push(root);
+    const path = join(root, "state.sqlite"); const state = new ReviewStateStore(path);
+    const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
+    state.recordProcessed({ ...key, status: "failed", error: "fixture" });
+    state.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 2, delaysMs: [600000, 1800000] }); state.close();
+    const collect = () => collectReleaseStatus({ cwd: root, statePath: path, configPath: join(root, "absent.json"), launchdLabel: "test.neondiff.auto-retry" });
+    expect(collect().database.pendingAutoRetries).toBe(1);
+    const db = new DatabaseSync(path); db.exec("drop table review_auto_retries"); db.close();
+    expect(collect().database.pendingAutoRetries).toBe(0);
+  });
+
   function writeLicenseHealthProof(root: string, options: {
     evidenceKind?: string;
     releaseVersion?: string;

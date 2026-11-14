@@ -24,6 +24,7 @@ import {
   type ReviewReadinessRecord,
   type ReviewReadinessState,
   type ReviewQueueJobRecord,
+  type ReviewAutoRetryRecord,
   type ReviewQueueJobState,
   type RepoProviderCooldownRecord
 } from "./state.js";
@@ -338,6 +339,7 @@ export interface OperatorDashboard {
 }
 
 export interface OperatorDurableQueueSnapshot {
+  pendingAutoRetries?: ReviewAutoRetryRecord[];
   ok: boolean;
   checkedAt: string;
   summary: {
@@ -1150,7 +1152,17 @@ export function collectOperatorReviewQueue(
     const jobs = rows
       .map(mapReviewQueueJobRow)
       .filter((job) => !input.state || job.state === input.state);
-    return buildDurableQueueSnapshot(jobs, now, input.limit ? jobs.slice(0, input.limit) : jobs);
+    const pendingAutoRetries = hasTable(db, "review_auto_retries")
+      ? db.prepare(`select repo, pull_number as pullNumber, head_sha as headSha, attempts,
+          next_eligible_at as nextEligibleAt, last_reason as lastReason, created_at as createdAt, updated_at as updatedAt
+          from review_auto_retries where next_eligible_at is not null
+            and exists (select 1 from processed_reviews p where p.repo = review_auto_retries.repo collate nocase
+              and p.pull_number = review_auto_retries.pull_number and p.head_sha = review_auto_retries.head_sha collate nocase
+              and p.status = 'failed' and nullif(p.error, '') is review_auto_retries.pinned_error
+              and p.created_at = review_auto_retries.pinned_processed_at)`).all() as unknown as ReviewAutoRetryRecord[]
+      : [];
+    return { ...buildDurableQueueSnapshot(jobs, now, input.limit ? jobs.slice(0, input.limit) : jobs),
+      pendingAutoRetries: pendingAutoRetries.filter((retry) => !input.repo || retry.repo.toLowerCase() === input.repo.toLowerCase()) };
   } finally {
     db.close();
   }
@@ -1355,6 +1367,9 @@ export function buildOperatorDashboard(input: {
   const checkedAt = input.checkedAt ?? input.coverage.checkedAt;
   const filters = compactDashboardFilters(input.filters ?? {});
   const items = new Map<string, OperatorDashboardItem>();
+  const scheduledTime = (head: { repo: string; pullNumber: number; headSha: string }) =>
+    input.durableQueue?.pendingAutoRetries?.find((retry) => retry.repo.toLowerCase() === head.repo.toLowerCase() &&
+      retry.pullNumber === head.pullNumber && retry.headSha.toLowerCase() === head.headSha.toLowerCase())?.nextEligibleAt ?? undefined;
 
   for (const entry of input.coverage.processed) {
     const processedFailed = entry.status === "failed";
@@ -1373,7 +1388,7 @@ export function buildOperatorDashboard(input: {
       ...(entry.reviewUrl ? { reviewUrl: entry.reviewUrl } : {}),
       ...(processedError ? { reason: processedError, lastError: processedError } : {}),
       updatedAt: entry.createdAt,
-      nextAction: processedFailed ? "inspect failure evidence and retry or retire the head" : "none"
+      nextAction: processedFailed ? scheduledAutoRetryAction(scheduledTime(entry)) ?? "inspect failure evidence and retry or retire the head" : "none"
     });
   }
 
@@ -1499,7 +1514,7 @@ export function buildOperatorDashboard(input: {
       ...(job.reviewUrl ? { reviewUrl: job.reviewUrl } : {}),
       ...(job.lastError ? { lastError: redactSecrets(job.lastError) } : {}),
       updatedAt: job.updatedAt,
-      nextAction: nextActionForQueue(job)
+      nextAction: nextActionForQueue(job, scheduledTime(job))
     });
   }
 
@@ -1519,7 +1534,7 @@ export function buildOperatorDashboard(input: {
       ...(readiness.commandAction ? { lastCommand: readiness.commandAction } : {}),
       ...(readiness.commandCommentId ? { commandCommentId: readiness.commandCommentId } : {}),
       updatedAt: readiness.updatedAt,
-      nextAction: nextActionForReadiness(readiness)
+      nextAction: nextActionForReadiness(readiness, scheduledTime(readiness))
     });
   }
 
@@ -2165,7 +2180,12 @@ function checkStatusForReadiness(readiness: ReviewReadinessRecord): string {
   return "not_collected";
 }
 
-function nextActionForQueue(job: ReviewQueueJobRecord): string {
+function scheduledAutoRetryAction(nextEligibleAt?: string): string | undefined {
+  return nextEligibleAt ? `automatic retry scheduled at ${nextEligibleAt}; no action needed` : undefined;
+}
+
+function nextActionForQueue(job: ReviewQueueJobRecord, scheduledAt?: string): string {
+  if (scheduledAt) return scheduledAutoRetryAction(scheduledAt)!;
   if (job.state === "queued" || job.state === "leased" || job.state === "running") return "wait for daemon cycle";
   if (job.state === "provider_deferred") return "wait for cooldown expiry or retry provider-deferred queue job";
   if (job.state === "failed") return "inspect failure evidence and retry or retire the head";
@@ -2173,7 +2193,8 @@ function nextActionForQueue(job: ReviewQueueJobRecord): string {
   return "none";
 }
 
-function nextActionForReadiness(readiness: ReviewReadinessRecord): string {
+function nextActionForReadiness(readiness: ReviewReadinessRecord, scheduledAt?: string): string {
+  if (scheduledAt) return scheduledAutoRetryAction(scheduledAt)!;
   if (readiness.state === "command_recorded") return "wait for daemon cycle or inspect command-triggered run";
   if (readiness.state === "queued" || readiness.state === "reviewing") return "wait for daemon cycle";
   if (readiness.state === "awaiting_re_review") return "wait for trusted re-review command or new head";
