@@ -468,6 +468,45 @@ Rows recorded as `status=skipped` with a baseline activation reason are not
 release-blocking errors. They are the expected way to prevent retroactive review
 spam when a live beta starts monitoring existing open PR heads.
 
+When `reviewAutoRetry.enabled` is set (it is off by default), automatic thrown
+transient review failures have a durable two-retry budget per head: 10 minutes, then 30 minutes, each plus up to 10% deterministic jitter.
+Git timeouts, GitHub timeout/transport and 500/502/503/504 errors, and Codex
+nonzero exits qualify; ZCode hard timeouts allow only one retry. Provider-classified
+errors retain cooldown handling. Safety rejections, attempted review POSTs,
+consumed event authorizations, and already-posted reviews are terminal. Internal
+nonthrowing context/chunk failures, a head's first pre-start failure, lease requeues,
+manual commands, and CLI retry failures are excluded. A granted retry whose refetch
+fails transiently gets the next attempt; a base-branch move re-arms it without
+spending one. See the operator CLI guide for `reviewAutoRetry`
+configuration. Each full run keeps its existing in-run retry layer.
+
+A pending retry shows its scheduled time; wait for it when no operator action is
+needed. An explicit non-dry-run `retry-failed` cancels a pending unclaimed retry;
+retirement clears it atomically, and a new head or a closed PR cancels it.
+With 100 or more open PRs, poll-time closed-PR cancellation is skipped; a due
+retry ends when its refetch confirms the PR is closed, rather than at the next
+poll. An omitted PR may stay pending until a targeted refetch or a complete
+single-page poll confirms closure. A retry
+runs only while the head's failed record is exactly the one it was granted for. Auto jobs retain repo cooldown and capacity gates.
+A provider cooldown during a retry keeps its pin and resumes the same attempt.
+A retry that loses its grant after attempting a POST ends the automatic retries
+for that head, and the failure records the POST attempt.
+An automatic retry submits no PR review if GitHub already shows a NeonDiff review from
+the posting identity on that head. A review listing that reaches 500 reviews
+counts as unknown: the retry fails with `github_receipt_unknown` and submits no
+review. The check can still miss an existing review in three cases, so
+automatic retries are off by default (#1260):
+- a GitHub App other than the NeonDiff App, because the posting identity
+  defaults to the NeonDiff App's bot login;
+- a personal access token, when reading the token's identity fails temporarily;
+- in the LCM review repository, a review posted without its walkthrough or
+  assessment, which carries no marker that the check recognizes.
+
+The check runs just before the review is submitted, so a retry may update its
+walkthrough comment first. Setting `enabled` to false also ends retry jobs
+already queued (`auto_retry_disabled`); setting `maxRetries` to 0 stops only
+new ones.
+
 Failed rows remain release-blocking until they are retried, superseded by a
 successful current-head review, or explicitly retired with evidence that the
 head is no longer eligible. Before retiring a failed row, run `coverage-audit`

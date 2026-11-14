@@ -45,6 +45,111 @@ describe("provider-aware review scheduler", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("automatically retries transient failures twice with a durable per-head delay and safe status text", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduled-auto-retry-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]); config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const head = "0".repeat(40); // zero SHA prefix gives zero deterministic jitter
+    const statusCalls: StatusCommentCall[] = [];
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, head)]]]), new Map(), statusCalls);
+    const policies: Array<[ReviewPullInput["processedHeadPolicy"], boolean | undefined]> = [];
+    const review = vi.fn(async (input: ReviewPullInput): Promise<ReviewPullResult> => {
+      policies.push([input.processedHeadPolicy, input.autoRetryJob]); throw new Error("codex_runtime_nonzero_exit: fixture");
+    });
+    const cycle = (now: Date) => runScheduledCycleWithDeps({ config, github, state, options: { dryRun: false }, reviewPullImpl: review, now, clock: () => now });
+    const t = new Date("2026-11-07T00:00:00.000Z");
+    try {
+      expect((await cycle(t)).failed).toBe(1);
+      const first = state.getAutoRetry("org/repo-a", 1, head)!;
+      expect(first.attempts).toBe(1);
+      expect(state.getReviewReadiness("org/repo-a", 1, head)?.reason).toBe(`review_failed: auto_retry=1/2 next=${first.nextEligibleAt}; codex_runtime_nonzero_exit: fixture`);
+      expect(statusCalls.at(-1)?.body).toContain("Review failed; an automatic retry is scheduled.");
+      expect(statusCalls.at(-1)?.body).not.toContain("codex_runtime_nonzero_exit");
+      expect((await cycle(new Date(t.getTime() + 5 * 60000))).skippedProcessed).toBe(1);
+      expect(state.listReviewQueueJobs()).toHaveLength(1);
+      const due = new Date(first.nextEligibleAt!);
+      expect(due.getTime() - t.getTime()).toBe(10 * 60000);
+      expect((await cycle(due)).failed).toBe(1);
+      const second = state.getAutoRetry("org/repo-a", 1, head)!;
+      expect(second.attempts).toBe(2);
+      expect(Date.parse(second.nextEligibleAt!) - due.getTime()).toBeGreaterThanOrEqual(1800000);
+      expect(Date.parse(second.nextEligibleAt!) - due.getTime()).toBeLessThanOrEqual(1980000);
+      expect((await cycle(new Date(second.nextEligibleAt!))).failed).toBe(1);
+      expect((await cycle(new Date(t.getTime() + 3 * 3600000))).skippedProcessed).toBe(1);
+      expect(review).toHaveBeenCalledTimes(3);
+      expect(policies).toEqual([["normal", false], ["retry_failed_head", true], ["retry_failed_head", true]]);
+      expect(state.listReviewQueueJobs().filter((job) => job.attemptId.includes(":auto-retry="))).toEqual([
+        expect.objectContaining({ priority: 60, state: "failed" }), expect.objectContaining({ priority: 60, state: "failed" })
+      ]);
+      expect(state.getAutoRetry("org/repo-a", 1, head)?.nextEligibleAt).toBeNull();
+    } finally { state.close(); }
+  });
+
+  it.each(["push", "closed", "retire", "manual_success", "disabled", "zero_budget"])("does not enqueue a pending old retry after %s", async (change) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-supersession-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const key = { repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A };
+    const now = new Date("2026-11-07T00:00:00.000Z");
+    state.recordProcessed({ ...key, status: "failed", error: "codex_runtime_nonzero_exit" });
+    const scheduled = state.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 2, delaysMs: [1, 1], now });
+    if (!scheduled.granted) throw new Error("retry refused");
+    if (change === "retire") state.retireFailedReview({ ...key, reason: "closed_or_stale" });
+    if (change === "manual_success") state.recordProcessed({ ...key, status: "posted", event: "COMMENT" });
+    if (change === "disabled") config.reviewAutoRetry.enabled = false;
+    if (change === "zero_budget") config.reviewAutoRetry.maxRetries = 0;
+    const live = pull(key.repo, 1, change === "push" ? HEAD_B : HEAD_A);
+    if (change === "closed") live.state = "closed";
+    const review = vi.fn(async () => "reviewed" as const);
+    try {
+      await runScheduledCycleWithDeps({ config, state, github: githubFromMap(new Map([[key.repo, [live]]])),
+        options: { dryRun: false }, reviewPullImpl: review, now: new Date(scheduled.nextEligibleAt) });
+      expect(state.listReviewQueueJobs().some((job) => job.headSha === HEAD_A)).toBe(false);
+      expect(review).toHaveBeenCalledTimes(change === "push" ? 1 : 0);
+      if (change === "retire") expect(state.getAutoRetry(key.repo, 1, HEAD_A)).toMatchObject({ nextEligibleAt: null, lastReason: "retired_by_operator" });
+    } finally { state.close(); }
+  });
+
+  it.each(["cooldown", "capacity", "two_cycles", "manual_command"])("preserves atomic retry ownership with %s", async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-enqueue-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    const key = { repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A };
+    const now = new Date("2026-11-07T00:00:00.000Z");
+    state.recordProcessed({ ...key, status: "failed", error: "fixture" });
+    const scheduled = state.scheduleAutoRetry({ ...key, reason: "fixture", maxRetries: 2, delaysMs: [1, 1], now });
+    if (!scheduled.granted) throw new Error("retry refused");
+    const due = new Date(scheduled.nextEligibleAt);
+    const cooldownUntil = new Date(due.getTime() + 60000).toISOString();
+    if (mode === "cooldown") state.recordRepoProviderCooldown({ repo: key.repo, cooldownUntil: new Date(cooldownUntil), reason: "fixture" });
+    if (mode === "capacity") {
+      config.reviewScheduler!.maxQueuedPerRepo = 1;
+      const blocker = state.enqueueReviewQueueJob({ repo: key.repo, pullNumber: 2, headSha: HEAD_B, baseSha: "base", now }).job;
+      state.updateReviewQueueJobState({ jobId: blocker.jobId, state: "provider_deferred", nextEligibleAt: cooldownUntil, now });
+    }
+    if (mode === "manual_command") config.commands = { enabled: true, botMentions: ["@neondiff"], trustedAuthors: ["maintainer"], acknowledge: false };
+    const comments = new Map(mode === "manual_command" ? [["org/repo-a#1", [comment(901, "maintainer", "@neondiff review")]]] : []);
+    const github = githubFromMap(new Map([[key.repo, [pull(key.repo, 1, HEAD_A)]]]), comments);
+    const review = vi.fn(async () => "skipped_processed" as const);
+    const cycle = () => runScheduledCycleWithDeps({ config, state, github, options: { dryRun: false }, reviewPullImpl: review, now: due, clock: () => due });
+    try {
+      if (mode === "two_cycles") await Promise.all([cycle(), cycle()]); else await cycle();
+      const retries = state.listReviewQueueJobs().filter((job) => job.attemptId.includes(":auto-retry="));
+      if (mode === "capacity" || mode === "manual_command") {
+        expect(retries).toHaveLength(0);
+        expect(state.getAutoRetry(key.repo, 1, HEAD_A)?.nextEligibleAt).toBe(scheduled.nextEligibleAt);
+        if (mode === "manual_command") expect(state.listReviewQueueJobs()).toEqual([expect.objectContaining({ source: "manual_command" })]);
+      } else {
+        expect(retries).toHaveLength(1);
+        expect(state.getAutoRetry(key.repo, 1, HEAD_A)?.nextEligibleAt).toBeNull();
+        if (mode === "cooldown") {
+          expect(retries[0]).toMatchObject({ state: "provider_deferred", nextEligibleAt: cooldownUntil });
+          expect(review).not.toHaveBeenCalled();
+        }
+      }
+    } finally { state.close(); }
+  });
+
   it("blocks private leased jobs before status posts", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-leased-gate-")); roots.push(root);
     const config = schedulerConfig(root, []); config.reviewStatusComment!.enabled = true;
@@ -2437,7 +2542,7 @@ describe("provider-aware review scheduler", () => {
       state,
       options: { dryRun: false, useZCode: false },
       reviewPullImpl: async () => {
-        throw new Error("synthetic review failure after in-progress status");
+        throw new Error("codex_runtime_secret_output: synthetic review failure after in-progress status");
       },
       now: new Date("2026-07-02T00:00:00.000Z")
     });
@@ -2445,11 +2550,11 @@ describe("provider-aware review scheduler", () => {
     expect(first.failed).toBe(1);
     expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "failed"]);
     expect(state.listReviewQueueJobs({ state: "failed" })).toEqual([
-      expect.objectContaining({ lastError: "synthetic review failure after in-progress status" })
+      expect.objectContaining({ lastError: "codex_runtime_secret_output: synthetic review failure after in-progress status" })
     ]);
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
       state: "failed",
-      reason: "review_failed: synthetic review failure after in-progress status"
+      reason: "review_failed: codex_runtime_secret_output: synthetic review failure after in-progress status"
     });
 
     const second = await runScheduledCycleWithDeps({
@@ -5286,6 +5391,7 @@ function schedulerConfig(root: string, repos: string[]): BotConfig {
       manualCommandReserve: 1,
       backgroundPriority: 50
     },
+    reviewAutoRetry: { enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] },
     providerCooldown: {
       enabled: true,
       durationMs: 15 * 60_000,

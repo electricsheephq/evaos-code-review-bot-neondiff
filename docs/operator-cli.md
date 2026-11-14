@@ -594,6 +594,57 @@ Mutating commands remain explicit:
 - `daemon --dry-run false`
 - `daemon start|stop --dry-run false --confirm true`
 
+When automatic retries are on (`reviewAutoRetry.enabled`, off by default), a
+thrown review failure is retried on the same head up to twice with the default
+settings: after 10 minutes, then 30 minutes after the next failure, plus
+deterministic jitter of up to 10% of each delay. Git timeouts, GitHub timeouts/transport failures and
+500/502/503/504 responses, and Codex nonzero exits qualify. ZCode hard timeouts
+allow one retry. Safety rejections, ambiguous review POST failures, errors after
+event authorization consumption, and already-posted reviews never auto-retry.
+Provider-classified errors, including a provider error found as the cause, keep
+the provider cooldown path. Internal context-budget and chunk failures that return
+without throwing, a head's first pre-start failure, lease requeues, manual commands,
+and CLI retry failures are outside this policy. Once a retry is granted, a transient
+GitHub refetch failure before it starts gets the next attempt, and a base-branch
+move re-arms it without spending one.
+
+`reviewAutoRetry` is off by default: `{ "enabled": false, "maxRetries": 2,
+"delaysMs": [600000, 1800000] }`. Set `"enabled": true` to turn it on. `maxRetries` accepts 0–5 (0 grants no retries);
+`delaysMs` must contain at least that many positive integer delays. These
+minute-scale full-run retries stack on the existing second-scale in-run retries.
+The durable per-head budget survives processed-row replacement. Fresh heads take
+queue priority; repo cooldown and capacity still apply. Status and head gates stay
+failed while a retry is pending; the dashboard gives the scheduled time.
+
+Each grant is pinned to the exact failed record it retries. An automatic retry
+runs only while the head's failed record is still that one, checked before any
+gate or write, so a manual retry, a manual review command, a retire or a post
+since the grant voids it. A provider cooldown during a retry keeps its pin and
+resumes the same attempt. A retry that loses its grant after attempting a POST ends
+the automatic retries for that head, and the failure records the POST attempt.
+An automatic retry submits no PR review if GitHub already shows a NeonDiff review from
+the posting identity on that head. A review listing that reaches 500 reviews
+counts as unknown: the retry fails with `github_receipt_unknown` and submits no
+review. The check can still miss an existing review in three cases, so
+automatic retries are off by default (#1260):
+- a GitHub App other than the NeonDiff App, because the posting identity
+  defaults to the NeonDiff App's bot login;
+- a personal access token, when reading the token's identity fails temporarily;
+- in the LCM review repository, a review posted without its walkthrough or
+  assessment, which carries no marker that the check recognizes.
+
+The check runs just before the review is submitted, so a retry may update its
+walkthrough comment first. Setting `enabled` to false also ends retry jobs
+already queued (`auto_retry_disabled`); setting `maxRetries` to 0 stops only
+new ones.
+A non-dry-run `retry-failed` cancels a pending automatic
+retry before attempting the manual retry. `retire-failed` clears the pending retry
+in the retirement transaction, and a new head or a closed PR cancels it.
+With 100 or more open PRs, poll-time closed-PR cancellation is skipped; a due
+retry ends when its refetch confirms the PR is closed, rather than at the next
+poll. An omitted PR may stay pending until a targeted refetch or a complete
+single-page poll confirms closure.
+
 `retire-failed` defaults to dry-run and prints the normalized retirement reason
 plus any failed queue jobs that a live run would reconcile. If the processed row
 is already a retired failed head, dry-run returns `alreadyRetired`; rerunning

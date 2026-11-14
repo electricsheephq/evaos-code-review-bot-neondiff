@@ -117,6 +117,7 @@ export interface GitHubAuthorIdentity {
 
 export interface PullReviewSummary {
   id: number;
+  state?: string;
   commit_id?: string | null;
   body?: string | null;
   html_url?: string;

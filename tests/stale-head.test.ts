@@ -395,6 +395,7 @@ function minimalConfig(root: string): BotConfig {
       maxActiveRuns: 1,
       leaseTtlMs: 60_000
     },
+    reviewAutoRetry: { enabled: true, maxRetries: 2, delaysMs: [600000, 1800000] },
     providerCooldown: {
       enabled: true,
       durationMs: 15 * 60_000,
