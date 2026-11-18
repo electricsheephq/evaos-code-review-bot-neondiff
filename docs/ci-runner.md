@@ -23,13 +23,14 @@ is marked ready for review, or when an OWNER, MEMBER, or COLLABORATOR comments
 `/neondiff review` on a PR.
 It never checks out PR code into the workflow job. NeonDiff fetches the diff and
 uses its confined review checkout; repository contents remain untrusted input.
-For most repositories, use the
+Use the versioned CLI workflow below for new integrations. The separate
 [`electricsheephq/neondiff-action`](https://github.com/electricsheephq/neondiff-action)
-GitHub Action, which wraps this workflow. Pin it to a release commit, as this
-repository pins every external action:
-`uses: electricsheephq/neondiff-action@bb6e4ca4e9e94c7e81cf42d3808ef7b092c681b0 # v1.0.1`
-(`@v1` follows later 1.x releases instead). The workflow below does the same
-with the versioned CLI directly. From 1.1.1 a run that deliberately posts no
+wrapper is retired and is no longer a maintained integration route. Existing
+release tags and the immutable v1.0.1 commit
+`bb6e4ca4e9e94c7e81cf42d3808ef7b092c681b0` are preserved as read-only historical
+references, not a promise of future fixes or compatibility. Migrate existing
+wrapper workflows to the versioned CLI directly; do not use the floating `@v1`
+tag for new integrations. From 1.1.1 a run that deliberately posts no
 review passes the job with a notice in the log, for example `/neondiff review`
 on a draft PR (comment events carry no draft state, so the workflow cannot
 filter them) or a head that moved before the job started. A skipped
