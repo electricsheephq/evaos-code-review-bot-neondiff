@@ -55,6 +55,7 @@ import {
   listReposToScan,
   PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW,
   publicReviewForbiddenProfileFragments,
+  resolveRepoCommandConfig,
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
@@ -1804,7 +1805,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       currentHeadSha: livePull.head.sha,
       commentId: finishingTouchDecision.commandId,
       author: finishingTouchDecision.command.author,
-      trustedAuthors: config.commands.trustedAuthors,
+      trustedAuthors: resolveRepoCommandConfig(config, repo).trustedAuthors,
       worktreeClean: await isExistingPullWorktreeClean(config, repo, pull),
       action: finishingTouchAction,
       proposedOutput: draft
@@ -1869,7 +1870,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pull,
       commandCommentId: input.commandCommentId,
-      commandConfig: config.commands
+      commandConfig: resolveRepoCommandConfig(config, repo)
     })
     : undefined;
   let exactOwnerReviewRequested = queuedAuthorization?.status === "eligible";
@@ -2459,7 +2460,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           repo,
           pull,
           commandCommentId: input.commandCommentId,
-          commandConfig: config.commands,
+          commandConfig: resolveRepoCommandConfig(config, repo),
           dryRun: true
         })
       : undefined;
@@ -2664,7 +2665,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pull,
       commandCommentId: input.commandCommentId,
-      commandConfig: config.commands
+      commandConfig: resolveRepoCommandConfig(config, repo)
     });
     if (reviewEventPolicyMode === "trusted_command_only" && queuedOwnerRequestChanges) {
       const concurrentConsumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
@@ -5423,10 +5424,11 @@ async function resolvePullCommandDecision(input: {
   pull: PullRequestSummary;
   commandCommentId?: number;
 }): Promise<CommandDecision> {
-  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+  const commandConfig = resolveRepoCommandConfig(input.config, input.repo);
+  if (!commandConfig.enabled) return { action: "none", shouldReview: false };
 
   const comments = await input.github.listIssueComments(input.repo, input.pull.number);
-  const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const collected = collectTrustedReviewCommands(comments, commandConfig);
   const repoProfile = resolveRepoProfile(input.config, input.repo);
   // A public command (#345) reaching this re-resolution path was already authorized (bot + cooldown
   // gated) at enqueue, so match it by its known commentId without re-running the cooldown. Without a
@@ -5485,7 +5487,7 @@ async function recordAndAcknowledgeCommandDecision(input: {
     }
   }
 
-  if (input.acknowledge !== false && input.config.commands.acknowledge && input.github.canPost()) {
+  if (input.acknowledge !== false && resolveRepoCommandConfig(input.config, input.repo).acknowledge && input.github.canPost()) {
     await input.github.upsertIssueComment({
       repo: input.repo,
       issueNumber: input.pull.number,
