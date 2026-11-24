@@ -50,6 +50,7 @@ export function applyDeterministicReviewGate(input: {
   files: PullFilePatch[];
   droppedFromSchema?: DroppedFinding[];
   maxInlineComments?: number;
+  maxOutsideDiffFindings?: number;
   repoMemoryFalsePositiveFingerprints?: string[];
   repoMemoryFalsePositives?: RepoMemoryFalsePositiveEntry[];
   answeredThreads?: AnsweredThread[];
@@ -71,8 +72,11 @@ export function applyDeterministicReviewGate(input: {
     priorThreadDrops.push({ ...finding, reason: "prior_thread_answered", threadId: thread.id });
     return false;
   });
+  const outsideDiffPaths = new Set(located.outsideDiff.map((finding) => finding.path));
   const normalized = normalizeFindingsForReview(priorThreadFiltered, {
     maxInlineComments: input.maxInlineComments,
+    outsideDiffPaths,
+    maxOutsideDiffFindings: input.maxOutsideDiffFindings,
     publicConfidencePolicy: input.publicConfidencePolicy
   });
   // Enforce redaction at the module boundary (#283): every drop the gate emits — repo-memory
@@ -87,7 +91,6 @@ export function applyDeterministicReviewGate(input: {
     ...priorThreadDrops,
     ...normalized.dropped
   ].map((finding) => sanitizeDroppedFinding(finding, input.publicConfidencePolicy));
-  const outsideDiffPaths = new Set(located.outsideDiff.map((finding) => finding.path));
   const comments: ReviewComment[] = [];
   const outsideDiffFindings: OutsideDiffFinding[] = [];
   for (const comment of normalized.comments) {

@@ -49,11 +49,28 @@ describe("diff coordinate validation", () => {
       body: "The generated bundle omits the fallback.", confidence: 0.9
     };
 
-    const result = validateFindingLocations([finding], [...files, { filename: finding.path, patch }]);
+    const result = validateFindingLocations([finding], [...files, { filename: finding.path, status: "modified", patch }]);
 
     expect(result.valid).toEqual([]);
     expect(result.dropped).toEqual([]);
     expect(result.outsideDiff).toEqual([finding]);
+  });
+
+  it.each([
+    [{ status: "renamed", changes: 0 }, false],
+    [{ status: "copied", changes: 0 }, false],
+    [{ status: "changed", changes: 0 }, false],
+    [{ status: "unchanged" }, false],
+    [{ status: "renamed", changes: 3 }, true],
+    [{ status: "copied", additions: 1 }, true]
+  ] as const)("checks content changes for patchless file %j", (metadata, changed) => {
+    const finding: Finding = {
+      severity: "P1", path: "src/moved.ts", line: 1, title: "Missing fallback",
+      body: "The fallback is omitted.", confidence: 0.9
+    };
+    const result = validateFindingLocations([finding], [{ filename: finding.path, ...metadata }]);
+    expect(result.outsideDiff).toEqual(changed ? [finding] : []);
+    expect(result.dropped).toEqual(changed ? [] : [{ ...finding, reason: "file_not_in_diff" }]);
   });
 
   it("drops a finding on a removed file that has no patch", () => {

@@ -2,13 +2,44 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "../src/walkthrough-post.js";
+import { buildReviewBodyForPost, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "../src/walkthrough-post.js";
 
 describe("walkthrough comment posting", () => {
   const roots: string[] = [];
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("uses only path and line when the assembled review would exceed the GitHub safety limit", () => {
+    const finding = {
+      path: "src/generated.ts", line: 7, title: "Fallback title", body: "Full detail ".repeat(125),
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+    };
+    const result = buildReviewBodyForPost({
+      repo: "owner/repo", model: "fixture", outsideDiffFindings: [finding],
+      render: (lines) => `${"a".repeat(59_500)}\n\n${lines.join("\n")}`
+    });
+    expect(result.body.length).toBeLessThanOrEqual(60_000);
+    expect(result.body).toContain("src/generated.ts:7");
+    expect(result.body).not.toContain("Fallback title");
+    expect(result.body).not.toContain("Full detail");
+    expect(result.publishedOutsideDiffFindings).toEqual([finding]);
+  });
+
+  it("uses an evidence count when even titles would displace the LCM assessment", () => {
+    const finding = {
+      path: "src/generated.ts", line: 7, title: "Long title ".repeat(40), body: "Full detail ".repeat(125),
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+    };
+    const assessment = "<!-- lcm-x-ai-review:v2\nfixture\n-->";
+    const result = buildReviewBodyForPost({
+      repo: "ElectricSheepHQ/LCM-X", model: "fixture", outsideDiffFindings: [finding], assessment,
+      render: (lines) => `${"a".repeat(8000)}\n\n${lines.join("\n")}`
+    });
+    expect(result.body).toContain("Findings outside the diff view: 1.");
+    expect(result.body.endsWith(assessment)).toBe(true);
+    expect(result.publishedOutsideDiffFindings).toEqual([]);
   });
 
   it("records a non-fatal error when sticky comment posting fails", async () => {

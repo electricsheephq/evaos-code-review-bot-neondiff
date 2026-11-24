@@ -42,9 +42,12 @@ export function validateFindingLocations(findings: Finding[], files: PullFilePat
   outsideDiff: Finding[];
 } {
   const rightLines = collectRightSideLines(files);
-  // A removed file does not exist at head, so a finding on it has nothing to point at.
   const pathsWithoutPatch = new Set(files
-    .filter((file) => file.status !== "removed" && !file.patch?.trim())
+    .filter((file) => !file.patch?.split("\n").some((line) => HUNK_HEADER.test(line)) && (
+      file.status === "added" || file.status === "modified" ||
+      ((file.status === "renamed" || file.status === "copied") &&
+        ((file.changes ?? 0) > 0 || (file.additions ?? 0) + (file.deletions ?? 0) > 0))
+    ))
     .map((file) => file.filename));
   const valid: Finding[] = [];
   const dropped: DroppedFinding[] = [];

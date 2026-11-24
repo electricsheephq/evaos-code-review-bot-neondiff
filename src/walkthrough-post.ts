@@ -1,7 +1,11 @@
 import { join } from "node:path";
+import { appendLcmReviewAssessment } from "./lcm-review-assessment.js";
+import { isLcmReviewRepository } from "./lcm-review-repository.js";
+import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
-import type { ReviewPlan, WalkthroughComment, WalkthroughCommentPostResult } from "./types.js";
+import type { OutsideDiffFinding, ReviewPlan, WalkthroughComment, WalkthroughCommentPostResult } from "./types.js";
+import { formatOutsideDiffFindings, truncateReviewText } from "./walkthrough.js";
 
 export interface WalkthroughCommentGithub {
   canPost(): boolean;
@@ -44,6 +48,46 @@ export function reviewBodyAfterWalkthroughPost(plan: Pick<ReviewPlan, "summary" 
   if (!plan.walkthrough.postIssueComment) return plan.walkthrough.body;
   if (!plan.walkthroughComment?.posted) return plan.walkthrough.body;
   return plan.summary;
+}
+
+export function buildReviewBodyForPost(input: {
+  repo: string;
+  model: string;
+  outsideDiffFindings: OutsideDiffFinding[];
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  assessment?: string;
+  initialBody?: string;
+  render: (lines: string[]) => string;
+}): { body: string; publishedOutsideDiffFindings: OutsideDiffFinding[] } {
+  const compose = (body: string) => {
+    const assessed = appendLcmReviewAssessment(body, input.assessment, input.repo);
+    return isLcmReviewRepository(input.repo) ? assessed : appendReviewAttribution(assessed, input.model);
+  };
+  const format = (detail: "full" | "titles" | "paths" | "count", budget?: number) =>
+    formatOutsideDiffFindings(input.outsideDiffFindings, input.publicConfidencePolicy, detail, budget);
+  let section = format("full");
+  let body = compose(input.initialBody ?? input.render(section.lines));
+  if (input.assessment && input.outsideDiffFindings.length && !body.endsWith(input.assessment)) {
+    for (const detail of ["titles", "count", "omit"] as const) {
+      const compact = detail === "omit" ? { lines: [], listedCount: 0 } : format(detail);
+      const candidate = compose(input.render(compact.lines));
+      if (!candidate.endsWith(input.assessment)) continue;
+      section = compact;
+      body = candidate;
+      break;
+    }
+  }
+  const limit = 60_000;
+  if (body.length > limit) {
+    const base = compose(input.render([]));
+    section = format("paths", Math.max(0, limit - base.length - 2));
+    body = compose(input.render(section.lines));
+    if (body.length > limit) {
+      section = { lines: [], listedCount: 0 };
+      body = truncateReviewText(base, limit);
+    }
+  }
+  return { body, publishedOutsideDiffFindings: input.outsideDiffFindings.slice(0, section.listedCount) };
 }
 
 export const REVIEW_ATTRIBUTION_PREFIX = "Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ";

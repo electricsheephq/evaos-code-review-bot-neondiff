@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildWalkthroughComment,
   buildWalkthroughMarker,
+  formatOutsideDiffFindings,
   WALKTHROUGH_MARKER_PREFIX,
   WALKTHROUGH_SCHEMA_VERSION,
   WALKTHROUGH_STATE_MARKER_PREFIX
@@ -34,12 +35,12 @@ const pull: PullRequestSummary = {
 
 describe("walkthrough comment rendering", () => {
   it("shows sanitized outside-diff findings even when there are no inline findings", () => {
-    const files = [{ filename: "dist/bundle.js" }];
+    const files = [{ filename: "dist/bundle.js", status: "modified" }];
     const gate = applyDeterministicReviewGate({
       files,
       findings: [{
         severity: "P2", path: "dist/bundle.js", line: 7, title: "Fallback is skipped",
-        body: "The empty-input branch returns before the fallback.\n\nConfidence: 90%.", confidence: 0.9
+        body: "The empty-input branch returns before the fallback. <!-- private --> <!-- leftover", confidence: 0.9
       }]
     });
 
@@ -50,8 +51,27 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("dist/bundle.js:7");
     expect(walkthrough.body).toContain("**P2: Fallback is skipped**");
     expect(walkthrough.body).toContain("The empty-input branch returns before the fallback.");
-    expect(walkthrough.body).not.toContain("90%");
+    expect(walkthrough.body).not.toContain("Confidence:");
+    expect(walkthrough.body).toContain("[hidden comment removed] &lt;!-- leftover");
+    expect(walkthrough.body).toContain("### Maintainer Analysis");
     expect(walkthrough.body).toContain("Dropped findings before posting: 0.");
+  });
+
+  it("caps detail on character boundaries and falls back to titles and an evidence count", () => {
+    const findings = Array.from({ length: 50 }, (_, index) => ({
+      path: `src/file-${index}.ts`, line: 1, title: `Finding ${index} title`,
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
+      body: index === 1 ? "a".repeat(1300) : "a".repeat(1486) + "😀".repeat(100), fingerprint: `finding-${index}`
+    }));
+    const { lines, listedCount } = formatOutsideDiffFindings(findings);
+    const section = lines.join("\n");
+    expect(section.length).toBeLessThanOrEqual(20_000);
+    const detail = lines.find((line) => line.endsWith("… (truncated)"))!.split("\n\n")[1];
+    expect(detail.length).toBeLessThanOrEqual(1_500);
+    expect(detail.isWellFormed()).toBe(true);
+    expect(section).toMatch(/<\/code> [^\n]*Finding \d+ title/);
+    expect(listedCount).toBeLessThan(findings.length);
+    expect(section).toContain(`${findings.length - listedCount} more findings are in the review evidence`);
   });
 
   it("renders a stable marked walkthrough with files, effort, related refs, and text-only suggestions", () => {

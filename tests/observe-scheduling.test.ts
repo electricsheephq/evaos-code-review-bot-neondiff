@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -130,6 +131,56 @@ describe("findings-ledger recording is fail-open (#357)", () => {
     expect(JSON.stringify(rows[0])).not.toContain("Data loss on save");
     expect(JSON.stringify(rows[0])).not.toContain("loses data");
     store.close();
+  });
+
+  it("labels a body finding without attributing a nearby inline reply to it", async () => {
+    const { store, root } = newStore();
+    const { side: _side, ...body } = { ...comment, fingerprint: `finding:${"b".repeat(64)}`, line: 43 };
+    recordPostedReviewFindings({
+      state: store, repo: "owner/repo", pull, comments: [comment], outsideDiffFindings: [body],
+      now: new Date("2026-07-05T00:00:00.000Z")
+    });
+    expect(store.listReviewFindings().find(({ fingerprint }) => fingerprint === body.fingerprint))
+      .toMatchObject({ placement: "body", line: 43 });
+    await runScheduledObservePass({
+      state: store, config: OBSERVE_SCHEDULE, evidenceDir: join(root, "evidence"), now: new Date("2026-07-06T00:00:00.000Z"),
+      fetchOutcome: (target) => buildObservedPullOutcome({
+        merged: true, pullNumber: target.pullNumber, findings: target.findings, subsequentPulls: [],
+        reviewComments: [{ path: comment.path, line: comment.line, in_reply_to_id: 9, user: { login: "maintainer" } }]
+      })
+    });
+    expect(store.listFindingOutcomeLabels()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fingerprint: comment.fingerprint, labelSource: "human_thread", verdict: "false_positive" }),
+      expect.objectContaining({ fingerprint: body.fingerprint, labelSource: "none_observed", verdict: "unvalidated" })
+    ]));
+    store.close();
+  });
+
+  it("adds the placement column to an existing findings ledger and reads old rows as inline", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-findings-placement-upgrade-"));
+    const dbPath = join(root, "state.sqlite");
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`create table review_findings (
+      fingerprint text not null, repo text not null, pull_number integer not null, head_sha text not null,
+      path text not null, line integer not null, severity text not null, category text not null,
+      confidence real not null, recorded_at text not null,
+      primary key (fingerprint, repo, pull_number, head_sha))`);
+    legacy.prepare(`insert into review_findings values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(`finding:${"c".repeat(64)}`, "owner/repo", 1, "sha1", "src/old.ts", 7, "P2", "runtime_correctness", 0.8, "2026-07-01T00:00:00.000Z");
+    legacy.close();
+    const store = new ReviewStateStore(dbPath);
+    try {
+      const [old] = store.listReviewFindings();
+      expect(old).toMatchObject({ path: "src/old.ts", line: 7 });
+      expect(old).not.toHaveProperty("placement");
+      const { side: _side, ...body } = { ...comment, fingerprint: `finding:${"d".repeat(64)}`, line: 9 };
+      recordPostedReviewFindings({ state: store, repo: "owner/repo", pull, comments: [], outsideDiffFindings: [body] });
+      expect(store.listReviewFindings().find(({ fingerprint }) => fingerprint === body.fingerprint))
+        .toMatchObject({ placement: "body", line: 9 });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("ledger fingerprint EQUALS the gate/finding_outcome_labels fingerprint (end-to-end join works)", () => {

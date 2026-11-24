@@ -40,6 +40,7 @@ export function buildWalkthroughComment(input: {
   files: PullFilePatch[];
   comments: ReviewComment[];
   outsideDiffFindings?: OutsideDiffFinding[];
+  outsideDiffSection?: string[] | "review";
   dropped: DroppedFinding[];
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
@@ -54,6 +55,7 @@ export function buildWalkthroughComment(input: {
   // Keep gate/count signal on original comments; use publicComments only for public-text safety checks.
   const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
   const outsideDiffFindings = input.outsideDiffFindings ?? [];
+  const outsideDiffLocation = input.outsideDiffSection === "review" ? "in the review" : "below";
   const findings = [...input.comments, ...outsideDiffFindings];
   const files = input.files.map((file) => summarizeFile(file, findings));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
@@ -89,12 +91,12 @@ export function buildWalkthroughComment(input: {
     input.comments.length === 0
       ? "No validated inline findings."
       : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
-    ...(outsideDiffFindings.length === 0 ? [] : [outsideDiffFindings.length === 1
-      ? "1 finding on a file GitHub shows no diff for is listed below."
-      : `${outsideDiffFindings.length} findings on files GitHub shows no diff for are listed below.`]),
+    ...(outsideDiffFindings.length === 0 || input.outsideDiffSection?.length === 0 ? [] : [outsideDiffFindings.length === 1
+      ? `1 finding on a file GitHub shows no diff for is listed ${outsideDiffLocation}.`
+      : `${outsideDiffFindings.length} findings on files GitHub shows no diff for are listed ${outsideDiffLocation}.`]),
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
-    ...formatOutsideDiffFindings(outsideDiffFindings, input.publicConfidencePolicy),
+    ...(input.outsideDiffSection === "review" ? [] : input.outsideDiffSection ?? formatOutsideDiffFindings(outsideDiffFindings, input.publicConfidencePolicy).lines),
     "### Maintainer Analysis",
     "",
     "Changed behavior:",
@@ -154,22 +156,45 @@ export function buildWalkthroughComment(input: {
 
 export function formatOutsideDiffFindings(
   findings: OutsideDiffFinding[],
-  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
-): string[] {
-  if (findings.length === 0) return [];
-  return [
-    "### Findings outside the diff view",
-    "",
-    ...findings.flatMap((finding) => {
-      const path = redactSecrets(finding.path).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-      const body = redactSecrets(sanitizePublicConfidenceText(finding.body, publicConfidencePolicy))
-        .replace(HTML_COMMENT_PATTERN, "[hidden comment removed]");
-      const confidence = finding.confidence === undefined ? [] : [
-        "", sanitizePublicConfidenceText(`Confidence: ${Math.round(finding.confidence * 100)}%`, publicConfidencePolicy)
-      ];
-      return [`<code>${path}:${finding.line}</code>`, "", body, ...confidence, ""];
-    })
-  ];
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy,
+  detail: "full" | "titles" | "paths" | "count" = "full",
+  budget = 20_000
+): { lines: string[]; listedCount: number } {
+  if (!findings.length) return { lines: [], listedCount: 0 };
+  const omitted = (count: number) => `${count} more findings are in the review evidence.`;
+  const countLine = detail === "count" ? `Findings outside the diff view: ${findings.length}. See the review evidence.` : omitted(findings.length);
+  const lines = ["### Findings outside the diff view", ""];
+  let size = lines.join("\n").length;
+  if (detail === "count" || size + countLine.length + 2 > budget) {
+    return { lines: countLine.length < budget ? [countLine, ""] : [], listedCount: 0 };
+  }
+  const publicText = (text: string) => redactSecrets(sanitizePublicConfidenceText(text, publicConfidencePolicy))
+    .replace(HTML_COMMENT_PATTERN, "[hidden comment removed]").replaceAll("<!--", "&lt;!--");
+  let listedCount = 0;
+  for (const finding of findings) {
+    const path = redactSecrets(finding.path).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    const coordinate = `<code>${path}:${finding.line}</code>`;
+    const remaining = findings.length - listedCount - 1;
+    const room = budget - size - (remaining ? omitted(remaining).length + 2 : 0) - 2;
+    const body = detail === "full" ? publicText(finding.body) : "";
+    const noteStart = finding.severityDemotedFrom ? body.lastIndexOf("\n\n_Severity lowered from ") : -1;
+    const note = noteStart < 0 ? "" : body.slice(noteStart);
+    const description = truncateReviewText(note ? body.slice(0, noteStart) : body, 1_500 - note.length);
+    let entry = detail === "full" ? `${coordinate}\n\n${description}${note}` : coordinate;
+    if (entry.length > room && detail === "full") detail = "titles";
+    if (detail === "titles") entry = `${coordinate} ${publicText(finding.title).replace(/\s+/g, " ").trim()}`;
+    if (entry.length > room) break;
+    lines.push(entry, "");
+    size += entry.length + 2;
+    listedCount += 1;
+  }
+  if (listedCount < findings.length) lines.push(omitted(findings.length - listedCount), "");
+  return { lines, listedCount };
+}
+
+export function truncateReviewText(text: string, limit: number): string {
+  const suffix = "… (truncated)";
+  return text.length <= limit ? text : text.slice(0, limit - suffix.length).replace(/[\uD800-\uDBFF]$/, "") + suffix;
 }
 
 function formatModelSummaryList(

@@ -69,6 +69,25 @@ it("maps final comments and Codex usage to ReviewBench; an empty result succeeds
   findings = []; await runReviewLocal({ ...args(), format: "reviewbench" });
   expect(JSON.parse(fs.readFileSync(args().out, "utf8")).findings).toEqual([]);
 });
+it("appends patchless content findings in both formats without displacing inline findings", async () => {
+  const diff = join(root, "diff.patch"), config = join(root, "config.json");
+  fs.writeFileSync(diff, git("diff", `${base}...${head}`) +
+    "\ndiff --git a/bundle.js b/bundle.js\nBinary files a/bundle.js and b/bundle.js differ\n");
+  fs.writeFileSync(config, JSON.stringify({ reviewGate: { maxInlineComments: 1 } }));
+  findings = [
+    { ...findings[0], confidence: 0.8 },
+    { ...findings[0], path: "bundle.js", line: 7, confidence: 0.99 }
+  ];
+  const input = { ...args(), "diff-file": diff, config };
+  await runReviewLocal(input);
+  expect(JSON.parse(fs.readFileSync(input.out, "utf8"))).toMatchObject([
+    { path: "file.ts", side: "RIGHT" }, { path: "bundle.js", line: 7, placement: "body" }
+  ]);
+  await runReviewLocal({ ...input, format: "reviewbench" });
+  expect(JSON.parse(fs.readFileSync(input.out, "utf8")).findings).toMatchObject([
+    { file: "file.ts", start_line: 1, end_line: 1 }, { file: "bundle.js", start_line: 7, end_line: 7 }
+  ]);
+});
 it("reads every RB input and prints applied settings", async () => {
   const pr = join(root, "pr.json"), diff = join(root, "diff.patch");
   fs.writeFileSync(pr, JSON.stringify({ nwo: "fixture/repo", pr_number: 7, title: "RB title", body: "RB body", base, head }));
@@ -111,6 +130,16 @@ it("removes markdown severity, collapses whitespace, includes why and caps messa
 it("parses renamed, added, deleted, binary and quoted paths", () => {
   const diff = 'diff --git a/old b/new\nrename from old\nrename to new\n--- a/old\n+++ b/new\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/gone b/gone\n--- a/gone\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\ndiff --git "a/sp\\tace" "b/sp\\tace"\n--- /dev/null\n+++ "b/sp\\tace"\n@@ -0,0 +1 @@\n+hi\ndiff --git a/image b/image\nBinary files a/image and b/image differ\n';
   expect(parseLocalDiff(diff).map(x => [x.filename, x.status])).toEqual([["new", "renamed"], ["gone", "removed"], ["sp\tace", "added"], ["image", "modified"]]);
+});
+it("keeps pure renames, mode-only changes and removed binaries out of local body findings", () => {
+  const diff = [
+    "diff --git a/old b/new\nsimilarity index 100%\nrename from old\nrename to new",
+    "diff --git a/mode b/mode\nold mode 100644\nnew mode 100755",
+    "diff --git a/removed b/removed\ndeleted file mode 100644\nBinary files a/removed and /dev/null differ"
+  ].join("\n");
+  expect(parseLocalDiff(diff).map(({ status, additions, deletions }) => [status, additions, deletions])).toEqual([
+    ["renamed", 0, 0], ["changed", 0, 0], ["removed", 0, 0]
+  ]);
 });
 it("drops the tab Git appends to unquoted ---/+++ paths that contain a space", () => {
   const diff = 'diff --git a/foo bar b/foo bar\n--- a/foo bar\t\n+++ b/foo bar\t\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/new file b/new file\nnew file mode 100644\n--- /dev/null\n+++ b/new file\t\n@@ -0,0 +1 @@\n+hi\n';

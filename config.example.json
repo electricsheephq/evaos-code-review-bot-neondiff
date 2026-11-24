@@ -26,6 +26,7 @@
   "reviewGate": {
     "priorThreadSuppression": { "enabled": true },
     "maxInlineComments": 25,
+    "maxOutsideDiffFindings": 10,
     "reviewEventPolicy": {
       "mode": "trusted_command_only"
     },

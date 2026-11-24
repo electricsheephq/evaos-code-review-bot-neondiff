@@ -220,6 +220,7 @@ comments, and decides `REQUEST_CHANGES` vs `COMMENT` (`src/review-gate.ts`, `src
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `maxInlineComments` | `integer` | `25` | Hard cap on inline comments posted per review. Findings are sorted severity-first, then by `confidence` descending (ties broken by path, line, title), so when the cap trims the list it always keeps the highest-confidence findings within each severity tier. |
+| `maxOutsideDiffFindings` | `integer` | `10` | Independent positive cap on findings for changed files GitHub shows without a patch. These use the same ranking and appear in the review body. Overflow is recorded as `outside_diff_cap_exceeded`. |
 | `reviewEventPolicy.mode` | `"trusted_command_only" \| "automatic"` | `"trusted_command_only"` | Selects the public GitHub review event. The safe default requires a trusted exact-repo/PR/current-head command before a candidate `REQUEST_CHANGES` can be posted. `automatic` is explicit legacy compatibility only. |
 | `requestChangesConfidenceFloors` | `{ P0?: number, P1?: number }` | unset (no floors) | Optional per-severity confidence floor, each `0..1`, for counting a P0/P1 finding toward `REQUEST_CHANGES` eligibility. |
 | `retryDegradedConfidencePenalty` | `number` (`0..1`) | unset (no penalty) | Optional confidence subtracted (floored at 0) from findings recovered via the strict-JSON retry path (#304) before the gate runs. |

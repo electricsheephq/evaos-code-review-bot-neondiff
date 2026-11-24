@@ -37,6 +37,7 @@ import {
 } from "./review-ensemble.js";
 import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensConfig } from "./review-lenses.js";
 import type { ReviewEventPolicyConfig } from "./review-event-policy.js";
+import { DEFAULT_MAX_OUTSIDE_DIFF_FINDINGS } from "./findings.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
@@ -295,6 +296,7 @@ export interface ReviewGateConfig {
   priorThreadSuppression?: { enabled: boolean };
   /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
   maxInlineComments: number;
+  maxOutsideDiffFindings?: number;
   /** The public GitHub event selection policy; defaults to trusted owner authorization only. */
   reviewEventPolicy: ReviewEventPolicyConfig;
   /** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
@@ -443,6 +445,7 @@ const DEFAULT_CONFIG: BotConfig = {
     publicRepoAuthorGate: DEFAULT_PUBLIC_REPO_AUTHOR_GATE,
     priorThreadSuppression: { enabled: true },
     maxInlineComments: 25,
+    maxOutsideDiffFindings: DEFAULT_MAX_OUTSIDE_DIFF_FINDINGS,
     reviewEventPolicy: {
       mode: "trusted_command_only"
     }
@@ -1009,6 +1012,9 @@ function validateReviewGateConfig(value: unknown, label: string, providers?: Pro
   }
   if (value.publicRepoAuthorGate !== undefined) validatePublicRepoAuthorGateConfig(value.publicRepoAuthorGate, `${label}.publicRepoAuthorGate`, providers);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
+  if (value.maxOutsideDiffFindings !== undefined) {
+    validatePositiveInteger(value.maxOutsideDiffFindings, `${label}.maxOutsideDiffFindings`);
+  }
   validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
   if (value.requestChangesConfidenceFloors !== undefined) {
     if (!isRecord(value.requestChangesConfidenceFloors)) {
