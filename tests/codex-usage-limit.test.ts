@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,12 +49,12 @@ function tempRoot(): string {
   return root;
 }
 
-async function codexExitError(stderr: string, status = 1): Promise<Error> {
+async function codexExitError(stderr: string, status: number | null = 1): Promise<Error> {
   const cwd = tempRoot();
   const error = await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex",
     model: "fixture-model", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000 }, {
     captureWorktreeState: () => "unchanged",
-    runProcess: async () => ({ stdout: "", stderr, status, signal: null })
+    runProcess: async () => ({ stdout: "", stderr, status, signal: status === null ? "SIGKILL" : null })
   }).then(() => undefined, (caught: unknown) => caught);
   if (!(error instanceof Error)) throw new Error("expected the Codex runtime to throw");
   return error;
@@ -65,16 +66,27 @@ describe("Codex usage-limit reset parsing (#1267)", () => {
     expect(parseCodexUsageLimitResetAt(LIMIT_AT, now)).toEqual(new Date(2026, 10, 24, 17, 43, 0));
   });
 
-  it("rolls a printed time that already passed today to tomorrow", () => {
-    const now = new Date(2026, 10, 24, 18, 30, 0);
-    expect(parseCodexUsageLimitResetAt(LIMIT_AT, now)).toEqual(new Date(2026, 10, 25, 17, 43, 0));
-    expect(parseCodexUsageLimitResetAt("try again at 12:05 AM", new Date(2026, 10, 24, 23, 0))).toEqual(new Date(2026, 10, 25, 0, 5));
+  it("uses the default for a time-only reset already in the past instead of rolling to tomorrow", () => {
+    // A stale clock, or a still-limited retry seconds after 5:43, must not defer for a day.
+    expect(parseCodexUsageLimitResetAt(LIMIT_AT, new Date(2026, 10, 24, 18, 30, 0))).toBeUndefined();
+    expect(parseCodexUsageLimitResetAt(LIMIT_AT, new Date(2026, 10, 24, 17, 43, 20))).toBeUndefined();
+    expect(parseCodexUsageLimitResetAt("try again at 12:05 AM", new Date(2026, 10, 24, 23, 0))).toBeUndefined();
+    expect(parseCodexUsageLimitResetAt("try again at 12:05 AM", new Date(2026, 10, 24, 0, 1))).toEqual(new Date(2026, 10, 24, 0, 5));
     expect(parseCodexUsageLimitResetAt("try again at 12:05 pm", new Date(2026, 10, 24, 9, 0))).toEqual(new Date(2026, 10, 24, 12, 5));
   });
 
-  it("uses the default for a time that only just passed, an unparseable time, or no time", () => {
-    // Codex prints whole minutes; a still-limited retry seconds after 5:43 must not wait until tomorrow.
-    expect(parseCodexUsageLimitResetAt(LIMIT_AT, new Date(2026, 10, 24, 17, 43, 20))).toBeUndefined();
+  it("uses the default for a wall time in a DST fold or gap", () => {
+    // Runs in a child process: a TZ change inside a vitest worker thread does not reach Date.
+    const script = `const m = await import(process.argv[1]); const at = (text, now) => m.parseCodexUsageLimitResetAt(text, new Date(now))?.toISOString() ?? null;
+      console.log(JSON.stringify([at("try again at 1:20 AM", "2026-11-01T05:50:00Z"), at("try again at 3:00 AM", "2026-11-01T05:50:00Z"),
+        at("try again at 2:30 AM", "2026-03-08T06:00:00Z")]));`;
+    const output = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script,
+      join(process.cwd(), "src", "codex-runtime.ts")], { env: { ...process.env, TZ: "America/New_York" }, encoding: "utf8" });
+    // 01:50 EDT on the fall-back day: "1:20 AM" happens twice (EDT and EST); "2:30 AM" never happens on spring-forward day.
+    expect(JSON.parse(output.trim())).toEqual([null, "2026-11-01T08:00:00.000Z", null]);
+  });
+
+  it("uses the default for an unparseable time or no time", () => {
     expect(parseCodexUsageLimitResetAt("try again at 13:43 PM", new Date(2026, 10, 24, 9, 0))).toBeUndefined();
     expect(parseCodexUsageLimitResetAt(LIMIT_NO_TIME, new Date(2026, 10, 24, 9, 0))).toBeUndefined();
   });
@@ -130,6 +142,14 @@ describe("Codex usage-limit classification (#1267)", () => {
       expect(classifyProviderError(error).category).toBe("none");
       expect(classifyAutoRetry(error)).toMatchObject({ retryable: true, reason: "codex_nonzero_exit" });
     }
+    // The terminal line decides: a quoted limit line followed by a different final error is not a limit.
+    const quoted = await codexExitError(`${PREAMBLE}\n${LIMIT_AT}\nERROR: stream disconnected before completion\n`);
+    expect(quoted.message).not.toContain("codex_usage_limit");
+    expect(classifyProviderError(quoted).category).toBe("none");
+    // A signal kill (status null) is not a usage-limit exit even if the last line is the limit text.
+    const killed = await codexExitError(`${PREAMBLE}\n${LIMIT_AT}\n`, null);
+    expect(killed.message).toMatch(/^codex_runtime_nonzero_exit: status=null OpenAI Codex/);
+    expect(classifyProviderError(killed).category).toBe("none");
     // A forged marker later in the message (prompt or diff text) is not anchored and does not match.
     const forged = new Error("codex_runtime_nonzero_exit: status=1 user said codex_usage_limit resets_at=2026-11-25T00:00:00.000Z; x");
     expect(classifyProviderError(forged).category).toBe("none");

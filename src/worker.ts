@@ -4373,7 +4373,8 @@ export function classifyAutoRetry(error: unknown): { retryable: boolean; reason:
     { retryable: false, reason: "unclassified" };
 }
 
-const CODEX_USAGE_LIMIT_ERROR = new RegExp(`^codex_runtime_nonzero_exit: status=\\S+ ${CODEX_USAGE_LIMIT_MARKER} resets_at=([^;\\s]+);`);
+const CODEX_USAGE_LIMIT_ERROR = new RegExp(`^codex_runtime_nonzero_exit: status=\\d+ ${CODEX_USAGE_LIMIT_MARKER} resets_at=([^;\\s]+);`);
+const RETRY_ERROR_SEPARATOR = "; retry_error=";
 
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
   const message = stripFetchCauseChain(error instanceof Error ? error.message : String(error));
@@ -4405,8 +4406,9 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     ...(providerRequestId ? { providerRequestId } : {}),
     ...(retryAfterMs ? { retryAfterMs } : {})
   };
-  // Anchored on the runtime's own prefix so prompt or diff text in an error message cannot match.
-  const usageLimit = CODEX_USAGE_LIMIT_ERROR.exec(message);
+  // Anchored on the runtime's own prefix so prompt or diff text cannot match. A retry wraps the latest error
+  // after the previous one (retryFailureError); only that latest attempt decides.
+  const usageLimit = CODEX_USAGE_LIMIT_ERROR.exec(message.split(RETRY_ERROR_SEPARATOR).at(-1) ?? message);
   if (usageLimit) {
     const resetsAt = Number.isFinite(Date.parse(usageLimit[1] ?? "")) ? usageLimit[1] : undefined;
     return {
@@ -4907,6 +4909,8 @@ async function runChunkedZCodeReview(input: {
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
       // The lane's terminal and throttle outcomes must reach reviewPull's handlers (skip record / head cooldown) unwrapped.
       if (error instanceof UntrustedProviderUnavailable || isUntrustedProviderThrottle(error)) throw error;
+      // A Codex usage limit defers the head through the provider cooldown, like an unchunked review (#1267).
+      if (classifyProviderError(error).reason === PROVIDER_USAGE_LIMIT_REASON) throw error;
       const failure = new Error(`context_budget_chunk_provider_failure chunk=${chunk.index}: ${message}`);
       writeRedactedJson(join(chunkDir, "review-error.json"), {
         repo: input.repo,
@@ -5304,7 +5308,7 @@ function recordClosedRetrySkip(input: {
 
 function retryFailureError(previousError: string | undefined, error: unknown): string {
   const retryError = error instanceof Error ? error.message : String(error);
-  return previousError ? `${previousError}; retry_error=${retryError}` : retryError;
+  return previousError ? `${previousError}${RETRY_ERROR_SEPARATOR}${retryError}` : retryError;
 }
 
 function assertNever(value: never): never {

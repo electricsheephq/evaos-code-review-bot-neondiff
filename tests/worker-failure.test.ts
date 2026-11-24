@@ -2002,6 +2002,46 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it.each(["failed-head retry", "provider-cooldown retry"])("defers a Codex usage limit hit on a %s (#1267)", async (path) => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-usage-limit-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1231, "head-retry-usage-limit");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      ...(path === "failed-head retry"
+        ? { status: "failed" as const, error: "original timeout" }
+        : { status: "skipped" as const, error: "provider_rate_limit_cooldown_until=2000-01-01T00:00:00.000Z; reason=provider_quota_exhausted" })
+    });
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+    const reviewPullImpl = async () => {
+      throw new Error(`codex_runtime_nonzero_exit: status=1 codex_usage_limit resets_at=${resetsAt}; ERROR: You've hit your usage limit.`);
+    };
+    const budget = new ReviewRunBudget(1);
+    const status = path === "failed-head retry"
+      ? (await retryFailedHeadWithDeps({ config, github: retryGithub(pull), state, budget, reviewPullImpl,
+          options: { repo: "electricsheephq/WorldOS", pullNumber: pull.number, headSha: pull.head.sha, dryRun: false, useZCode: false } })).status
+      : (await retryProviderCooldownsWithDeps({ config, github: retryGithub(pull), state, budget, reviewPullImpl,
+          options: { dryRun: false, expiredOnly: true } })).results[0]?.status;
+
+    expect(status).toBe("skipped_provider_cooldown");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "skipped", error: expect.stringContaining(`provider_rate_limit_cooldown_until=${resetsAt}; reason=provider_usage_limit`)
+    });
+    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS")).toMatchObject({ cooldownUntil: resetsAt, reason: "provider_usage_limit" });
+    state.close();
+  });
+
+  it("classifies only the latest retry attempt as a usage limit (#1267)", () => {
+    const marker = "codex_runtime_nonzero_exit: status=1 codex_usage_limit resets_at=2999-01-01T00:00:00.000Z; ERROR: limit";
+    expect(classifyProviderError(new Error(`original timeout; retry_error=${marker}`)).reason).toBe("provider_usage_limit");
+    expect(classifyProviderError(new Error(`${marker}; retry_error=codex_runtime_nonzero_exit: status=1 boom`)).category).toBe("none");
+    expect(classifyProviderError(new Error(`original timeout; retry_error=x ${marker}`)).category).toBe("none");
+  });
+
   it("keeps a failed row after a retry dry-run reaches the reviewed path", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-retry-orchestrator-dry-run-"));
     roots.push(root);
