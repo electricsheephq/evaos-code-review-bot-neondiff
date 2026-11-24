@@ -89,6 +89,59 @@ evidence are recorded.
   enables them.
 - `suggestedLabels` / `suggestedReviewers`: reserved for later enrichment; they
   do not auto-apply labels or reviewers.
+- `maxReviewsPerDay`: optional positive integer that caps how many automatic PR
+  reviews may start on this repo per UTC calendar day. See
+  [Daily review cap](#daily-review-cap).
+
+## Daily Review Cap
+
+`repoProfiles.repos.<owner/repo>.maxReviewsPerDay` (also accepted on an org
+fallback, where it applies to each repo separately) caps automatic reviews per
+repo per UTC day. `reviewScheduler.maxReviewsPerRepoPerDay` sets a default for
+every repo; the profile value wins. Both must be positive integers. Unset means
+no cap, which is the default. The cap is enforced by the durable review queue,
+so it applies only when `reviewScheduler.enabled` is `true`.
+
+- **What counts:** automatic queue jobs for the repo that are leased or running
+  now, or whose `started_at` falls in the current UTC day. A run counts once it
+  starts, whatever its outcome, so failed runs and automatic retries (each a new
+  queue row) use up the cap and a burst of failures cannot unlock more runs. A
+  row counts once, on the day it first started: a job that first started on an
+  earlier day and is re-run today after a provider cooldown is not counted again.
+- **Over the cap:** the lease transaction moves eligible automatic jobs beyond
+  the remaining allowance to `provider_deferred` (a `blocked_on_proof` job keeps
+  its state) with `next_eligible_at` set to the next UTC midnight and
+  `last_error` `daily_cap_deferred_until=<iso>; reason=daily_cap; limit=<n>`.
+  Jobs are never failed, dropped or marked processed. After midnight they are
+  leased again under that day's cap. A newer head on the same PR still retires
+  the deferred older head, and the same head is not enqueued twice.
+- **Commands:** every command-triggered review (`manual_command` queue jobs,
+  including admitted `publicCommands`, which keep their own cooldown) is neither
+  capped nor counted; they keep the existing `manualCommandReserve` behaviour.
+- **Observability:** each scheduler cycle reports `queue.dailyCapDeferred`.
+  `budget-status` shows `daily_cap` in `delayedByReason`,
+  `providerDeferred.waitingDailyCap` and `dailyCapReachedRepos`, and the human
+  runtime inventory prints `daily cap reached for <repo>` while jobs wait. To
+  count jobs waiting on the cap now:
+  `select repo, count(*) from review_queue_jobs where last_error like 'daily_cap_deferred_until=%' and datetime(next_eligible_at) > datetime('now') group by repo;`
+  This is a point-in-time count: a job's `last_error` is replaced when it runs.
+  The PR's sticky status comment stays `queued` while it waits, and its
+  readiness reason carries the `daily_cap` text.
+- Jobs waiting on the cap do not count toward `reviewScheduler.maxQueuedPerRepo`
+  / `reviewScheduler.maxQueuedHeads`, so `overflowAction: "skip"` never drops a
+  new head because of cap waits. They are also left out of the provider-cooldown
+  readiness counts (`providerDeferred.retryable`, `readyToRetry`, and the
+  `queue_no_retryable_provider_deferred_jobs` /
+  `budget_no_ready_provider_deferred_jobs` gates); they show under `daily_cap`.
+
+The cap is a noise limit, not an exact meter. A job counts only on the day it
+first started (a re-run keeps its original `started_at`), so each job from an
+earlier day that re-runs today (for example after a provider cooldown crossed
+midnight) adds a start the cap does not see. With a cap of 2, two such re-runs
+plus two new heads give four starts in one day. Starts that do no provider work (stale, closed or license-gated
+heads) still use up the allowance. An unscoped operator `run-once` does not go
+through the scheduler queue and so bypasses the cap; the daemon uses the
+scheduled path. With `reviewScheduler.enabled: false` the cap does nothing.
 
 For issue enrichment, keep repo-specific policy in the separate
 `issueEnrichment.repos.<owner/repo>` object. It may define `advisoryPolicy`,

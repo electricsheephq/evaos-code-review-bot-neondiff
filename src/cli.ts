@@ -117,7 +117,7 @@ import {
   getProtectedCheckoutRoots,
   resolvePathFollowingExistingSymlinks
 } from "./path-safety.js";
-import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { buildRepoPolicySnapshot, listCommandEnabledRepos, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
@@ -127,7 +127,8 @@ import {
   normalizeRetirementReason,
   ReviewStateStore,
   type ReviewQueueJobRecord,
-  type ReviewQueueJobState
+  type ReviewQueueJobState,
+  isDailyCapDeferredQueueJob
 } from "./state.js";
 import { readOutcomeObserverInput, recordNegativeControlLabels, runOutcomeObserverFromInput } from "./outcome-observer.js";
 import { aggregateCalibrationLabels, writeCalibrationAggregatePacket } from "./calibration-aggregate.js";
@@ -489,6 +490,7 @@ async function main(): Promise<void> {
       issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
     const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
+    const commandsEnabledRepos = listCommandEnabledRepos(config, monitoredRepos);
     console.log(stringifyRedactedJson({
       ok,
       pilotRepos: config.pilotRepos,
@@ -500,7 +502,8 @@ async function main(): Promise<void> {
       reviewerSessions: config.reviewerSessions,
       repoMemory: config.repoMemory,
       issueEnrichment,
-      commandsEnabled: config.commands.enabled,
+      commandsEnabled: config.commands.enabled || commandsEnabledRepos.length > 0,
+      commandsEnabledRepos,
       statePath: config.statePath,
       workRoot: config.workRoot,
       ...(codexRuntime
@@ -2566,7 +2569,7 @@ async function runRawDaemon(args: ParsedArgs): Promise<void> {
       pilotRepos: config.pilotRepos,
       monitoredRepos,
       canaryPulls: config.canaryPulls ?? [],
-      commandsEnabled: config.commands.enabled,
+      commandsEnabled: config.commands.enabled || listCommandEnabledRepos(config, monitoredRepos).length > 0,
       reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
       issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
       worktreeCleanupDue:
@@ -3269,7 +3272,7 @@ function queueActionableRows(
 }
 
 function isProviderDeferredQueueJobEligible(job: ReviewQueueJobRecord, now: Date): boolean {
-  if (job.state !== "provider_deferred") return false;
+  if (job.state !== "provider_deferred" || isDailyCapDeferredQueueJob(job)) return false;
   if (!job.nextEligibleAt) return true;
   const eligibleAtMs = Date.parse(job.nextEligibleAt);
   return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();

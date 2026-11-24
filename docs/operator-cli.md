@@ -65,7 +65,8 @@ evaos-review-bot status --config config.local.json
 - `budget-status`: read-only scheduler budget projection. Shows active counts,
   queued counts, would-lease jobs, delayed jobs, and deterministic delay reasons
   such as `provider_cooldown`, `provider_capacity`, `org_capacity`,
-  `repo_capacity`, `manual_reserve`, and `lease_limit`. Broad status commands
+  `repo_capacity`, `manual_reserve`, `daily_cap` (the per-repo daily review cap in
+  `docs/repo-profiles.md`), and `lease_limit`. Broad status commands
   include only compact budget counts and reason histograms; use this command for
   capped row-level details. Repo profiles may lower effective active/queued
   scheduler caps for bursty repositories without changing global capacity.

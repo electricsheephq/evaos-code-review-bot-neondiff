@@ -21,7 +21,7 @@ import {
   requireActiveProductionLicense,
   type ProductionLicenseAdmission
 } from "./license-admission.js";
-import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { listReposToScan, resolveDailyReviewCap, resolveRepoCommandConfig, resolveRepoProfile } from "./repo-policy.js";
 import {
   buildReviewStatusMarker,
   isRepairableReviewStatusCommentState,
@@ -53,7 +53,8 @@ import {
   type ReviewerSessionJobState,
   type ReviewQueueJobRecord,
   type ReviewQueueJobState,
-  type ReviewQueueJobSource
+  type ReviewQueueJobSource,
+  isDailyCapDeferredQueueJob
 } from "./state.js";
 import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
@@ -95,6 +96,8 @@ export interface ScheduledRunResult extends RunOnceResult {
     leased: number;
     completed: number;
     providerDeferred: number;
+    /** Automatic jobs this cycle deferred to the next UTC day by the per-repo daily review cap. */
+    dailyCapDeferred: number;
     staleRetired: number;
     closedRetired: number;
     failedQueueJobs: number;
@@ -297,7 +300,9 @@ export async function runScheduledCycleWithDeps(input: {
     started: 0,
     peakJobsInFlight: 0
   };
-  const repoActiveLimitOverrides = buildRepoActiveLimitOverrides(config, input.state.listReviewQueueJobs());
+  const queueJobsBeforeLease = input.state.listReviewQueueJobs();
+  const repoActiveLimitOverrides = buildRepoActiveLimitOverrides(config, queueJobsBeforeLease);
+  const dailyReviewCaps = buildRepoDailyReviewCaps(config, queueJobsBeforeLease);
   // Lease exactly one bounded batch. The durable transaction applies provider/org/repo/manual
   // constraints atomically; this cycle never continuously drains behind the admitted batch.
   const leased = input.state.leaseNextReviewQueueJobs({
@@ -306,6 +311,12 @@ export async function runScheduledCycleWithDeps(input: {
     maxOrgActive: scheduler.maxOrgActive,
     maxRepoActive: scheduler.maxRepoActive,
     maxRepoActiveByRepo: repoActiveLimitOverrides,
+    ...(dailyReviewCaps ? {
+      maxAutomaticReviewsPerDayByRepo: dailyReviewCaps,
+      onDailyCapDeferred: () => {
+        result.queue.dailyCapDeferred += 1;
+      }
+    } : {}),
     manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveSlots),
     limit: effectiveSlots,
     leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
@@ -991,6 +1002,20 @@ function buildRepoActiveLimitOverrides(
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
+function buildRepoDailyReviewCaps(
+  config: BotConfig,
+  jobs: Pick<ReviewQueueJobRecord, "repo">[]
+): Record<string, number> | undefined {
+  const caps: Record<string, number> = {};
+  for (const job of jobs) {
+    const repo = job.repo.toLowerCase();
+    if (!isValidRepoName(repo) || caps[repo] !== undefined) continue;
+    const cap = resolveDailyReviewCap(config, job.repo);
+    if (cap !== undefined) caps[repo] = cap;
+  }
+  return Object.keys(caps).length > 0 ? caps : undefined;
+}
+
 function isValidRepoName(repo: string): boolean {
   const [owner, name, extra] = repo.split("/");
   return (
@@ -1179,7 +1204,8 @@ async function resolveSchedulerCommandDecision(input: {
   pull: PullRequestSummary;
   onCommandFetchError?: () => void;
 }): Promise<CommandDecision> {
-  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+  const commandConfig = resolveRepoCommandConfig(input.config, input.repo);
+  if (!commandConfig.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
@@ -1187,8 +1213,8 @@ async function resolveSchedulerCommandDecision(input: {
     input.onCommandFetchError?.();
     return { action: "none", shouldReview: false };
   }
-  const collected = collectTrustedReviewCommands(comments, input.config.commands);
-  const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, input.config.commands, {
+  const collected = collectTrustedReviewCommands(comments, commandConfig);
+  const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, commandConfig, {
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha
@@ -1297,7 +1323,7 @@ export function admitPublicCommands(input: {
   comments: IssueCommentCommandSource[];
   now?: Date;
 }): ReviewCommand[] {
-  const publicCommands = input.config.commands.publicCommands;
+  const publicCommands = resolveRepoCommandConfig(input.config, input.repo).publicCommands;
   if (!publicCommands?.enabled || input.publicEligible.length === 0) return [];
   const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
   const commentsById = new Map(input.comments.map((comment) => [comment.id, comment]));
@@ -2736,7 +2762,8 @@ function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPe
   const active = state.listReviewQueueJobs({
     repo,
     states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
-  }).filter((job) => job.state !== "blocked_on_proof");
+  }).filter((job) => job.state !== "blocked_on_proof" && !isDailyCapDeferredQueueJob(job));
+  // Jobs waiting on the daily review cap never take queue capacity, so overflowAction "skip" cannot drop new heads.
   return active.length < maxQueuedPerRepo;
 }
 
@@ -2911,6 +2938,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
       leased: 0,
       completed: 0,
       providerDeferred: 0,
+      dailyCapDeferred: 0,
       staleRetired: 0,
       closedRetired: 0,
       failedQueueJobs: 0,
