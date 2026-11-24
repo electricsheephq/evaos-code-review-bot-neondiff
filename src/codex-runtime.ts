@@ -245,7 +245,7 @@ export function parseCodexUsage(
 /** Marker the worker's provider classifier keys on for a Codex ChatGPT usage-limit exit (#1267). */
 export const CODEX_USAGE_LIMIT_MARKER = "codex_usage_limit";
 const CODEX_USAGE_LIMIT_LINE = /^ERROR:.*\b(?:hit|reached) your usage limit\b/i;
-const CODEX_USAGE_LIMIT_MAX_WAIT_MS = 8 * 24 * 60 * 60_000;
+export const CODEX_USAGE_LIMIT_MAX_WAIT_MS = 8 * 24 * 60 * 60_000;
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /**
@@ -253,7 +253,10 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
  * and tool output, so a quoted limit line followed by a different final error is not a limit.
  */
 export function detectCodexUsageLimit(stderr: string, now = new Date()): { line: string; resetsAt?: string } | undefined {
-  const line = stderr.split(/\r?\n/).map((candidate) => candidate.trim()).filter(Boolean).at(-1);
+  const lines = stderr.split(/\r?\n/).map((candidate) => candidate.trim()).filter(Boolean);
+  // Codex may finish with a "tokens used" footer (label line, then the count) after the error.
+  if (/^[\d,]+$/.test(lines.at(-1) ?? "") && /^tokens used$/i.test(lines.at(-2) ?? "")) lines.splice(-2);
+  const line = lines.at(-1);
   if (!line || !CODEX_USAGE_LIMIT_LINE.test(line)) return undefined;
   const resetsAt = parseCodexUsageLimitResetAt(line, now);
   return { line: line.slice(0, 300), ...(resetsAt ? { resetsAt: resetsAt.toISOString() } : {}) };

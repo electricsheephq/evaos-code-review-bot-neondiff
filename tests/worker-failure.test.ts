@@ -2035,11 +2035,12 @@ describe("worker review failures", () => {
     state.close();
   });
 
-  it("classifies only the latest retry attempt as a usage limit (#1267)", () => {
-    const marker = "codex_runtime_nonzero_exit: status=1 codex_usage_limit resets_at=2999-01-01T00:00:00.000Z; ERROR: limit";
-    expect(classifyProviderError(new Error(`original timeout; retry_error=${marker}`)).reason).toBe("provider_usage_limit");
-    expect(classifyProviderError(new Error(`${marker}; retry_error=codex_runtime_nonzero_exit: status=1 boom`)).category).toBe("none");
-    expect(classifyProviderError(new Error(`original timeout; retry_error=x ${marker}`)).category).toBe("none");
+  it("matches the usage-limit marker only at the start of the error it is given (#1267)", () => {
+    const marker = "codex_runtime_nonzero_exit: status=1 codex_usage_limit resets_at=2099-01-01T00:00:00Z; ERROR: limit";
+    // Provider errors embed raw stderr/stdout; planted retry-shaped text must not start a cooldown.
+    expect(classifyProviderError(new Error(`ZCode failed before completion: stdout=x; retry_error=${marker}`)).category).toBe("none");
+    expect(classifyProviderError(new Error(`codex_runtime_nonzero_exit: status=1 OpenAI Codex ... ; retry_error=${marker}`)).category).toBe("none");
+    expect(classifyProviderError(new Error(marker)).reason).toBe("provider_usage_limit");
   });
 
   it("keeps a failed row after a retry dry-run reaches the reviewed path", async () => {

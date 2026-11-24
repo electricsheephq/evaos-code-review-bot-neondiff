@@ -143,7 +143,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { CODEX_USAGE_LIMIT_MARKER, resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { CODEX_USAGE_LIMIT_MARKER, CODEX_USAGE_LIMIT_MAX_WAIT_MS, resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -1053,12 +1053,13 @@ export async function retryFailedHeadWithDeps(input: {
       status: retryStatus
     };
   } catch (error) {
+    // Classify this attempt's own error; the joined history below is for storage only (#1267).
     if (recordProviderRateLimitCooldownIfNeeded({
       config,
       state,
       repo: options.repo,
       pull,
-      error: retryFailureError(retryTarget.previousError, error)
+      error
     })) {
       updateRetryQueueJobsAfterRetry({
         state,
@@ -4374,7 +4375,6 @@ export function classifyAutoRetry(error: unknown): { retryable: boolean; reason:
 }
 
 const CODEX_USAGE_LIMIT_ERROR = new RegExp(`^codex_runtime_nonzero_exit: status=\\d+ ${CODEX_USAGE_LIMIT_MARKER} resets_at=([^;\\s]+);`);
-const RETRY_ERROR_SEPARATOR = "; retry_error=";
 
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
   const message = stripFetchCauseChain(error instanceof Error ? error.message : String(error));
@@ -4406,9 +4406,8 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     ...(providerRequestId ? { providerRequestId } : {}),
     ...(retryAfterMs ? { retryAfterMs } : {})
   };
-  // Anchored on the runtime's own prefix so prompt or diff text cannot match. A retry wraps the latest error
-  // after the previous one (retryFailureError); only that latest attempt decides.
-  const usageLimit = CODEX_USAGE_LIMIT_ERROR.exec(message.split(RETRY_ERROR_SEPARATOR).at(-1) ?? message);
+  // Anchored on the runtime's own prefix so prompt or diff text cannot match.
+  const usageLimit = CODEX_USAGE_LIMIT_ERROR.exec(message);
   if (usageLimit) {
     const resetsAt = Number.isFinite(Date.parse(usageLimit[1] ?? "")) ? usageLimit[1] : undefined;
     return {
@@ -4459,7 +4458,7 @@ export function providerCooldownDurationMs(
   }
   if (classification.category === "quota_exhausted") {
     const untilResetMs = classification.resetsAt ? Date.parse(classification.resetsAt) - now.getTime() : Number.NaN;
-    return untilResetMs > 0 ? untilResetMs : config.providerCooldown.quotaDurationMs;
+    return untilResetMs > 0 && untilResetMs <= CODEX_USAGE_LIMIT_MAX_WAIT_MS ? untilResetMs : config.providerCooldown.quotaDurationMs;
   }
   return config.providerCooldown.durationMs;
 }
@@ -5308,7 +5307,7 @@ function recordClosedRetrySkip(input: {
 
 function retryFailureError(previousError: string | undefined, error: unknown): string {
   const retryError = error instanceof Error ? error.message : String(error);
-  return previousError ? `${previousError}${RETRY_ERROR_SEPARATOR}${retryError}` : retryError;
+  return previousError ? `${previousError}; retry_error=${retryError}` : retryError;
 }
 
 function assertNever(value: never): never {

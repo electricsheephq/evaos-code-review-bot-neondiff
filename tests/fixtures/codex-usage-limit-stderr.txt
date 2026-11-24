@@ -1,0 +1,16 @@
+OpenAI Codex v0.171.0
+--------
+workdir: /fixture/worktree
+model: gpt-6.1-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 00000000-0000-0000-0000-000000000000
+--------
+user
+You are NeonDiff, a code reviewer. [prompt and tool output elided from this fixture]
+warning: Combined user instructions use 71054 bytes, above the 32768-byte `project_doc_max_bytes` setting. The total includes global and thread instructions. The limit applies only to project files.
+ERROR: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:43 PM.
+ERROR: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 5:43 PM.

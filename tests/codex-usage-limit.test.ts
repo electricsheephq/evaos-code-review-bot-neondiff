@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -97,6 +97,19 @@ describe("Codex usage-limit reset parsing (#1267)", () => {
     expect(parseCodexUsageLimitResetAt("or try again at Nov 20th, 2026 5:43 PM.", now)).toBeUndefined();
   });
 
+  it("skips a trailing token-usage footer before reading the terminal line", () => {
+    const now = new Date(2026, 10, 24, 12, 0);
+    expect(detectCodexUsageLimit(`${PREAMBLE}\n${LIMIT_AT}\ntokens used\n1,234\n`, now))
+      .toMatchObject({ resetsAt: new Date(2026, 10, 24, 17, 43).toISOString() });
+    expect(detectCodexUsageLimit(`${PREAMBLE}\n${LIMIT_AT}\nERROR: boom\ntokens used\n1,234\n`, now)).toBeUndefined();
+  });
+
+  it("detects the limit in a captured, redacted Codex stderr", () => {
+    const captured = readFileSync(join(process.cwd(), "tests", "fixtures", "codex-usage-limit-stderr.txt"), "utf8");
+    expect(detectCodexUsageLimit(captured, new Date(2026, 10, 24, 12, 0)))
+      .toMatchObject({ resetsAt: new Date(2026, 10, 24, 17, 43).toISOString() });
+  });
+
   it("matches only Codex's own trailing ERROR line, case-insensitively", () => {
     const now = new Date(2026, 10, 24, 12, 0);
     expect(detectCodexUsageLimit(`${PREAMBLE}\nerror: YOU'VE HIT YOUR USAGE LIMIT. try again at 5:43 pm.\n`, now))
@@ -120,6 +133,13 @@ describe("Codex usage-limit classification (#1267)", () => {
     expect(providerCooldownDurationMs(config, classification, 1, 0, new Date())).toBe((5 * 60 + 43) * 60_000);
     // A deferral is not an automatic-retry grant.
     expect(classifyAutoRetry(error)).toMatchObject({ retryable: false, reason: "provider_classified" });
+  });
+
+  it("bounds any reset to 8 days, falling back to the default beyond that", () => {
+    const config = loadConfigFromObject({ pilotRepos: ["org/repo"], workRoot: tempRoot() });
+    const far = classifyProviderError(new Error("codex_runtime_nonzero_exit: status=1 codex_usage_limit resets_at=2099-01-01T00:00:00Z; ERROR: limit"));
+    expect(far.resetsAt).toBe("2099-01-01T00:00:00Z");
+    expect(providerCooldownDurationMs(config, far, 1, 0, new Date("2026-11-24T00:00:00Z"))).toBe(30 * 60_000);
   });
 
   it("2: a usage-limit exit without a time uses the configurable default", async () => {
