@@ -36,6 +36,15 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
   return byPath;
 }
 
+export function isPatchlessChangedFile(file: PullFilePatch): boolean {
+  return !file.patch?.split("\n").some((line) => HUNK_HEADER.test(line)) && (
+    file.status === "added" || file.status === "modified" ||
+    ((file.status === "renamed" || file.status === "copied") &&
+      ((file.changes ?? 0) > 0 || (file.additions ?? 0) + (file.deletions ?? 0) > 0))
+  );
+}
+
+/** Finding citations must already be verified against the checkout by the review runtime. */
 export function validateFindingLocations(
   findings: Finding[], files: PullFilePatch[], headLineCounts?: ReadonlyMap<string, number>
 ): {
@@ -44,13 +53,7 @@ export function validateFindingLocations(
   outsideDiff: Finding[];
 } {
   const rightLines = collectRightSideLines(files);
-  const pathsWithoutPatch = new Set(files
-    .filter((file) => !file.patch?.split("\n").some((line) => HUNK_HEADER.test(line)) && (
-      file.status === "added" || file.status === "modified" ||
-      ((file.status === "renamed" || file.status === "copied") &&
-        ((file.changes ?? 0) > 0 || (file.additions ?? 0) + (file.deletions ?? 0) > 0))
-    ))
-    .map((file) => file.filename));
+  const pathsWithoutPatch = new Set(files.filter(isPatchlessChangedFile).map((file) => file.filename));
   const valid: Finding[] = [];
   const dropped: DroppedFinding[] = [];
   const outsideDiff: Finding[] = [];
@@ -63,6 +66,10 @@ export function validateFindingLocations(
       } else if (headLineCounts && !(Number.isInteger(finding.line) && finding.line >= 1 &&
           finding.line <= (headLineCounts.get(finding.path) ?? 0))) {
         dropped.push({ ...finding, reason: "outside_diff_line_not_in_head_file" });
+      } else if (!finding.evidence?.some((ref) =>
+        ref.path === finding.path && ref.startLine <= finding.line && finding.line <= ref.endLine
+      )) {
+        dropped.push({ ...finding, reason: "outside_diff_without_evidence" });
       } else {
         outsideDiff.push(finding);
       }

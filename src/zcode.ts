@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseFindings } from "./findings.js";
+import { isPatchlessChangedFile } from "./diff.js";
+import { parseFindings, stripFindingEvidence } from "./findings.js";
 import type { GitNexusContextPacket } from "./gitnexus-context.js";
 import type { GitHubRelatedContextPacket } from "./github-related-context.js";
 import type { ProviderRuntimeAdapter } from "./provider-adapters.js";
@@ -127,7 +128,7 @@ export function parseZCodeReviewOutput(rawStdouts: string[]): ZCodeReviewResult 
       const parsed = JSON.parse(extractJsonObject(rawResponse));
       const { findings, dropped } = parseFindings(parsed);
       const summary = parseReviewModelSummary(parsed, findings.length);
-      return { findings, summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+      return { findings: findings.map(stripFindingEvidence), summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }
@@ -214,7 +215,7 @@ export function buildReviewPrompt(input: {
   let remainingPatchBytes = input.maxPatchBytes ?? 80_000;
   const patches = input.files
     .map((file) => {
-      const rawPatch = file.patch ?? "[binary or too large for GitHub patch]";
+      const rawPatch = isPatchlessChangedFile(file) ? "[binary or too large for GitHub patch]" : file.patch ?? "";
       const patch = truncateToBudget(rawPatch, remainingPatchBytes);
       remainingPatchBytes = Math.max(0, remainingPatchBytes - Buffer.byteLength(patch));
       return `### ${file.filename}\n\n\`\`\`diff\n${patch}\n\`\`\``;
@@ -433,7 +434,7 @@ export async function runZCodeReview(input: {
       const { findings, dropped } = parseFindings(parsed);
       const summary = parseReviewModelSummary(parsed, findings.length);
       // Provenance (#304): a non-first successful attempt is a degraded (strict-JSON retry) recovery.
-      return { findings, summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+      return { findings: findings.map(stripFindingEvidence), summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }

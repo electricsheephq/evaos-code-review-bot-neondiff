@@ -73,7 +73,8 @@ describe("walkthrough comment rendering", () => {
     const repo = "ElectricSheepHQ/LCM-X";
     const files = [{ filename: "dist/bundle.js", status: "modified" }];
     const gate = applyDeterministicReviewGate({ files, findings: [{
-      severity: "P1", path: "dist/bundle.js", line: 7, title: "Fallback is skipped ".repeat(10).trim(), body: "detail ".repeat(240), confidence: 0.9
+      severity: "P1", path: "dist/bundle.js", line: 7, title: "Fallback is skipped ".repeat(10).trim(), body: "detail ".repeat(240), confidence: 0.9,
+      evidence: [{ path: "dist/bundle.js", startLine: 7, endLine: 7, excerpt: "fixture" }]
     }] });
     const assessment = "<!-- lcm-x-ai-review:v2\nfixture\n-->";
     const render = (lines: string[], countMode?: OutsideDiffCountMode) => buildWalkthroughComment({
@@ -114,7 +115,8 @@ describe("walkthrough comment rendering", () => {
       files,
       findings: [{
         severity: "P2", path: "dist/bundle.js", line: 7, title: "Fallback is skipped",
-        body: "The empty-input branch returns before the fallback. <!-- private --> <!-- leftover", confidence: 0.9
+        body: "The empty-input branch returns before the fallback. <!-- private --> <!-- leftover", confidence: 0.9,
+        evidence: [{ path: "dist/bundle.js", startLine: 7, endLine: 7, excerpt: "fixture" }]
       }]
     });
 

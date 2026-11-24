@@ -69,19 +69,22 @@ it("maps final comments and Codex usage to ReviewBench; an empty result succeeds
   findings = []; await runReviewLocal({ ...args(), format: "reviewbench" });
   expect(JSON.parse(fs.readFileSync(args().out, "utf8")).findings).toEqual([]);
 });
-it("appends patchless content findings in both formats without displacing inline findings", async () => {
+it.each([true, false])("requires checkout evidence for patchless findings with checkoutReads=%s", async (checkoutReads) => {
   const diff = join(root, "diff.patch"), config = join(root, "config.json");
   fs.writeFileSync(join(repo, "bundle.js"), "line\n".repeat(7));
   fs.writeFileSync(join(repo, "binary.dat"), Buffer.from([1, 0, 2]));
   git("add", "bundle.js", "binary.dat"); git("commit", "-qm", "patchless fixtures"); head = git("rev-parse", "HEAD");
   fs.writeFileSync(diff, git("diff", `${base}...${head}`, "--", "file.ts", "binary.dat") +
     "\ndiff --git a/bundle.js b/bundle.js\nnew file mode 100644\n" +
-    "\ndiff --git a/missing.js b/missing.js\nnew file mode 100644\n");
-  fs.writeFileSync(config, JSON.stringify({ reviewGate: { maxInlineComments: 1 }, codexRuntime: { checkoutReads: false } }));
-  fs.appendFileSync(join(repo, "bundle.js"), "dirty extra line\n");
+    "\ndiff --git a/missing.js b/missing.js\nnew file mode 100644\n" +
+    "diff --git a/tool.sh b/tool.sh\nold mode 100644\nnew mode 100755\n" +
+    "diff --git a/old.ts b/renamed.ts\nsimilarity index 100%\nrename from old.ts\nrename to renamed.ts\n");
+  fs.writeFileSync(config, JSON.stringify({ reviewGate: { maxInlineComments: 1 }, codexRuntime: { checkoutReads } }));
+  if (!checkoutReads) fs.appendFileSync(join(repo, "bundle.js"), "dirty extra line\n");
   findings = [
     { ...findings[0], confidence: 0.8 },
-    { ...findings[0], path: "bundle.js", line: 7, confidence: 0.99 },
+    { ...findings[0], path: "bundle.js", line: 7, confidence: 0.99,
+      evidence: [{ path: "bundle.js", startLine: 7, endLine: 7, excerpt: "line" }] },
     { ...findings[0], path: "bundle.js", line: 8, title: "Invalid extra line" },
     { ...findings[0], path: "binary.dat", line: 1 },
     { ...findings[0], path: "missing.js", line: 1 }
@@ -89,14 +92,22 @@ it("appends patchless content findings in both formats without displacing inline
   const evidence = join(root, "evidence");
   const input = { ...args(), "diff-file": diff, config, "evidence-dir": evidence, "keep-evidence": "true" };
   await runReviewLocal(input);
+  const prompt = vi.mocked(runCodexReview).mock.calls[0]?.[0].prompt;
+  expect(prompt).toContain("### binary.dat\n\n```diff\n[binary or too large for GitHub patch]\n```");
+  expect(prompt).toContain("### file.ts\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n");
+  expect(prompt).toContain("### tool.sh\n\n```diff\n\n```");
+  expect(prompt).toContain("### renamed.ts\n\n```diff\n\n```");
   expect(JSON.parse(fs.readFileSync(input.out, "utf8"))).toMatchObject([
-    { path: "file.ts", side: "RIGHT" }, { path: "bundle.js", line: 7, placement: "body" }
+    { path: "file.ts", side: "RIGHT" }, ...(checkoutReads ? [{ path: "bundle.js", line: 7, placement: "body" }] : [])
   ]);
   const gate = JSON.parse(fs.readFileSync(join(evidence, fs.readdirSync(evidence)[0], "deterministic-gate.json"), "utf8"));
-  expect(gate.summary.dropReasonCounts).toEqual({ outside_diff_line_not_in_head_file: 3 });
+  expect(gate.summary.dropReasonCounts).toEqual({
+    outside_diff_line_not_in_head_file: 3, ...(checkoutReads ? {} : { outside_diff_without_evidence: 1 })
+  });
   await runReviewLocal({ ...input, format: "reviewbench" });
   expect(JSON.parse(fs.readFileSync(input.out, "utf8")).findings).toMatchObject([
-    { file: "file.ts", start_line: 1, end_line: 1 }, { file: "bundle.js", start_line: 7, end_line: 7 }
+    { file: "file.ts", start_line: 1, end_line: 1 },
+    ...(checkoutReads ? [{ file: "bundle.js", start_line: 7, end_line: 7 }] : [])
   ]);
 });
 it("reads every RB input and prints applied settings", async () => {

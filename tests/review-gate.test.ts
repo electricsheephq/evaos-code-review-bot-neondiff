@@ -17,7 +17,8 @@ describe("deterministic review gate", () => {
     line: 7,
     title: "Missing fallback for empty input",
     body: "The generated bundle skips the fallback.",
-    confidence: 0.9
+    confidence: 0.9,
+    evidence: [{ path: "dist/bundle.js", startLine: 7, endLine: 8, excerpt: "fixture" }]
   };
   const unpatchedFile = { filename: unpatchedFinding.path, status: "modified" };
 
@@ -52,26 +53,30 @@ describe("deterministic review gate", () => {
     });
   });
 
-  it("counts head-coordinate drops and retains the real outside-diff and inline lines", () => {
+  it("counts coordinate and evidence drops and retains the real outside-diff and inline lines", () => {
     const binary = "dist/binary.dat", missing = "dist/missing.js";
     const gate = applyDeterministicReviewGate({
       files: [...files, unpatchedFile, ...[binary, missing].map(filename => ({ filename, status: "modified" }))],
       findings: [unpatchedFinding, { ...unpatchedFinding, line: 8 },
         { ...unpatchedFinding, path: binary }, { ...unpatchedFinding, path: missing },
-        { ...unpatchedFinding, path: files[0].filename, line: 2 }],
+        { ...unpatchedFinding, evidence: [] },
+        { ...unpatchedFinding, path: files[0].filename, line: 2, evidence: [] }],
       headLineCounts: new Map([[unpatchedFinding.path, 7]])
     });
     expect(gate.outsideDiffFindings).toMatchObject([{ path: unpatchedFinding.path, line: 7 }]);
     expect(gate.comments).toMatchObject([{ path: files[0].filename, line: 2 }]);
-    expect(gate.dropped).toMatchObject([unpatchedFinding.path, binary, missing]
-      .map(path => ({ path, reason: "outside_diff_line_not_in_head_file" })));
-    expect(gate.summary.dropReasonCounts).toEqual({ outside_diff_line_not_in_head_file: 3 });
+    expect(gate.dropped).toMatchObject([
+      ...[unpatchedFinding.path, binary, missing].map(path => ({ path, reason: "outside_diff_line_not_in_head_file" })),
+      { path: unpatchedFinding.path, reason: "outside_diff_without_evidence" }
+    ]);
+    expect(gate.summary.dropReasonCounts).toEqual({ outside_diff_line_not_in_head_file: 3, outside_diff_without_evidence: 1 });
   });
 
   it.each([[0.8, "REQUEST_CHANGES", 1], [0.95, "COMMENT", 0]] as const)(
     "applies the same escalation rules to either location with a confidence floor of %s",
     (floor, event, requestChangesEligible) => {
-      const finding: Finding = { ...unpatchedFinding, severity: "P1", line: 2 };
+      const finding: Finding = { ...unpatchedFinding, severity: "P1", line: 2,
+        evidence: [{ path: unpatchedFinding.path, startLine: 2, endLine: 2, excerpt: "fixture" }] };
       for (const patch of [undefined, files[0].patch]) {
         const gate = applyDeterministicReviewGate({
           findings: [finding], files: [{ ...unpatchedFile, patch }],
@@ -90,7 +95,8 @@ describe("deterministic review gate", () => {
       findings: [
         { ...unpatchedFinding, path: files[0].filename, line: 2, confidence: 0.5 },
         unpatchedFinding,
-        { ...unpatchedFinding, line: 100, title: "Invalid serialization", confidence: 0.8 }
+        { ...unpatchedFinding, line: 100, title: "Invalid serialization", confidence: 0.8,
+          evidence: [{ path: unpatchedFinding.path, startLine: 100, endLine: 100, excerpt: "fixture" }] }
       ],
       maxInlineComments: 1,
       maxOutsideDiffFindings: 1

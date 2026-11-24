@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { chmodSync, realpathSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
@@ -211,8 +211,8 @@ describe("worker context budget preflight", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it.each(["disabled", "review", "issue", "verified-only", "verified-demote", "hydrated", "head-read-failed"])(
-    "includes patchless findings in the posted review and gate evidence in %s mode",
+  it.each(["disabled", "review", "issue", "verified-only", "verified-demote", "hydrated", "head-read-failed", "no-citation"])(
+    "records patchless finding decisions in the posted review and gate evidence in %s mode",
     async (mode) => {
       const root = mkdtempSync(join(tmpdir(), "neondiff-patchless-"));
       roots.push(root);
@@ -229,7 +229,9 @@ describe("worker context budget preflight", () => {
           reviewEventPolicy: { mode: "automatic" }
         };
       }
-      zcodeFindingsByPath.set(file.filename, [severe ? p1Finding(file.filename, title) : finding(file.filename, title)]);
+      const candidate = severe ? p1Finding(file.filename, title) : finding(file.filename, title);
+      const cited = mode === "no-citation" ? candidate : withCheckoutCitation(candidate);
+      const checkout = await mockCheckoutReview(config, [cited], () => ({ findings: [cited] }));
       if (mode === "head-read-failed") headLineCountControl.error = new TypeError("fixture lookup failure");
 
       try {
@@ -244,6 +246,13 @@ describe("worker context budget preflight", () => {
           expect(gate).toMatchObject({ headLineCountsErrorClass: "TypeError", outsideDiffFindings: [],
             dropped: [{ reason: "outside_diff_line_not_in_head_file" }],
             summary: { dropReasonCounts: { outside_diff_line_not_in_head_file: 1 } } });
+          expect(createdReviews[0].body).not.toContain(title);
+          return;
+        }
+        if (mode === "no-citation") {
+          expect(gate).toMatchObject({ outsideDiffFindings: [],
+            dropped: [{ title, reason: "outside_diff_without_evidence" }],
+            summary: { dropReasonCounts: { outside_diff_without_evidence: 1 } } });
           expect(createdReviews[0].body).not.toContain(title);
           return;
         }
@@ -288,6 +297,7 @@ describe("worker context budget preflight", () => {
           expect(issueCommentBodies).toEqual([]);
         }
       } finally {
+        checkout.restore();
         state.close();
       }
     }
@@ -304,15 +314,14 @@ describe("worker context budget preflight", () => {
     const files = Array.from({ length: 8 }, (_, index) => ({
       filename: `src/${separate ? "nested/".repeat(36) : ""}generated-${index}.ts`, status: "modified", changes: 2
     }));
-    const findings = files.map(({ filename }, index) => ({
+    const findings = files.map(({ filename }, index) => withCheckoutCitation({
       ...(separate && index === 0 ? p1Finding : finding)(filename, `Generated fallback ${index}`), body: "Detailed reasoning ".repeat(90)
     }));
-    for (const candidate of findings) zcodeFindingsByPath.set(candidate.path, [candidate]);
-    zcodeRawResponseOverride.value = JSON.stringify({
+    const checkout = await mockCheckoutReview(config, findings, () => ({
       findings, review_assessment: { verdict: "BLOCKED", scope: "Exact pull request diff",
         unresolved_findings: findings.map(({ title }) => title), limitations: [],
         acceptance_evidence: separate ? Array(3).fill("Fixture ".repeat(237)) : ["Fixture"] }
-    });
+    }));
     try {
       const repo = "ElectricSheepHQ/LCM-X";
       expect(await reviewPull({ config, github: githubForPull(pull, files), state, repo, pull, dryRun: false, useZCode: true }))
@@ -335,6 +344,7 @@ describe("worker context budget preflight", () => {
       }
       expect(body).not.toContain("Detailed reasoning");
     } finally {
+      checkout.restore();
       state.close();
     }
   });
@@ -688,10 +698,20 @@ describe("worker context budget preflight", () => {
     const repo = patchless ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
     const path = "src/a.ts";
     const files = [patchless ? { filename: path, status: "modified", changes: 1 } : pullFile(path, 200)];
-    const anchor = finding(path, "Anchor finding");
-    zcodeFindingsByPath.set(path, patchless ? [anchor, { ...anchor, title: "Past end of head", line: 2 }] : [anchor]);
-    zcodeFindingsByPath.set("State and lifecycle review", [finding("src/a.ts", "State-only finding")]);
-
+    const anchor = withCheckoutCitation(finding(path, "Anchor finding"));
+    const specialist = withCheckoutCitation(finding(path, "State-only finding"));
+    const checkout = patchless ? await mockCheckoutReview(config, [anchor], (prompt) => ({
+      findings: [
+        anchor, { ...anchor, title: "Past end of head", line: 2 },
+        ...(prompt.includes("State and lifecycle review") ? [
+          specialist, { ...specialist, title: "Missing specialist citation", evidence: [] }
+        ] : [])
+      ]
+    })) : undefined;
+    if (!patchless) {
+      zcodeFindingsByPath.set(path, [finding(path, "Anchor finding")]);
+      zcodeFindingsByPath.set("State and lifecycle review", [finding(path, "State-only finding")]);
+    }
     const result = await reviewPull({
       config,
       github: githubForPull(pull, files),
@@ -700,13 +720,14 @@ describe("worker context budget preflight", () => {
       pull,
       dryRun: false,
       useZCode: true
-    });
+    }).finally(() => checkout?.restore());
 
     expect(result).toBe("reviewed");
-    expect(zcodePrompts).toHaveLength(4);
-    expect(zcodePrompts.filter((prompt) => prompt.includes("State and lifecycle review"))).toHaveLength(1);
-    expect(zcodePrompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(1);
-    expect(zcodePrompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(1);
+    const prompts = checkout?.prompts ?? zcodePrompts;
+    expect(prompts).toHaveLength(4);
+    expect(prompts.filter((prompt) => prompt.includes("State and lifecycle review"))).toHaveLength(1);
+    expect(prompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(1);
+    expect(prompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(1);
     expect(createdReviews).toHaveLength(1);
     expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(patchless ? [] : ["Anchor finding"]);
     if (patchless) {
@@ -734,7 +755,10 @@ describe("worker context budget preflight", () => {
       gate: patchless ? {
         comments: [],
         outsideDiffFindings: expect.arrayContaining([expect.objectContaining({ title: "State-only finding", line: 1 })]),
-        dropped: expect.arrayContaining([expect.objectContaining({ title: "Past end of head", reason: "outside_diff_line_not_in_head_file" })])
+        dropped: expect.arrayContaining([
+          expect.objectContaining({ title: "Past end of head", reason: "outside_diff_line_not_in_head_file" }),
+          expect.objectContaining({ title: "Missing specialist citation", reason: "outside_diff_without_evidence" })
+        ])
       } : { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
     });
     state.close();
@@ -3956,6 +3980,40 @@ function pullFile(filename: string, patchLength: number): {
     deletions: 0,
     changes: 2
   };
+}
+
+function withCheckoutCitation(finding: Finding): Finding {
+  const { path, line } = finding;
+  return { ...finding, evidence: [{ path, startLine: line, endLine: line, excerpt: "fixture checkout line" }] };
+}
+
+async function mockCheckoutReview(config: BotConfig, fixtures: Finding[], response: (prompt: string) => object) {
+  const codex = await import("../src/codex-runtime.js");
+  const runReview = codex.runCodexReview;
+  const cwd = join(config.workRoot, "mock-worktree");
+  for (const { path } of fixtures) {
+    const target = join(cwd, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "fixture checkout line\n");
+  }
+  config.codexRuntime = { enabled: true, checkoutReads: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
+    reasoningEffort: "high", contextWindowTokens: 500_000, timeoutMs: 1000, maxOutputBytes: 100000 };
+  const available = vi.spyOn(codex, "resolveCheckoutReadsStatus").mockReturnValue({ status: "enabled" });
+  const prompts: string[] = [];
+  const review = vi.spyOn(codex, "runCodexReview").mockImplementation(input => {
+    prompts.push(input.prompt);
+    return runReview(input, {
+      captureWorktreeState: () => "unchanged",
+      resolveReadConfinement: () => ({ command: "/unused/codex", readableRoots: [input.cwd] }),
+      runProcess: async invocation => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ ...response(input.prompt), summary: {
+          changedBehavior: [], invariants: [], evidence: [], limitations: ["Fixture"], noFindingRationale: "Fixture"
+        } }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+  });
+  return { prompts, restore: () => { available.mockRestore(); review.mockRestore(); } };
 }
 
 function finding(path: string, title: string): Finding {
