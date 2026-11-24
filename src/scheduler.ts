@@ -21,7 +21,7 @@ import {
   requireActiveProductionLicense,
   type ProductionLicenseAdmission
 } from "./license-admission.js";
-import { listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { listReposToScan, resolveDailyReviewCap, resolveRepoProfile } from "./repo-policy.js";
 import {
   buildReviewStatusMarker,
   isRepairableReviewStatusCommentState,
@@ -95,6 +95,8 @@ export interface ScheduledRunResult extends RunOnceResult {
     leased: number;
     completed: number;
     providerDeferred: number;
+    /** Automatic jobs this cycle deferred to the next UTC day by the per-repo daily review cap. */
+    dailyCapDeferred: number;
     staleRetired: number;
     closedRetired: number;
     failedQueueJobs: number;
@@ -297,7 +299,9 @@ export async function runScheduledCycleWithDeps(input: {
     started: 0,
     peakJobsInFlight: 0
   };
-  const repoActiveLimitOverrides = buildRepoActiveLimitOverrides(config, input.state.listReviewQueueJobs());
+  const queueJobsBeforeLease = input.state.listReviewQueueJobs();
+  const repoActiveLimitOverrides = buildRepoActiveLimitOverrides(config, queueJobsBeforeLease);
+  const dailyReviewCaps = buildRepoDailyReviewCaps(config, queueJobsBeforeLease);
   // Lease exactly one bounded batch. The durable transaction applies provider/org/repo/manual
   // constraints atomically; this cycle never continuously drains behind the admitted batch.
   const leased = input.state.leaseNextReviewQueueJobs({
@@ -306,6 +310,12 @@ export async function runScheduledCycleWithDeps(input: {
     maxOrgActive: scheduler.maxOrgActive,
     maxRepoActive: scheduler.maxRepoActive,
     maxRepoActiveByRepo: repoActiveLimitOverrides,
+    ...(dailyReviewCaps ? {
+      maxAutomaticReviewsPerDayByRepo: dailyReviewCaps,
+      onDailyCapDeferred: () => {
+        result.queue.dailyCapDeferred += 1;
+      }
+    } : {}),
     manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveSlots),
     limit: effectiveSlots,
     leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
@@ -989,6 +999,20 @@ function buildRepoActiveLimitOverrides(
     if (maxActiveHeads !== undefined) overrides[repo] = maxActiveHeads;
   }
   return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function buildRepoDailyReviewCaps(
+  config: BotConfig,
+  jobs: Pick<ReviewQueueJobRecord, "repo">[]
+): Record<string, number> | undefined {
+  const caps: Record<string, number> = {};
+  for (const job of jobs) {
+    const repo = job.repo.toLowerCase();
+    if (!isValidRepoName(repo) || caps[repo] !== undefined) continue;
+    const cap = resolveDailyReviewCap(config, job.repo);
+    if (cap !== undefined) caps[repo] = cap;
+  }
+  return Object.keys(caps).length > 0 ? caps : undefined;
 }
 
 function isValidRepoName(repo: string): boolean {
@@ -2911,6 +2935,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
       leased: 0,
       completed: 0,
       providerDeferred: 0,
+      dailyCapDeferred: 0,
       staleRetired: 0,
       closedRetired: 0,
       failedQueueJobs: 0,

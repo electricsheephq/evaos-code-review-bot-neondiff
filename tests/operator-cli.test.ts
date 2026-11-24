@@ -995,6 +995,17 @@ describe("operator CLI summaries", () => {
     expect(output).toContain("queue: active=0 queued=0 running=0 providerDeferred=0 failed=0");
     expect(output).toContain("budget: wouldLease=1 delayed=1 delayedByReason={\"manual_reserve\":1}");
     expect(output).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+    expect(output).not.toContain("daily cap reached");
+    const capped = buildRuntimeInventory({
+      release: releaseStatus({ ok: true, budget: { ...reviewBudgetStatus(), dailyCapReachedRepos: ["owner/repo"] } }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      checkedAt: "2026-07-01T00:05:00.000Z"
+    });
+    expect(formatRuntimeInventoryHuman(capped)).toContain("daily cap reached for owner/repo; automatic reviews wait for the next UTC day");
   });
 
   it("builds a read-only dashboard over coverage, durable queue, readiness, and evidence links", () => {

@@ -884,6 +884,10 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     `reviewerSessions: retryCovered=${inventory.summary.retryCoveredReviewerSessions}`
   ];
 
+  for (const repo of inventory.budget?.dailyCapReachedRepos ?? []) {
+    lines.push(`daily cap reached for ${repo}; automatic reviews wait for the next UTC day`);
+  }
+
   const failingGates = inventory.gates.filter((gate) => !gate.ok);
   if (failingGates.length > 0) {
     lines.push("failingGates:");

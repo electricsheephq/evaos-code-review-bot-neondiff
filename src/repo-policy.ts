@@ -281,6 +281,13 @@ export function resolveRepoProfile(config: BotConfig, repo: string): RepoProfile
   return { allowed: false, reason: "repo_profile_missing" };
 }
 
+/** Daily automatic-review cap for a repo: the profile's maxReviewsPerDay wins over the scheduler default; undefined is unlimited. */
+export function resolveDailyReviewCap(config: BotConfig, repo: string): number | undefined {
+  const resolution = resolveRepoProfile(config, repo);
+  const profileCap = resolution.allowed ? resolution.profile.maxReviewsPerDay : undefined;
+  return profileCap ?? config.reviewScheduler?.maxReviewsPerRepoPerDay;
+}
+
 export function buildRepoPolicySnapshot(config: BotConfig, repo: string): RepoPolicySnapshot {
   const resolution = resolveRepoProfile(config, repo);
   if (!resolution.allowed) {

@@ -6,6 +6,8 @@ import { requireActiveProductionLicense } from "../src/license-admission.js";
 import { loadConfigFromObject, type BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
 import { ReviewStateStore } from "../src/state.js";
+import { buildReviewBudgetStatus } from "../src/review-budget.js";
+import { resolveDailyReviewCap } from "../src/repo-policy.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { reviewPull as reviewPullImpl, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
 import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
@@ -5514,3 +5516,150 @@ function comment(id: number, login: string, body: string) {
     }
   };
 }
+
+describe("per-repo daily review cap", () => {
+  const roots: string[] = [];
+  const DAY1 = new Date("2026-11-24T10:00:00.000Z");
+  const NEXT_MIDNIGHT = "2026-11-25T00:00:00.000Z";
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function capFixture(prefix: string, pullsByRepo: Map<string, PullRequestSummary[]>) {
+    const root = mkdtempSync(join(tmpdir(), prefix)); roots.push(root);
+    const config = schedulerConfig(root, [...pullsByRepo.keys()]);
+    config.reviewAutoRetry.enabled = false;
+    const state = new ReviewStateStore(config.statePath);
+    const reviewed: string[] = [];
+    let failRepo: string | undefined;
+    const cycle = (now: Date) => runScheduledCycleWithDeps({
+      config, state, github: githubFromMap(pullsByRepo), options: { dryRun: false, useZCode: false }, now, clock: () => now,
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewedPull }) => {
+        reviewed.push(`${repo}#${reviewedPull.number}@${reviewedPull.head.sha.slice(0, 1)}`);
+        if (repo === failRepo) throw new Error("codex_runtime_nonzero_exit: fixture");
+        reviewState.recordProcessed({ repo, pullNumber: reviewedPull.number, headSha: reviewedPull.head.sha, status: "posted", event: "COMMENT" });
+        return "reviewed";
+      }
+    });
+    const minutes = (base: Date, n: number) => new Date(base.getTime() + n * 60_000);
+    return { config, state, reviewed, cycle, minutes, failOn: (repo: string) => { failRepo = repo; } };
+  }
+
+  const pullsFor = (repo: string, count: number) =>
+    Array.from({ length: count }, (_, index) => pull(repo, index + 1, String.fromCharCode(97 + index).repeat(40)));
+
+  it("defers the reviews over the cap to the next UTC day, leaves other repos alone, and runs them after midnight", async () => {
+    const f = capFixture("neondiff-daily-cap-", new Map([["org/capped", pullsFor("org/capped", 4)], ["org/other", pullsFor("org/other", 3)]]));
+    f.config.reviewScheduler!.maxReviewsPerRepoPerDay = 2;
+    f.config.repoProfiles = { repos: { "org/capped": {}, "org/other": { maxReviewsPerDay: 10 } } };
+    try {
+      const first = await f.cycle(DAY1);
+      expect(first.queue.dailyCapDeferred).toBe(2);
+      for (let index = 1; index < 4; index += 1) await f.cycle(f.minutes(DAY1, index));
+      expect(f.reviewed.filter((entry) => entry.startsWith("org/capped"))).toEqual(["org/capped#1@a", "org/capped#2@b"]);
+      // Under its own cap the other repo reviews every PR, one per cycle, exactly as without a cap.
+      expect(f.reviewed.filter((entry) => entry.startsWith("org/other"))).toEqual(["org/other#1@a", "org/other#2@b", "org/other#3@c"]);
+      const waiting = f.state.listReviewQueueJobs({ states: ["provider_deferred"] });
+      expect(waiting.map((job) => job.pullNumber).sort()).toEqual([3, 4]);
+      for (const job of waiting) {
+        expect(job).toMatchObject({ repo: "org/capped", source: "automatic", nextEligibleAt: NEXT_MIDNIGHT });
+        expect(job.lastError).toBe(`daily_cap_deferred_until=${NEXT_MIDNIGHT}; reason=daily_cap; limit=2`);
+      }
+      expect(f.state.listReviewQueueJobs({ state: "failed" })).toEqual([]);
+      expect(f.state.hasProcessed("org/capped", 3, "c".repeat(40))).toBe(false);
+      const budget = buildReviewBudgetStatus({ config: f.config, jobs: f.state.listReviewQueueJobs(), now: f.minutes(DAY1, 5) });
+      expect(budget.delayedByReason).toMatchObject({ daily_cap: 2 });
+      expect(budget.providerDeferred).toMatchObject({ waitingDailyCap: 2, waitingCooldown: 0 });
+      expect(budget.dailyCapReachedRepos).toEqual(["org/capped"]);
+
+      const afterMidnight = new Date("2026-11-25T00:00:30.000Z");
+      await f.cycle(afterMidnight);
+      await f.cycle(f.minutes(afterMidnight, 1));
+      await f.cycle(f.minutes(afterMidnight, 2));
+      expect(f.reviewed.filter((entry) => entry.startsWith("org/capped"))).toEqual([
+        "org/capped#1@a", "org/capped#2@b", "org/capped#3@c", "org/capped#4@d"
+      ]);
+      expect(f.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "leased", "running", "failed"] })).toEqual([]);
+    } finally { f.state.close(); }
+  });
+
+  it("lets the per-repo value override the global default and treats unset as unlimited", async () => {
+    const f = capFixture("neondiff-daily-cap-override-", new Map([["org/one", pullsFor("org/one", 3)], ["org/global", pullsFor("org/global", 3)]]));
+    f.config.reviewScheduler!.maxReviewsPerRepoPerDay = 2;
+    f.config.repoProfiles = { repos: { "org/one": { maxReviewsPerDay: 1 }, "org/global": {} } };
+    expect(resolveDailyReviewCap(f.config, "org/one")).toBe(1);
+    expect(resolveDailyReviewCap(f.config, "org/global")).toBe(2);
+    try {
+      for (let index = 0; index < 4; index += 1) await f.cycle(f.minutes(DAY1, index));
+      expect(f.reviewed.filter((entry) => entry.startsWith("org/one"))).toEqual(["org/one#1@a"]);
+      expect(f.reviewed.filter((entry) => entry.startsWith("org/global"))).toEqual(["org/global#1@a", "org/global#2@b"]);
+    } finally { f.state.close(); }
+
+    const unlimited = capFixture("neondiff-daily-cap-unset-", new Map([["org/free", pullsFor("org/free", 3)]]));
+    expect(resolveDailyReviewCap(unlimited.config, "org/free")).toBeUndefined();
+    try {
+      for (let index = 0; index < 4; index += 1) await unlimited.cycle(unlimited.minutes(DAY1, index));
+      expect(unlimited.reviewed).toEqual(["org/free#1@a", "org/free#2@b", "org/free#3@c"]);
+      expect(unlimited.state.listReviewQueueJobs().every((job) => !job.lastError?.startsWith("daily_cap"))).toBe(true);
+    } finally { unlimited.state.close(); }
+  });
+
+  it("counts failed starts toward the cap", async () => {
+    const pulls = new Map([["org/flaky", pullsFor("org/flaky", 1)]]);
+    const f = capFixture("neondiff-daily-cap-failed-", pulls);
+    f.config.reviewScheduler!.maxReviewsPerRepoPerDay = 1;
+    f.failOn("org/flaky");
+    try {
+      await f.cycle(DAY1);
+      expect(f.state.listReviewQueueJobs({ state: "failed" })).toHaveLength(1);
+      pulls.set("org/flaky", [...pulls.get("org/flaky")!, pull("org/flaky", 2, "b".repeat(40))]);
+      const second = await f.cycle(f.minutes(DAY1, 1));
+      expect(second.queue.dailyCapDeferred).toBe(1);
+      expect(f.reviewed).toEqual(["org/flaky#1@a"]);
+      expect(f.state.listReviewQueueJobs({ state: "provider_deferred" })[0]).toMatchObject({ pullNumber: 2, nextEligibleAt: NEXT_MIDNIGHT });
+    } finally { f.state.close(); }
+  });
+
+  it("retires a cap-deferred head when a newer head arrives and never enqueues the same head twice", async () => {
+    const pulls = new Map([["org/capped", pullsFor("org/capped", 2)]]);
+    const f = capFixture("neondiff-daily-cap-supersede-", pulls);
+    f.config.reviewScheduler!.maxReviewsPerRepoPerDay = 1;
+    try {
+      await f.cycle(DAY1);
+      await f.cycle(f.minutes(DAY1, 1));
+      const deferredOld = f.state.listReviewQueueJobs({ state: "provider_deferred" });
+      expect(deferredOld.map((job) => job.headSha)).toEqual(["b".repeat(40)]);
+      expect(f.state.listReviewQueueJobs().filter((job) => job.pullNumber === 2)).toHaveLength(1);
+      pulls.set("org/capped", [pulls.get("org/capped")![0]!, pull("org/capped", 2, "e".repeat(40))]);
+      await f.cycle(f.minutes(DAY1, 2));
+      expect(f.state.getReviewQueueJob(deferredOld[0]!.jobId)?.state).toBe("stale_retired");
+      expect(f.state.listReviewQueueJobs({ state: "provider_deferred" }).map((job) => job.headSha)).toEqual(["e".repeat(40)]);
+      await f.cycle(new Date("2026-11-25T00:00:30.000Z"));
+      expect(f.reviewed).toEqual(["org/capped#1@a", "org/capped#2@e"]);
+    } finally { f.state.close(); }
+  });
+
+  it("leaves manual command jobs uncapped and uncounted", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daily-cap-manual-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const lease = (now: Date) => store.leaseNextReviewQueueJobs({
+      maxProviderActive: 3, maxOrgActive: 3, maxRepoActive: 3, limit: 3,
+      maxAutomaticReviewsPerDayByRepo: { "org/repo": 1 }, now
+    });
+    try {
+      const started = store.enqueueReviewQueueJob({ repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40), now: DAY1 }).job;
+      lease(DAY1);
+      store.updateReviewQueueJobState({ jobId: started.jobId, state: "running", now: DAY1 });
+      store.updateReviewQueueJobState({ jobId: started.jobId, state: "posted", now: DAY1 });
+      const manual = store.enqueueReviewQueueJob({ repo: "org/repo", pullNumber: 2, headSha: "b".repeat(40), source: "manual_command", commentId: 7, now: DAY1 }).job;
+      const automatic = store.enqueueReviewQueueJob({ repo: "org/repo", pullNumber: 3, headSha: "c".repeat(40), now: DAY1 }).job;
+      const leased = lease(new Date(DAY1.getTime() + 60_000));
+      expect(leased.map((job) => job.jobId)).toEqual([manual.jobId]);
+      expect(store.getReviewQueueJob(automatic.jobId)).toMatchObject({ state: "provider_deferred", nextEligibleAt: NEXT_MIDNIGHT });
+      expect(() => store.leaseNextReviewQueueJobs({
+        maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, maxAutomaticReviewsPerDayByRepo: { "org/repo": 0 }
+      })).toThrow(/maxAutomaticReviewsPerDayByRepo/);
+    } finally { store.close(); }
+  });
+});
