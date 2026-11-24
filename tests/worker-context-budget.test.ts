@@ -1038,8 +1038,11 @@ describe("worker context budget preflight", () => {
       expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts[0]).toMatchObject({ action: "demoted", severity: "P0" });
       expect(JSON.parse(readFileSync(join(evidenceDir, "prior-threads.json"), "utf8")))
         .toMatchObject({ suppressedFindings: 1, matches: [{ findingTitle: candidate.title, threadId: 52 }] });
-      expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).postVerification.priorThreadDrops)
+      const gateEvidence = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
+      expect(gateEvidence.postVerification.priorThreadDrops)
         .toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
+      // The top-level list keeps its earlier meaning: gate drops plus answered-thread drops.
+      expect(gateEvidence.dropped).toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
     } finally { state.close(); }
   });
 
