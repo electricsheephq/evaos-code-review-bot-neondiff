@@ -220,11 +220,22 @@ comments, and decides `REQUEST_CHANGES` vs `COMMENT` (`src/review-gate.ts`, `src
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `maxInlineComments` | `integer` | `25` | Hard cap on inline comments posted per review. Findings are sorted severity-first, then by `confidence` descending (ties broken by path, line, title), so when the cap trims the list it always keeps the highest-confidence findings within each severity tier. |
+| `maxOutsideDiffFindings` | `integer` | `10` | Independent positive cap on findings for changed files GitHub shows without a patch. These use the same ranking and appear in the review body. Overflow is recorded as `outside_diff_cap_exceeded`. |
 | `reviewEventPolicy.mode` | `"trusted_command_only" \| "automatic"` | `"trusted_command_only"` | Selects the public GitHub review event. The safe default requires a trusted exact-repo/PR/current-head command before a candidate `REQUEST_CHANGES` can be posted. `automatic` is explicit legacy compatibility only. |
 | `requestChangesConfidenceFloors` | `{ P0?: number, P1?: number }` | unset (no floors) | Optional per-severity confidence floor, each `0..1`, for counting a P0/P1 finding toward `REQUEST_CHANGES` eligibility. |
 | `retryDegradedConfidencePenalty` | `number` (`0..1`) | unset (no penalty) | Optional confidence subtracted (floored at 0) from findings recovered via the strict-JSON retry path (#304) before the gate runs. |
 | `selfConsistency` | `SelfConsistencyConfig` | unset (disabled) | Opt-in second-draw re-check for high-severity findings (#303). See below. |
 | `categoryPrecisionFloors` | `{ [category]: number }` | unset (no floors) | Optional per-category confidence floor, each `0..1`, curated from the calibration aggregate report (#286). A finding whose category is listed loses `REQUEST_CHANGES` eligibility when its confidence is below the floor; it still posts as a comment. See [calibration-loop.md](calibration-loop.md). |
+
+Outside-diff findings have up to about 1,500 characters of text apiece and a
+20,000-character section budget. The final review body guard is 65,000 characters,
+just under GitHub's limit. It reduces outside-diff detail before clipping prose and
+preserves review markers and attribution. For LCM-X reviews with an assessment,
+NeonDiff tries full detail, titles, then a count with the highest severity within the
+8,192-byte limit. It omits the section if the count would displace the assessment.
+Omitting the section keeps the assessment only when the rest of the body and the
+assessment fit within 8,192 bytes together. Otherwise the review is posted without the
+assessment, as before this change.
 
 **Safety invariants:**
 
@@ -295,6 +306,7 @@ gate-accepted P0/P1 finding before the review posts (#303, `src/self-consistency
 - **Default-off, zero-cost when disabled.** `enabled: false` (or omitting `selfConsistency` entirely) means `runSelfConsistencyRecheck` returns the original comments and event untouched, with no second-draw calls issued.
 - **Suppress by default; optionally demote.** Only a complete, confirmed receipt bound to the current review and finding keeps a P0/P1 at its original severity and confidence. The default `"suppress"` removes every other severe finding, including refuted, capped, failed, invalid, stale or incomplete results. With `"demote"`, every such finding instead posts as P2 with `_Severity lowered from P1: a second check did not confirm it._` (or "from P0" for a P0). Confidence and the original fingerprint stay unchanged. The event is re-derived from surviving comments; P2 cannot request changes.
 - **Evidence and formatting bounds.** Files over 64 KiB can never be confirmed with the current evidence collector: they are suppressed by default or lowered to P2 in demote mode. If a comment lacks its matching leading severity prefix, demotion fails closed to suppression and the verdict records `demotionSkipped: true`. Receipt dispositions remain unchanged; `self-consistency.json` records the resolved policy and each verdict's `retained`, `suppressed` or `demoted` action.
+- **Outside-diff findings.** A finding at a re-checked severity has no GitHub diff hunk to verify, so the verifier makes no second draw for it. The default suppresses it as `self_consistency_unverifiable`. With `onUnsupported: "demote"`, it is lowered to P2 with a note explaining the missing diff.
 - **Cost note.** Because each configured severity/cap combination issues one additional model call per re-checked finding, `selfConsistency` is the only key in this surface with a direct, ongoing provider-cost implication proportional to `maxFindingsPerReview`. Keep the cap conservative on high-volume repos.
 
 ### `riskWeightedQueue`

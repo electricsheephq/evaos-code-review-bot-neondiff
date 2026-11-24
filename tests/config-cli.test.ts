@@ -515,7 +515,8 @@ describe("desktop config CLI", () => {
         intervalMs: 1_800_000
       },
       reviewGate: {
-        maxInlineComments: 12
+        maxInlineComments: 12,
+        maxOutsideDiffFindings: 4
       },
       issueEnrichment: {
         enabled: true,
@@ -557,6 +558,7 @@ describe("desktop config CLI", () => {
         "worktreeCleanup.retentionMs",
         "worktreeCleanup.intervalMs",
         "reviewGate.maxInlineComments",
+        "reviewGate.maxOutsideDiffFindings",
         "issueEnrichment.enabled",
         "issueEnrichment.postIssueComment",
         "issueEnrichment.allowlist",

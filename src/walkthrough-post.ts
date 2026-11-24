@@ -1,7 +1,11 @@
 import { join } from "node:path";
+import { appendLcmReviewAssessment } from "./lcm-review-assessment.js";
+import { isLcmReviewRepository } from "./lcm-review-repository.js";
+import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
-import type { ReviewPlan, WalkthroughComment, WalkthroughCommentPostResult } from "./types.js";
+import type { OutsideDiffFinding, ReviewPlan, WalkthroughComment, WalkthroughCommentPostResult } from "./types.js";
+import { formatOutsideDiffFindings, truncateReviewText, type OutsideDiffCountMode } from "./walkthrough.js";
 
 export interface WalkthroughCommentGithub {
   canPost(): boolean;
@@ -44,6 +48,63 @@ export function reviewBodyAfterWalkthroughPost(plan: Pick<ReviewPlan, "summary" 
   if (!plan.walkthrough.postIssueComment) return plan.walkthrough.body;
   if (!plan.walkthroughComment?.posted) return plan.walkthrough.body;
   return plan.summary;
+}
+
+export function buildReviewBodyForPost(input: {
+  repo: string;
+  model: string;
+  outsideDiffFindings: OutsideDiffFinding[];
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  assessment?: string;
+  initialBody?: string;
+  render: (lines: string[], countMode?: OutsideDiffCountMode) => string;
+}): { body: string; publishedOutsideDiffFindings: OutsideDiffFinding[] } {
+  const isLcm = isLcmReviewRepository(input.repo);
+  const compose = (body: string) => {
+    const assessed = appendLcmReviewAssessment(body, input.assessment, input.repo);
+    return isLcm ? assessed : appendReviewAttribution(assessed, input.model);
+  };
+  const format = (detail: "full" | "titles" | "paths" | "count", budget?: number) =>
+    formatOutsideDiffFindings(input.outsideDiffFindings, input.publicConfidencePolicy, detail, budget);
+  let section = format("full");
+  let body = compose(input.initialBody ?? input.render(section.lines));
+  if (input.assessment && input.outsideDiffFindings.length && !body.endsWith(input.assessment)) {
+    // Drop the explanatory headline before sacrificing the count and highest severity.
+    for (const detail of ["titles", "count", "count-line", "omit"] as const) {
+      const countMode = detail === "count" || detail === "count-line" ? detail : undefined;
+      const compact = detail === "omit" ? { lines: [], listedCount: 0 } : format(detail === "titles" ? "titles" : "count");
+      const candidate = compose(input.render(compact.lines, countMode));
+      if (!candidate.endsWith(input.assessment)) continue;
+      section = compact;
+      body = candidate;
+      break;
+    }
+  }
+  const limit = 65_000;
+  if (body.length > limit) {
+    const base = input.render([]);
+    section = format("paths", Math.max(0, limit - compose(base).length - 2));
+    body = compose(input.render(section.lines));
+    if (body.length > limit) {
+      section = { lines: [], listedCount: 0 };
+      const footerLength = isLcm ? 0 : appendReviewAttribution("", input.model).length;
+      body = compose(truncateReviewProse(base, limit - footerLength));
+    }
+  }
+  return { body, publishedOutsideDiffFindings: input.outsideDiffFindings.slice(0, section.listedCount) };
+}
+
+function truncateReviewProse(body: string, limit: number): string {
+  let leading = "";
+  const trailing: string[] = [];
+  // Generated walkthrough markers are single-line comments. Reserve the whole comment even if it trails the prose.
+  const prose = body.replace(/<!-- evaos-code-review-bot:walkthrough(?:-state)? [^<\r\n]*?-->(?:\r?\n)?/g, (marker: string, offset: number) => {
+    if (offset === leading.length) leading += marker;
+    else trailing.push(marker.trimEnd());
+    return "";
+  });
+  const tail = trailing.length ? `\n\n${trailing.join("\n")}` : "";
+  return leading + truncateReviewText(prose, limit - leading.length - tail.length) + tail;
 }
 
 export const REVIEW_ATTRIBUTION_PREFIX = "Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ";

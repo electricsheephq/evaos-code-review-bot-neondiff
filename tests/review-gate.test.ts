@@ -10,6 +10,80 @@ describe("deterministic review gate", () => {
     }
   ];
 
+  const unpatchedFinding: Finding = {
+    severity: "P2",
+    category: "runtime_correctness",
+    path: "dist/bundle.js",
+    line: 7,
+    title: "Missing fallback for empty input",
+    body: "The generated bundle skips the fallback.",
+    confidence: 0.9
+  };
+  const unpatchedFile = { filename: unpatchedFinding.path, status: "modified" };
+
+  it("retains and deduplicates outside-diff findings as advisory review text", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [...files, unpatchedFile],
+      findings: [unpatchedFinding, { ...unpatchedFinding, line: 8, confidence: 0.7 }]
+    });
+
+    expect(gate.event).toBe("COMMENT");
+    expect(gate.comments).toEqual([]);
+    expect(gate.outsideDiffFindings).toEqual([expect.objectContaining({
+      path: unpatchedFinding.path, line: 7, category: "runtime_correctness", title: unpatchedFinding.title
+    })]);
+    expect(gate.outsideDiffFindings[0]).not.toHaveProperty("side");
+    expect(gate.summary).toMatchObject({
+      acceptedComments: 0, outsideDiffFindings: 1, droppedFindings: 1, requestChangesEligible: 0,
+      categoryCounts: { runtime_correctness: 1 }, dropReasonCounts: { same_run_near_duplicate: 1 }
+    });
+  });
+
+  it("suppresses an outside-diff false positive matched by repo memory", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [unpatchedFile],
+      findings: [unpatchedFinding],
+      repoMemoryFalsePositiveFingerprints: [buildFindingFingerprint(unpatchedFinding)]
+    });
+
+    expect(gate.outsideDiffFindings).toEqual([]);
+    expect(gate.summary).toMatchObject({
+      outsideDiffFindings: 0, droppedFindings: 1, dropReasonCounts: { repo_memory_false_positive_match: 1 }
+    });
+  });
+
+  it.each([[0.8, "REQUEST_CHANGES", 1], [0.95, "COMMENT", 0]] as const)(
+    "applies the same escalation rules to either location with a confidence floor of %s",
+    (floor, event, requestChangesEligible) => {
+      const finding: Finding = { ...unpatchedFinding, severity: "P1", line: 2 };
+      for (const patch of [undefined, files[0].patch]) {
+        const gate = applyDeterministicReviewGate({
+          findings: [finding], files: [{ ...unpatchedFile, patch }],
+          requestChangesConfidenceFloors: { P1: floor }
+        });
+
+        expect(gate.event).toBe(event);
+        expect(gate.summary.requestChangesEligible).toBe(requestChangesEligible);
+      }
+    }
+  );
+
+  it("keeps the inline slot and applies a separate cap to higher-confidence outside-diff findings", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [...files, unpatchedFile],
+      findings: [
+        { ...unpatchedFinding, path: files[0].filename, line: 2, confidence: 0.5 },
+        unpatchedFinding,
+        { ...unpatchedFinding, line: 100, title: "Invalid serialization", confidence: 0.8 }
+      ],
+      maxInlineComments: 1,
+      maxOutsideDiffFindings: 1
+    });
+    expect(gate.comments.map(({ path }) => path)).toEqual([files[0].filename]);
+    expect(gate.outsideDiffFindings.map(({ path }) => path)).toEqual([unpatchedFile.filename]);
+    expect(gate.dropped).toMatchObject([{ reason: "outside_diff_cap_exceeded", line: 100 }]);
+  });
+
   it("owns final line, category, event, and drop decisions", () => {
     const findings: Finding[] = [
       {

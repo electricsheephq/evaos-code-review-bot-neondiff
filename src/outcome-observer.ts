@@ -25,6 +25,7 @@ export interface ObservedFinding {
   severity: Severity;
   category: string;
   confidence: number;
+  placement?: ReviewFindingRecord["placement"];
 }
 
 /**
@@ -65,7 +66,7 @@ export function deriveOutcomeLabel(input: { finding: ObservedFinding; observed: 
   if (diffTouchesFinding(observed.mergedFixLines, finding)) {
     return { labelSource: "merged_fix", verdict: "true_positive", postMergeStatus: "regression_seen", riskClaimStatus: "validated" };
   }
-  if (observed.humanThreadResolved) {
+  if (observed.humanThreadResolved && finding.placement !== "body") {
     return { labelSource: "human_thread", verdict: "false_positive", postMergeStatus: "no_incident_seen", riskClaimStatus: "dismissed" };
   }
   return { labelSource: "none_observed", verdict: "unvalidated", postMergeStatus: "no_incident_seen", riskClaimStatus: "unvalidated" };
@@ -243,7 +244,7 @@ function humanThreadTouchesFinding(comments: ObservedReviewComment[], findings: 
     const line = typeof comment.line === "number" ? comment.line : comment.original_line;
     if (typeof line !== "number") continue;
     for (const finding of findings) {
-      if (finding.path === path && Math.abs(line - finding.line) <= OUTCOME_LINE_WINDOW) return true;
+      if (finding.placement !== "body" && finding.path === path && Math.abs(line - finding.line) <= OUTCOME_LINE_WINDOW) return true;
     }
   }
   return false;
@@ -468,7 +469,8 @@ function parseObservedFinding(raw: unknown, label: string): ObservedFinding {
     line: line as number,
     severity: requireString(record.severity, `${label}.severity`) as Severity,
     category: requireString(record.category, `${label}.category`),
-    confidence: typeof record.confidence === "number" ? record.confidence : 0
+    confidence: typeof record.confidence === "number" ? record.confidence : 0,
+    ...(record.placement === "body" ? { placement: "body" } : {})
   };
 }
 
@@ -644,7 +646,8 @@ function selectObserveTargets(
       line: finding.line,
       severity: finding.severity as Severity,
       category: finding.category,
-      confidence: finding.confidence
+      confidence: finding.confidence,
+      placement: finding.placement
     });
   }
 

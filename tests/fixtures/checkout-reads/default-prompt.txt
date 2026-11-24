@@ -7,6 +7,7 @@ If you include category, use one of: data_loss, auth, ci_build, unity_scene_pref
 The deterministic wrapper treats category as a hint only; severity, current diff coordinates, redaction, and gate policy decide posting.
 Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Use P2 for real defects with limited impact and P3 for maintainability, test or documentation problems worth fixing. Report every defect you can substantiate from the diff or the code; do not report pure style preferences or claims you could not check.
 Every finding must point at a RIGHT-side line in the current diff.
+The one exception is a changed file shown as [binary or too large for GitHub patch]: if you read that file in the checkout, point at its PR-head line and cite the excerpt in evidence. NeonDiff posts such findings in the review body, outside the diff view.
 
 Repository: owner/repo
 Pull request: #12 Harden advisory context

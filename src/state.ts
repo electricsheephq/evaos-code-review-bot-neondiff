@@ -140,6 +140,7 @@ export interface ReviewFindingRecord {
   severity: string;
   category: string;
   confidence: number;
+  placement?: "body";
   recordedAt: string;
 }
 
@@ -670,6 +671,7 @@ export class ReviewStateStore {
         category text not null,
         confidence real not null,
         recorded_at text not null,
+        placement text,
         primary key (fingerprint, repo, pull_number, head_sha)
       );
 
@@ -938,6 +940,7 @@ export class ReviewStateStore {
     this.ensureReviewRunLeaseColumns();
     this.ensureReviewQueueJobColumns();
     this.ensureReviewQueueJobShadowIdentityColumns();
+    this.ensureReviewFindingPlacementColumn();
     this.ensureRepoMemoryNoteCoarseColumns();
     this.db.exec(`
       create table if not exists processed_commands (
@@ -1332,8 +1335,8 @@ export class ReviewStateStore {
     this.db
       .prepare(
         `insert or replace into review_findings
-          (fingerprint, repo, pull_number, head_sha, path, line, severity, category, confidence, recorded_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (fingerprint, repo, pull_number, head_sha, path, line, severity, category, confidence, recorded_at, placement)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         record.fingerprint,
@@ -1345,7 +1348,8 @@ export class ReviewStateStore {
         record.severity,
         record.category,
         record.confidence,
-        record.recordedAt
+        record.recordedAt,
+        record.placement === "body" ? "body" : null
       );
   }
 
@@ -1362,7 +1366,7 @@ export class ReviewStateStore {
     const where = predicates.length ? `where ${predicates.join(" and ")}` : "";
     const rows = this.db
       .prepare(
-        `select fingerprint, repo, pull_number, head_sha, path, line, severity, category, confidence, recorded_at
+        `select fingerprint, repo, pull_number, head_sha, path, line, severity, category, confidence, recorded_at, placement
          from review_findings ${where} order by datetime(recorded_at) desc`
       )
       .all(...params) as unknown as ReviewFindingRow[];
@@ -4174,6 +4178,27 @@ export class ReviewStateStore {
     }
   }
 
+  // Findings posted in the review body (#1276) are marked explicitly; NULL means an inline review comment.
+  private ensureReviewFindingPlacementColumn(): void {
+    const hasPlacement = () => (this.db.prepare("pragma table_info(review_findings)").all() as unknown as Array<{ name: string }>)
+      .some((column) => column.name === "placement");
+    // Upgraded databases take no write lock on open; only a missing column takes one, then re-checks under it.
+    if (hasPlacement()) return;
+    this.db.exec("begin immediate");
+    try {
+      if (!hasPlacement()) {
+        try { this.db.exec("alter table review_findings add column placement text"); }
+        catch (error) {
+          if (!(error instanceof Error) || !/^duplicate column name: placement$/i.test(error.message)) throw error;
+        }
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* transaction already rolled back */ }
+      throw error;
+    }
+  }
+
   private ensureIssueEnrichmentBodyHashColumn(): void {
     const columns = this.db.prepare("pragma table_info(issue_enrichment_records)").all() as unknown as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "body_hash")) {
@@ -4869,6 +4894,7 @@ interface ReviewFindingRow {
   category: string;
   confidence: number;
   recorded_at: string;
+  placement: string | null;
 }
 
 interface RepoActivationRow {
@@ -5096,6 +5122,7 @@ function mapReviewFindingRow(row: ReviewFindingRow): ReviewFindingRecord {
     headSha: row.head_sha,
     path: row.path,
     line: row.line,
+    ...(row.placement === "body" ? { placement: "body" as const } : {}),
     severity: row.severity,
     category: row.category,
     confidence: row.confidence,

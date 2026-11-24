@@ -33,6 +33,7 @@ const createdReviews = vi.hoisted((): Array<{
   body: string;
   comments: Array<{ path: string; line: number; title: string }>;
 }> => []);
+const issueCommentBodies = vi.hoisted((): string[] => []);
 const reviewPostControl = vi.hoisted((): {
   error?: Error;
   afterCreate?: () => void;
@@ -105,7 +106,8 @@ vi.mock("../src/github.js", async (importOriginal) => {
         return true;
       }
 
-      async upsertIssueComment(): Promise<{ action: "created"; html_url: string; id: number }> {
+      async upsertIssueComment(input: { body: string }): Promise<{ action: "created"; html_url: string; id: number }> {
+        issueCommentBodies.push(input.body);
         reviewPostControl.afterAuxiliaryPost?.();
         return { action: "created", html_url: "https://github.test/comment/1", id: 1 };
       }
@@ -194,12 +196,133 @@ describe("worker context budget preflight", () => {
     severeCurrentWorktree.enabled = false;
     severeWorktreePath.value = "";
     createdReviews.length = 0;
+    issueCommentBodies.length = 0;
     walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
     delete reviewPostControl.afterCreate;
     delete reviewPostControl.afterAuxiliaryPost;
     delete evidenceWriteControl.failPostedReview;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(["disabled", "review", "issue", "verified-only", "verified-demote", "hydrated"])(
+    "includes patchless findings in the posted review and gate evidence in %s mode",
+    async (mode) => {
+      const root = mkdtempSync(join(tmpdir(), "neondiff-patchless-"));
+      roots.push(root);
+      const config = minimalConfig(root);
+      config.walkthrough = { enabled: mode === "review" || mode === "issue", postIssueComment: mode === "issue" };
+      const state = new ReviewStateStore(config.statePath);
+      const pull = pullSummary(1276, "a".repeat(40));
+      const file = { filename: "dist/bundle.js", status: "modified", changes: 10 };
+      const title = "Bundle skips its fallback";
+      const severe = mode === "verified-only" || mode === "verified-demote";
+      if (severe) {
+        config.reviewGate = {
+          maxInlineComments: 25, selfConsistency: { enabled: true, ...(mode === "verified-demote" ? { onUnsupported: "demote" } : {}) },
+          reviewEventPolicy: { mode: "automatic" }
+        };
+      }
+      zcodeFindingsByPath.set(file.filename, [severe ? p1Finding(file.filename, title) : finding(file.filename, title)]);
+
+      try {
+        const repo = mode === "hydrated" ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
+        expect(await reviewPull({ config, github: githubForPull(pull, [file]), state, repo, pull, dryRun: false, useZCode: true }))
+          .toBe("reviewed");
+        expect(createdReviews).toHaveLength(1);
+        expect(createdReviews[0]).toMatchObject({ event: "COMMENT", comments: [] });
+        const evidenceDir = join(root, "evidence", localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+        const gate = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
+        expect(gate).toMatchObject({
+          comments: [], dropped: [],
+          outsideDiffFindings: [{ path: file.filename, line: 1, title, severity: severe ? "P1" : "P2" }],
+          summary: { acceptedComments: 0, outsideDiffFindings: 1, droppedFindings: 0 }
+        });
+        if (severe) {
+          expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts).toMatchObject([{
+            action: mode === "verified-only" ? "suppressed" : "demoted", error: "self_consistency_unverifiable"
+          }]);
+        }
+        if (mode === "verified-only") {
+          expect(createdReviews[0].body).not.toContain(title);
+          expect(state.listReviewFindings()).toEqual([]);
+          expect(gate.postVerification).toMatchObject({
+            publishedOutsideDiffFindings: [], demotedOutsideDiffFindings: [],
+            droppedOutsideDiffFindings: [{ title, reason: "self_consistency_unverifiable" }],
+            counts: { published: 0, dropped: 1, demoted: 0 }
+          });
+          return;
+        }
+        expect(gate.postVerification).toMatchObject({
+          publishedOutsideDiffFindings: [{ title, severity: "P2" }], droppedOutsideDiffFindings: [],
+          demotedOutsideDiffFindings: severe ? [{ title, severity: "P2", severityDemotedFrom: "P1" }] : [],
+          counts: { published: 1, dropped: 0, demoted: severe ? 1 : 0 }
+        });
+        expect(createdReviews[0].body.match(/### Findings outside the diff view/g)).toHaveLength(1);
+        expect(createdReviews[0].body).toContain("dist/bundle.js:1");
+        expect(createdReviews[0].body).toContain(`**P2: ${title}**`);
+        expect(state.listReviewFindings()).toMatchObject([{ path: file.filename, line: 1, placement: "body", severity: "P2" }]);
+        if (mode === "verified-demote") {
+          expect(createdReviews[0].body).toContain("could not be re-checked because GitHub shows no diff for the file.");
+        }
+        if (mode === "issue") {
+          expect(issueCommentBodies).toHaveLength(1);
+          expect(issueCommentBodies[0]).toContain("is in the review.");
+          expect(issueCommentBodies[0]).not.toContain("listed in the review");
+          expect(issueCommentBodies[0]).not.toContain(title);
+        } else {
+          expect(issueCommentBodies).toEqual([]);
+        }
+      } finally {
+        state.close();
+      }
+    }
+  );
+
+  it.each(["titles", "separate-count"])("keeps a terminal LCM assessment when the outside-diff section shrinks to %s", async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-fit-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const separate = mode === "separate-count";
+    config.walkthrough = { enabled: separate, postIssueComment: separate };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1278, "a".repeat(40));
+    const files = Array.from({ length: 8 }, (_, index) => ({
+      filename: `src/${separate ? "nested/".repeat(36) : ""}generated-${index}.ts`, status: "modified", changes: 2
+    }));
+    const findings = files.map(({ filename }, index) => ({
+      ...(separate && index === 0 ? p1Finding : finding)(filename, `Generated fallback ${index}`), body: "Detailed reasoning ".repeat(90)
+    }));
+    for (const candidate of findings) zcodeFindingsByPath.set(candidate.path, [candidate]);
+    zcodeRawResponseOverride.value = JSON.stringify({
+      findings, review_assessment: { verdict: "BLOCKED", scope: "Exact pull request diff",
+        unresolved_findings: findings.map(({ title }) => title), limitations: [],
+        acceptance_evidence: separate ? Array(3).fill("Fixture ".repeat(237)) : ["Fixture"] }
+    });
+    try {
+      const repo = "ElectricSheepHQ/LCM-X";
+      expect(await reviewPull({ config, github: githubForPull(pull, files), state, repo, pull, dryRun: false, useZCode: true }))
+        .toBe("reviewed");
+      const body = createdReviews[0].body;
+      expect(body).toContain("<!-- lcm-x-ai-review:v2");
+      expect(body.endsWith("-->")).toBe(true);
+      expect(Buffer.byteLength(body)).toBeLessThanOrEqual(8192);
+      if (separate) {
+        expect(body).toContain("8 findings, highest P1.");
+        expect(body).not.toContain("generated-0.ts:1</code>");
+        expect(issueCommentBodies).toHaveLength(1);
+        expect(issueCommentBodies[0]).toContain("8 findings on files GitHub shows no diff for are in the review.");
+        expect(issueCommentBodies[0]).not.toContain("listed in the review");
+        const evidenceDir = join(root, "evidence", localDateFolder(), "ElectricSheepHQ__LCM-X", `pr-${pull.number}`, pull.head.sha);
+        expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).postVerification)
+          .toMatchObject({ publishedOutsideDiffFindings: [], counts: { published: 0 } });
+      } else {
+        expect(body).toContain("src/generated-0.ts:1</code> Generated fallback 0");
+      }
+      expect(body).not.toContain("Detailed reasoning");
+    } finally {
+      state.close();
+    }
   });
 
   it.each(["answered", "throws", "missing", "disabled"])("prior threads: %s posts and records fail-open evidence", async (mode) => {
@@ -915,8 +1038,11 @@ describe("worker context budget preflight", () => {
       expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts[0]).toMatchObject({ action: "demoted", severity: "P0" });
       expect(JSON.parse(readFileSync(join(evidenceDir, "prior-threads.json"), "utf8")))
         .toMatchObject({ suppressedFindings: 1, matches: [{ findingTitle: candidate.title, threadId: 52 }] });
-      expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).dropped)
+      const gateEvidence = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
+      expect(gateEvidence.postVerification.priorThreadDrops)
         .toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
+      // The top-level list keeps its earlier meaning: gate drops plus answered-thread drops.
+      expect(gateEvidence.dropped).toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
     } finally { state.close(); }
   });
 

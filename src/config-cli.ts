@@ -54,6 +54,7 @@ const EXACT_PATCH_PATHS = new Set([
   "worktreeCleanup.retentionMs",
   "worktreeCleanup.intervalMs",
   "reviewGate.maxInlineComments",
+  "reviewGate.maxOutsideDiffFindings",
   "issueEnrichment.enabled",
   "issueEnrichment.postIssueComment",
   "issueEnrichment.allowlist",
