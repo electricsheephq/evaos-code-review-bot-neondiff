@@ -7,6 +7,7 @@ import type { ReviewModelSummary } from "./zcode.js";
 import type {
   ChangedSurfaceValidationReport,
   DroppedFinding,
+  OutsideDiffFinding,
   ProofRequirementReport,
   PullFilePatch,
   PullRequestSummary,
@@ -38,6 +39,7 @@ export function buildWalkthroughComment(input: {
   pull: PullRequestSummary;
   files: PullFilePatch[];
   comments: ReviewComment[];
+  outsideDiffFindings?: OutsideDiffFinding[];
   dropped: DroppedFinding[];
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
@@ -51,10 +53,12 @@ export function buildWalkthroughComment(input: {
   const marker = buildWalkthroughMarker({ repo: input.repo, pullNumber: input.pull.number });
   // Keep gate/count signal on original comments; use publicComments only for public-text safety checks.
   const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
-  const files = input.files.map((file) => summarizeFile(file, input.comments));
+  const outsideDiffFindings = input.outsideDiffFindings ?? [];
+  const findings = [...input.comments, ...outsideDiffFindings];
+  const files = input.files.map((file) => summarizeFile(file, findings));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
   const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
-  const effort = estimateReviewEffort(input.files, input.comments);
+  const effort = estimateReviewEffort(input.files, findings);
   const relatedRefs = extractRelatedRefs(`${input.pull.title}\n${input.pull.body ?? ""}`);
   const severityCounts = countSeverities(input.comments);
   const modelSummary = input.modelSummary ?? {
@@ -64,8 +68,8 @@ export function buildWalkthroughComment(input: {
     limitations: ["No structured provider summary was available."],
     noFindingRationale: "No structured provider summary was available."
   };
-  const highSeverity = severityCounts.P0 + severityCounts.P1;
-  const requestChangesEligible = input.comments.filter((comment) => isRequestChangesEligible(comment)).length;
+  const highSeverity = findings.filter((finding) => finding.severity === "P0" || finding.severity === "P1").length;
+  const requestChangesEligible = findings.filter((finding) => isRequestChangesEligible(finding)).length;
   const visibleBody = [
     "## Walkthrough",
     "",
@@ -85,8 +89,12 @@ export function buildWalkthroughComment(input: {
     input.comments.length === 0
       ? "No validated inline findings."
       : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
+    ...(outsideDiffFindings.length === 0 ? [] : [outsideDiffFindings.length === 1
+      ? "1 finding on a file GitHub shows no diff for is listed below."
+      : `${outsideDiffFindings.length} findings on files GitHub shows no diff for are listed below.`]),
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
+    ...formatOutsideDiffFindings(outsideDiffFindings, input.publicConfidencePolicy),
     "### Maintainer Analysis",
     "",
     "Changed behavior:",
@@ -101,11 +109,12 @@ export function buildWalkthroughComment(input: {
     "Limitations:",
     ...formatModelSummaryList(modelSummary.limitations, "No limitations were supplied.", input.publicConfidencePolicy),
     "",
-    `No-finding rationale: ${sanitizePublicConfidenceText(modelSummary.noFindingRationale, input.publicConfidencePolicy)}`,
-    "",
+    ...(outsideDiffFindings.length === 0
+      ? [`No-finding rationale: ${sanitizePublicConfidenceText(modelSummary.noFindingRationale, input.publicConfidencePolicy)}`, ""]
+      : []),
     "### Risk Taxonomy",
     "",
-    formatCategoryBreakdown(input.comments),
+    formatCategoryBreakdown(findings),
     "",
     "### Validation and Proof",
     "",
@@ -141,6 +150,26 @@ export function buildWalkthroughComment(input: {
     body: [marker, stateMarker, redactedBody].join("\n"),
     postIssueComment: input.postIssueComment ?? false
   };
+}
+
+export function formatOutsideDiffFindings(
+  findings: OutsideDiffFinding[],
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string[] {
+  if (findings.length === 0) return [];
+  return [
+    "### Findings outside the diff view",
+    "",
+    ...findings.flatMap((finding) => {
+      const path = redactSecrets(finding.path).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+      const body = redactSecrets(sanitizePublicConfidenceText(finding.body, publicConfidencePolicy))
+        .replace(HTML_COMMENT_PATTERN, "[hidden comment removed]");
+      const confidence = finding.confidence === undefined ? [] : [
+        "", sanitizePublicConfidenceText(`Confidence: ${Math.round(finding.confidence * 100)}%`, publicConfidencePolicy)
+      ];
+      return [`<code>${path}:${finding.line}</code>`, "", body, ...confidence, ""];
+    })
+  ];
 }
 
 function formatModelSummaryList(
@@ -194,7 +223,7 @@ function formatInlinePublicText(value: string | undefined, publicConfidencePolic
     .slice(0, 200);
 }
 
-function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
+function summarizeFile(file: PullFilePatch, comments: Pick<ReviewComment, "path" | "severity">[]): {
   filename: string;
   status: string;
   churn: string;
@@ -240,7 +269,7 @@ function inferRisk(filename: string, changes: number, maxSeverity?: Severity): s
   return "Low";
 }
 
-function estimateReviewEffort(files: PullFilePatch[], comments: ReviewComment[]): { score: number; minutes: number } {
+function estimateReviewEffort(files: PullFilePatch[], comments: Pick<ReviewComment, "severity">[]): { score: number; minutes: number } {
   const totalChanges = files.reduce((sum, file) => sum + (file.changes ?? (file.additions ?? 0) + (file.deletions ?? 0)), 0);
   const highSeverity = comments.filter((comment) => comment.severity === "P0" || comment.severity === "P1").length;
   const rawScore = 1 + Math.floor(files.length / 4) + Math.floor(totalChanges / 250) + Math.min(highSeverity, 2);
@@ -265,7 +294,7 @@ function formatSeverityCounts(counts: Record<Severity, number>): string {
   return SEVERITY_LABELS.map((severity) => `${severity}: ${counts[severity]}`).join(", ");
 }
 
-function formatCategoryBreakdown(comments: ReviewComment[]): string {
+function formatCategoryBreakdown(comments: Pick<ReviewComment, "category">[]): string {
   if (comments.length === 0) return "No finding categories.";
   const counts: Partial<Record<RegressionCategory, number>> = {};
   for (const comment of comments) counts[comment.category] = (counts[comment.category] ?? 0) + 1;
@@ -301,7 +330,7 @@ function proofChecklistPassed(
   return proof.status === "sufficient" || proof.status === "not_applicable";
 }
 
-function highestSeverity(comments: ReviewComment[]): Severity | undefined {
+function highestSeverity(comments: Pick<ReviewComment, "severity">[]): Severity | undefined {
   return SEVERITY_LABELS.find((severity) => comments.some((comment) => comment.severity === severity));
 }
 

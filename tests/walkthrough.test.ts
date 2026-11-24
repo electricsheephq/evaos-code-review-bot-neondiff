@@ -33,6 +33,27 @@ const pull: PullRequestSummary = {
 };
 
 describe("walkthrough comment rendering", () => {
+  it("shows sanitized outside-diff findings even when there are no inline findings", () => {
+    const files = [{ filename: "dist/bundle.js" }];
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [{
+        severity: "P2", path: "dist/bundle.js", line: 7, title: "Fallback is skipped",
+        body: "The empty-input branch returns before the fallback.\n\nConfidence: 90%.", confidence: 0.9
+      }]
+    });
+
+    const walkthrough = buildWalkthroughComment({ repo: "electricsheephq/WorldOS", pull, files, ...gate });
+
+    expect(walkthrough.body).toContain("1 finding on a file GitHub shows no diff for is listed below.");
+    expect(walkthrough.body).toContain("### Findings outside the diff view");
+    expect(walkthrough.body).toContain("dist/bundle.js:7");
+    expect(walkthrough.body).toContain("**P2: Fallback is skipped**");
+    expect(walkthrough.body).toContain("The empty-input branch returns before the fallback.");
+    expect(walkthrough.body).not.toContain("90%");
+    expect(walkthrough.body).toContain("Dropped findings before posting: 0.");
+  });
+
   it("renders a stable marked walkthrough with files, effort, related refs, and text-only suggestions", () => {
     const files: PullFilePatch[] = [
       {

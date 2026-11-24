@@ -60,7 +60,7 @@ import {
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import { collectAnsweredThreads, suppressAnsweredDemotedComments, type AnsweredThread } from "./prior-thread-suppression.js";
-import { buildFindingFingerprint } from "./findings.js";
+import { buildFindingFingerprint, decideReviewEvent } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
   buildReviewEnsemblePlan,
@@ -127,7 +127,7 @@ import {
   type StoredProcessedReviewRecord
 } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
-import { buildWalkthroughComment } from "./walkthrough.js";
+import { buildWalkthroughComment, formatOutsideDiffFindings } from "./walkthrough.js";
 import { appendReviewAttribution, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
@@ -155,7 +155,7 @@ import { canonicalizeSevereVerificationReceipt } from "./severe-verification-rec
 import { SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, type SevereVerificationCode } from "./severe-verification-receipt-schema.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError, isZCodeTimeoutError } from "./zcode-timeout.js";
-import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type { DroppedFinding, Finding, OutsideDiffFinding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
@@ -2396,9 +2396,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         priorThreadEvidence.errorClass = error instanceof Error ? error.name : "UnknownError";
       }
     }
+    // A hydrated patch can help the reviewer reason about a file without creating GitHub anchors.
+    const githubPatchlessPaths = new Set(files.filter((file) => !file.patch?.trim()).map((file) => file.filename));
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
-      files: reviewFiles,
+      files: reviewFiles.map((file) => githubPatchlessPaths.has(file.filename) ? { ...file, patch: undefined } : file),
       droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
@@ -2451,6 +2453,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
     }
     const comments = answeredDemoted.comments;
+    const outsideDiffFindings = gate.outsideDiffFindings;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDemoted.dropped], config.confidenceCalibration?.publicDisplay);
@@ -2476,10 +2479,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pull,
       comments,
+      outsideDiffFindings,
       dropped,
       modelSummary: zcodeResult.summary,
       dryRun: input.dryRun,
-      commandDecision
+      commandDecision,
+      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
     });
     const summary = isLcmReviewRepository(repo)
       ? escapeOrdinaryLcmReviewBody(generatedSummary)
@@ -2494,6 +2499,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           pull,
           files: reviewFiles,
           comments,
+          outsideDiffFindings,
           dropped,
           event: selectedEvent,
           validation,
@@ -2527,6 +2533,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const plan: ReviewPlan = {
       event: selectedEvent,
       comments,
+      ...(outsideDiffFindings.length > 0 ? { outsideDiffFindings } : {}),
       dropped,
       summary,
       deterministicGate: gate.summary,
@@ -2789,6 +2796,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         pull,
         files: reviewFiles,
         comments,
+        outsideDiffFindings,
         dropped,
         event: plan.event,
         validation,
@@ -4600,7 +4608,14 @@ async function applySelfConsistencyRecheck(input: {
     ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${suppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s). Suppression is fail-closed and is not a provider refutation.`
     : undefined;
 
-  return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+  // Outside-diff findings can only escalate when their severity does not require hunk verification.
+  const checkedSeverities = selfConsistencyConfig.severities ?? ["P0", "P1"];
+  const event = result.event === "REQUEST_CHANGES" ? result.event : decideReviewEvent(
+    input.gate.outsideDiffFindings.filter((finding) => !checkedSeverities.some((severity) => severity === finding.severity)),
+    input.config.reviewGate?.requestChangesConfidenceFloors,
+    input.config.reviewGate?.categoryPrecisionFloors
+  );
+  return { comments: result.comments, event, ...(runtimeNote ? { runtimeNote } : {}) };
 }
 
 function severeVerificationFailureReceipt(
@@ -5561,10 +5576,12 @@ function buildSummary(input: {
   repo: string;
   pull: PullRequestSummary;
   comments: { severity: string }[];
+  outsideDiffFindings: OutsideDiffFinding[];
   dropped: { reason: string }[];
   modelSummary?: ReviewModelSummary;
   dryRun: boolean;
   commandDecision?: CommandDecision;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): string {
   const p0p1 = input.comments.filter((comment) => comment.severity === "P0" || comment.severity === "P1").length;
   const modelSummary = input.modelSummary ?? emptyReviewModelSummary("No structured provider summary was available.");
@@ -5576,7 +5593,9 @@ function buildSummary(input: {
     "Affected invariants:\n" + formatModelSummaryList(modelSummary.invariants, "No affected invariant was established."),
     "Evidence:\n" + formatModelSummaryList(modelSummary.evidence, "No additional provider evidence was established."),
     "Limitations:\n" + formatModelSummaryList(modelSummary.limitations, "No limitations were supplied."),
-    `No-finding rationale: ${sanitizePublicConfidenceText(redactSecrets(modelSummary.noFindingRationale))}`
+    input.outsideDiffFindings.length > 0
+      ? formatOutsideDiffFindings(input.outsideDiffFindings, input.publicConfidencePolicy).join("\n").trimEnd()
+      : `No-finding rationale: ${sanitizePublicConfidenceText(redactSecrets(modelSummary.noFindingRationale))}`
   ];
   if (input.commandDecision && input.commandDecision.action !== "none") {
     lines.push(

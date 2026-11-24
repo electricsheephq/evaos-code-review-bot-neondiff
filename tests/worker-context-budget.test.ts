@@ -202,6 +202,45 @@ describe("worker context budget preflight", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it.each(["disabled", "review", "issue", "verified-only", "hydrated"])(
+    "includes patchless findings in the posted review and gate evidence in %s mode",
+    async (mode) => {
+      const root = mkdtempSync(join(tmpdir(), "neondiff-patchless-"));
+      roots.push(root);
+      const config = minimalConfig(root);
+      config.walkthrough = { enabled: mode === "review" || mode === "issue", postIssueComment: mode === "issue" };
+      const state = new ReviewStateStore(config.statePath);
+      const pull = pullSummary(1276, "a".repeat(40));
+      const file = { filename: "dist/bundle.js", status: "modified", changes: 10 };
+      const title = "Bundle skips its fallback";
+      if (mode === "verified-only") {
+        config.reviewGate = {
+          maxInlineComments: 25, selfConsistency: { enabled: true }, reviewEventPolicy: { mode: "automatic" }
+        };
+      }
+      zcodeFindingsByPath.set(file.filename, [mode === "verified-only" ? p1Finding(file.filename, title) : finding(file.filename, title)]);
+
+      try {
+        const repo = mode === "hydrated" ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
+        expect(await reviewPull({ config, github: githubForPull(pull, [file]), state, repo, pull, dryRun: false, useZCode: true }))
+          .toBe("reviewed");
+        expect(createdReviews).toHaveLength(1);
+        expect(createdReviews[0]).toMatchObject({ event: "COMMENT", comments: [] });
+        expect(createdReviews[0].body).toContain("### Findings outside the diff view");
+        expect(createdReviews[0].body).toContain("dist/bundle.js:1");
+        expect(createdReviews[0].body).toContain(title);
+        const evidenceDir = join(root, "evidence", localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+        expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"))).toMatchObject({
+          comments: [], dropped: [],
+          outsideDiffFindings: [expect.objectContaining({ path: file.filename, line: 1, title })],
+          summary: { acceptedComments: 0, outsideDiffFindings: 1, droppedFindings: 0 }
+        });
+      } finally {
+        state.close();
+      }
+    }
+  );
+
   it.each(["answered", "throws", "missing", "disabled"])("prior threads: %s posts and records fail-open evidence", async (mode) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-prior-threads-")); roots.push(root);
     const config = minimalConfig(root);

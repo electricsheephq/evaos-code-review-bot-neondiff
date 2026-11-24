@@ -146,9 +146,12 @@ export interface ReviewComment {
   fingerprint: string;
 }
 
+export type OutsideDiffFinding = Omit<ReviewComment, "side">;
+
 export interface ReviewPlan {
   event: ReviewEvent;
   comments: ReviewComment[];
+  outsideDiffFindings?: OutsideDiffFinding[];
   dropped: DroppedFinding[];
   summary: string;
   deterministicGate?: DeterministicReviewGateSummary;
@@ -170,6 +173,7 @@ export interface ReviewProviderMetadata {
 export interface DeterministicReviewGateSummary {
   inputFindings: number;
   acceptedComments: number;
+  outsideDiffFindings: number;
   droppedFindings: number;
   event: ReviewEvent;
   requestChangesEligible: number;

@@ -15,6 +15,7 @@ import type {
   DeterministicReviewGateSummary,
   DroppedFinding,
   Finding,
+  OutsideDiffFinding,
   PullFilePatch,
   ReviewComment,
   ReviewEvent
@@ -23,6 +24,7 @@ import type {
 export interface DeterministicReviewGateResult {
   event: ReviewEvent;
   comments: ReviewComment[];
+  outsideDiffFindings: OutsideDiffFinding[];
   dropped: DroppedFinding[];
   summary: DeterministicReviewGateSummary;
 }
@@ -58,7 +60,7 @@ export function applyDeterministicReviewGate(input: {
   const located = validateFindingLocations(input.findings, input.files);
   // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
   const repoMemoryFiltered = applyRepoMemoryFalsePositiveSuppressions(
-    located.valid,
+    [...located.valid, ...located.outsideDiff],
     input.repoMemoryFalsePositiveFingerprints ?? [],
     input.repoMemoryFalsePositives ?? []
   );
@@ -85,20 +87,32 @@ export function applyDeterministicReviewGate(input: {
     ...priorThreadDrops,
     ...normalized.dropped
   ].map((finding) => sanitizeDroppedFinding(finding, input.publicConfidencePolicy));
-  const comments = normalized.comments;
-  const event = decideReviewEvent(comments, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors);
+  const outsideDiffPaths = new Set(located.outsideDiff.map((finding) => finding.path));
+  const comments: ReviewComment[] = [];
+  const outsideDiffFindings: OutsideDiffFinding[] = [];
+  for (const comment of normalized.comments) {
+    if (outsideDiffPaths.has(comment.path)) {
+      const { side: _side, ...finding } = comment;
+      outsideDiffFindings.push(finding);
+    } else {
+      comments.push(comment);
+    }
+  }
+  const event = decideReviewEvent(normalized.comments, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors);
 
   return {
     event,
     comments,
+    outsideDiffFindings,
     dropped,
     summary: {
       inputFindings: input.findings.length,
       acceptedComments: comments.length,
+      outsideDiffFindings: outsideDiffFindings.length,
       droppedFindings: dropped.length,
       event,
-      requestChangesEligible: comments.filter((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors)).length,
-      categoryCounts: countCategories(comments),
+      requestChangesEligible: normalized.comments.filter((comment) => isRequestChangesEligible(comment, input.requestChangesConfidenceFloors, input.categoryPrecisionFloors)).length,
+      categoryCounts: countCategories(normalized.comments),
       dropReasonCounts: countDropReasons(dropped)
     }
   };

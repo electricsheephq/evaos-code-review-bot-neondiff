@@ -10,6 +10,63 @@ describe("deterministic review gate", () => {
     }
   ];
 
+  const unpatchedFinding: Finding = {
+    severity: "P2",
+    category: "runtime_correctness",
+    path: "dist/bundle.js",
+    line: 7,
+    title: "Missing fallback for empty input",
+    body: "The generated bundle skips the fallback.",
+    confidence: 0.9
+  };
+
+  it("retains and deduplicates outside-diff findings as advisory review text", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [...files, { filename: unpatchedFinding.path }],
+      findings: [unpatchedFinding, { ...unpatchedFinding, line: 8, confidence: 0.7 }]
+    });
+
+    expect(gate.event).toBe("COMMENT");
+    expect(gate.comments).toEqual([]);
+    expect(gate.outsideDiffFindings).toEqual([expect.objectContaining({
+      path: unpatchedFinding.path, line: 7, category: "runtime_correctness", title: unpatchedFinding.title
+    })]);
+    expect(gate.outsideDiffFindings[0]).not.toHaveProperty("side");
+    expect(gate.summary).toMatchObject({
+      acceptedComments: 0, outsideDiffFindings: 1, droppedFindings: 1, requestChangesEligible: 0,
+      categoryCounts: { runtime_correctness: 1 }, dropReasonCounts: { same_run_near_duplicate: 1 }
+    });
+  });
+
+  it("suppresses an outside-diff false positive matched by repo memory", () => {
+    const gate = applyDeterministicReviewGate({
+      files: [{ filename: unpatchedFinding.path }],
+      findings: [unpatchedFinding],
+      repoMemoryFalsePositiveFingerprints: [buildFindingFingerprint(unpatchedFinding)]
+    });
+
+    expect(gate.outsideDiffFindings).toEqual([]);
+    expect(gate.summary).toMatchObject({
+      outsideDiffFindings: 0, droppedFindings: 1, dropReasonCounts: { repo_memory_false_positive_match: 1 }
+    });
+  });
+
+  it.each([[0.8, "REQUEST_CHANGES", 1], [0.95, "COMMENT", 0]] as const)(
+    "applies the same escalation rules to either location with a confidence floor of %s",
+    (floor, event, requestChangesEligible) => {
+      const finding: Finding = { ...unpatchedFinding, severity: "P1", line: 2 };
+      for (const patch of [undefined, files[0].patch]) {
+        const gate = applyDeterministicReviewGate({
+          findings: [finding], files: [{ filename: finding.path, patch }],
+          requestChangesConfidenceFloors: { P1: floor }
+        });
+
+        expect(gate.event).toBe(event);
+        expect(gate.summary.requestChangesEligible).toBe(requestChangesEligible);
+      }
+    }
+  );
+
   it("owns final line, category, event, and drop decisions", () => {
     const findings: Finding[] = [
       {

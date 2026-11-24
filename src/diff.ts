@@ -39,15 +39,22 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
 export function validateFindingLocations(findings: Finding[], files: PullFilePatch[]): {
   valid: Finding[];
   dropped: DroppedFinding[];
+  outsideDiff: Finding[];
 } {
   const rightLines = collectRightSideLines(files);
+  // A removed file does not exist at head, so a finding on it has nothing to point at.
+  const pathsWithoutPatch = new Set(files
+    .filter((file) => file.status !== "removed" && !file.patch?.trim())
+    .map((file) => file.filename));
   const valid: Finding[] = [];
   const dropped: DroppedFinding[] = [];
+  const outsideDiff: Finding[] = [];
 
   for (const finding of findings) {
     const fileLines = rightLines.get(finding.path);
     if (!fileLines) {
-      dropped.push({ ...finding, reason: "file_not_in_diff" });
+      if (pathsWithoutPatch.has(finding.path)) outsideDiff.push(finding);
+      else dropped.push({ ...finding, reason: "file_not_in_diff" });
       continue;
     }
     if (!fileLines.has(finding.line)) {
@@ -57,5 +64,5 @@ export function validateFindingLocations(findings: Finding[], files: PullFilePat
     valid.push(finding);
   }
 
-  return { valid, dropped };
+  return { valid, dropped, outsideDiff };
 }
