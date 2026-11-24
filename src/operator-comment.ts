@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { containsCommandLine } from "./commands.js";
 import type { BotConfig } from "./config.js";
 import { ENRICHMENT_MARKER_PREFIX } from "./enrichment.js";
 import { GitHubApi, GitHubApiRequestError, isAuthoredBy } from "./github.js";
@@ -14,9 +15,11 @@ import { REVIEW_ATTRIBUTION_PREFIX } from "./walkthrough-post.js";
 import { reviewPromptForbiddenFragments } from "./zcode.js";
 
 const RESERVED_COMMENT_TEXT = [
-  "<!-- evaos-code-review-bot", "<!-- lcm-x-ai-review", ENRICHMENT_MARKER_PREFIX, "<!-- neondiff",
+  "<!-- evaos-", "<!-- lcm-x-ai-review", ENRICHMENT_MARKER_PREFIX, "<!-- neondiff",
   REVIEW_ATTRIBUTION_PREFIX
 ].map((text) => text.toLowerCase());
+const OPERATOR_COMMENT_MARKER = "<!-- neondiff-operator-comment:";
+const RETRY_WINDOW_MS = 24 * 60 * 60_000;
 
 export function normalizeOperatorCommentRepo(value: string): string {
   const repo = value.trim().toLowerCase();
@@ -26,16 +29,19 @@ export function normalizeOperatorCommentRepo(value: string): string {
   return repo;
 }
 
-export function resolveOperatorCommentProfile(config: BotConfig, repo: string): ResolvedRepoProfile {
-  if (!listReposToScan(config).some((configured) => configured.toLowerCase() === repo)) {
+export function resolveOperatorCommentTarget(config: BotConfig, repo: string): { repo: string; profile: ResolvedRepoProfile } {
+  const configuredRepo = listReposToScan(config).find((configured) => configured.toLowerCase() === repo);
+  if (!configuredRepo) {
     throw new Error("post-comment repo must be present in configured repos");
   }
   const policy = resolveRepoProfile(config, repo);
   if (!policy.allowed) throw new Error(`post-comment repo is blocked by repo policy: ${policy.reason}`);
-  return policy.profile;
+  return { repo: configuredRepo, profile: policy.profile };
 }
 
-export function inspectOperatorCommentBody(body: string, profile: ResolvedRepoProfile): { bodyLength: number; bodySha256: string } {
+export function inspectOperatorCommentBody(body: string, profile: ResolvedRepoProfile, botMentions: string[]): {
+  bodyLength: number; bodySha256: string;
+} {
   const bodyLength = Array.from(body).length;
   if (!body.trim()) throw new Error("post-comment body must be non-empty");
   if (bodyLength > 60_000) throw new Error("post-comment body must be at most 60,000 characters");
@@ -46,6 +52,7 @@ export function inspectOperatorCommentBody(body: string, profile: ResolvedRepoPr
   if (RESERVED_COMMENT_TEXT.some((text) => normalized.includes(text))) {
     throw new Error("post-comment body contains a reserved NeonDiff marker or attribution");
   }
+  if (containsCommandLine(body, botMentions)) throw new Error("post-comment body contains a NeonDiff command line");
   return { bodyLength, bodySha256: createHash("sha256").update(body).digest("hex") };
 }
 
@@ -62,9 +69,11 @@ export async function processOperatorComments(input: {
   for (const request of input.state.listPendingOperatorComments(5)) {
     if (!input.state.tryClaimOperatorComment(request.id, request.attempts)) continue;
     try {
-      const outcome = await postOperatorComment(request, input.config, input.admission, () => github ??= new GitHubApi(input.config.github));
-      input.state.finishOperatorComment(request.id, outcome);
-      if (outcome.status !== "pending") input.recordOutcome(request.id, outcome);
+      const outcome = await postOperatorComment(request, input.config, input.admission,
+        () => github ??= new GitHubApi(input.config.github), () => input.state.isOperatorCommentClaimCurrent(request.id));
+      if (outcome && input.state.finishOperatorComment(request.id, outcome) && outcome.status !== "pending") {
+        input.recordOutcome(request.id, outcome);
+      }
     } finally {
       input.state.releaseOperatorComment(request.id);
     }
@@ -75,43 +84,62 @@ async function postOperatorComment(
   request: PendingComment,
   config: BotConfig,
   admission: ProductionLicenseAdmission,
-  getGithub: () => GitHubApi
-): Promise<OperatorCommentOutcome> {
-  let profile: ResolvedRepoProfile;
+  getGithub: () => GitHubApi,
+  claimIsCurrent: () => boolean
+): Promise<OperatorCommentOutcome | undefined> {
+  let target: ReturnType<typeof resolveOperatorCommentTarget>;
   try {
-    profile = resolveOperatorCommentProfile(config, normalizeOperatorCommentRepo(request.repo));
+    target = resolveOperatorCommentTarget(config, normalizeOperatorCommentRepo(request.repo));
   } catch {
     return { status: "refused", errorClass: "repo_policy" };
   }
   try {
-    const metadata = inspectOperatorCommentBody(request.body, profile);
+    const metadata = inspectOperatorCommentBody(request.body, target.profile, config.commands.botMentions);
     if (metadata.bodySha256 !== request.bodySha256 || !/^[a-f0-9-]{36}$/.test(request.id)) {
       return { status: "refused", errorClass: "invalid_request" };
     }
   } catch {
     return { status: "refused", errorClass: "unsafe_body" };
   }
+  const retryDeadline = Date.parse(request.requestedAt) + RETRY_WINDOW_MS;
+  const exhausted = { status: "failed", errorClass: "retry_exhausted" } as const;
   try {
     const github = getGithub();
     if (!github.canPostAsApp()) return { status: "refused", errorClass: "missing_app_credentials" };
-    const repo = await github.getRepo(request.repo);
+    const repo = await github.getRepo(target.repo);
     if (repo.full_name?.toLowerCase() !== request.repo ||
       !authorizeAdmissionForVisibility(admission, visibilityFromRepositoryFlags(repo), "daemon_cycle").ok) {
       return { status: "refused", errorClass: "repo_admission" };
     }
-    const marker = `<!-- neondiff-operator-comment:${request.id} -->`;
+    const marker = `${OPERATOR_COMMENT_MARKER}${request.id}:${request.bodySha256} -->`;
+    const bodyMarker = new RegExp(`${OPERATOR_COMMENT_MARKER}[^:\\s>]+:${request.bodySha256} -->`);
     const identity = await github.postingIdentity();
-    const comments = await github.listIssueComments(request.repo, request.number);
-    const existing = comments.find((comment) => isAuthoredBy(comment.user, identity) && comment.body?.includes(marker));
+    const comments = await github.listIssueComments(target.repo, request.number);
+    const existing = comments.find((comment) => {
+      const appId = comment.performed_via_github_app?.id;
+      const ownComment = appId === undefined ? isAuthoredBy(comment.user, identity) : appId === Number(config.github.appId);
+      if (!ownComment || !comment.body) return false;
+      const legacy = comment.body.match(/\n\n<!-- neondiff-operator-comment:[a-f0-9-]{36} -->$/);
+      return bodyMarker.test(comment.body) || (legacy !== null && comment.body.slice(0, legacy.index) === request.body);
+    });
+    if (!existing && Date.now() >= retryDeadline) return exhausted;
+    if (!existing && !claimIsCurrent()) return undefined;
     const posted = existing ?? await github.createIssueComment({
-      repo: request.repo, issueNumber: request.number, body: `${request.body}\n\n${marker}`
+      repo: target.repo, issueNumber: request.number, body: `${request.body}\n\n${marker}`
     });
     return { status: "posted", id: posted.id, html_url: posted.html_url };
   } catch (error) {
-    const status = error instanceof GitHubApiRequestError ? error.status : undefined;
+    const now = Date.now();
+    if (now >= retryDeadline) return exhausted;
+    const githubError = error instanceof GitHubApiRequestError ? error : undefined;
+    const status = githubError?.status;
+    const errorClass = status !== undefined ? `github_${status}` : "github_request_error";
+    if (status === 404 || status === 410 || status === 422 || (status === 403 && !githubError?.isRateLimited)) {
+      return { status: "failed", errorClass };
+    }
+    const backoffMs = Math.min(60, 2 ** request.attempts) * 60_000;
     return {
-      status: (status !== undefined && status < 500) || request.attempts >= 4 ? "failed" : "pending",
-      errorClass: status !== undefined ? `github_${status}` : "github_request_error"
+      status: "pending", errorClass, nextAttemptAt: new Date(Math.min(now + backoffMs, retryDeadline)).toISOString()
     };
   }
 }

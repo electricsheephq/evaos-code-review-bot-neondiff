@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENRICHMENT_MARKER_PREFIX } from "../src/enrichment.js";
 import { DEFAULT_BOT_LOGIN, GitHubApi } from "../src/github.js";
@@ -78,6 +79,20 @@ describe("post-comment CLI", () => {
     expect(existsSync(statePath)).toBe(false);
   });
 
+  it("strips a UTF-8 BOM before hashing and storing the body to post", () => {
+    const { statePath, post } = fixture("\uFEFF" + body);
+    const result = post({ flags: ["--dry-run", "false", "--confirm", "true"] });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).bodySha256).toBe(createHash("sha256").update(body).digest("hex"));
+    expect(JSON.parse(post().stdout).bodyLength).toBe(body.length);
+    const db = new DatabaseSync(statePath, { readOnly: true });
+    try {
+      expect(db.prepare("select body from operator_comment_requests").get()?.body).toBe(body);
+    } finally {
+      db.close();
+    }
+  });
+
   it("requires live confirmation and returns the same pending request for a case-insensitive rerun", () => {
     const { post, run, statePath } = fixture();
     const unconfirmed = post({ flags: ["--dry-run", "false"] });
@@ -105,6 +120,9 @@ describe("post-comment CLI", () => {
     ["public-output leak", "These are our validation hints.", /public_review_config_leak_rejected/],
     ["private profile fragment", privateProfileNote, /public_review_config_leak_rejected/],
     ["walkthrough marker", "<!-- evaos-code-review-bot:walkthrough", /marker or attribution/],
+    ["command-status marker", "<!-- evaos-command-status:fixture -->", /marker or attribution/],
+    ["command line", "Follow-up:\r\n  @NeonDiff   review  \r\nThanks!", /command/],
+    ["request-changes command line", `Follow-up\n @neondiff request-changes --repo owner/repo --pr 42 --head ${"a".repeat(40)}`, /command/],
     ["LCM marker", "<!-- lcm-x-ai-review:v2", /marker or attribution/],
     ["enrichment marker", ENRICHMENT_MARKER_PREFIX, /marker or attribution/],
     ["NeonDiff marker", "<!-- neondiff-operator-comment:other -->", /marker or attribution/],

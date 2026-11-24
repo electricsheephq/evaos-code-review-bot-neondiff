@@ -8,7 +8,7 @@ import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./con
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle, shouldExitDaemonAfterFailedCycle, waitForIssueEnrichmentPass, waitForOperatorCommentPass } from "./daemon.js";
-import { inspectOperatorCommentBody, normalizeOperatorCommentRepo, resolveOperatorCommentProfile } from "./operator-comment.js";
+import { inspectOperatorCommentBody, normalizeOperatorCommentRepo, resolveOperatorCommentTarget } from "./operator-comment.js";
 import {
   runLaunchdControlCommand,
   type LaunchctlResult
@@ -2582,16 +2582,16 @@ function runPostComment(args: ParsedArgs): void {
   }
   const dryRun = args["dry-run"] === undefined || parseBooleanArg(args["dry-run"], "--dry-run");
   if (!dryRun && args.confirm !== "true") throw new Error("post-comment requires --confirm true when --dry-run false is used");
-  const profile = resolveOperatorCommentProfile(config, repo);
+  const { profile } = resolveOperatorCommentTarget(config, repo);
 
   const bytes = readFileSync(parseSingleArg(bodyFile, "--body-file"));
   let body: string;
   try {
-    body = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     throw new Error("post-comment body must be valid UTF-8");
   }
-  const { bodyLength, bodySha256 } = inspectOperatorCommentBody(body, profile);
+  const { bodyLength, bodySha256 } = inspectOperatorCommentBody(body, profile, config.commands.botMentions);
   const key = { repo, number, bodySha256 };
   if (dryRun) {
     const [existing] = ReviewStateStore.readOperatorCommentRequests(statePath, key);

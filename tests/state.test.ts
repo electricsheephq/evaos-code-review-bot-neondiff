@@ -40,7 +40,8 @@ describe("review state store", () => {
       expect(peer.enqueueOperatorComment(input)).toEqual(first);
       expect(state.tryClaimOperatorComment(first.id, 0)).toBe(true);
       expect(peer.tryClaimOperatorComment(first.id, 0)).toBe(false);
-      expect(ReviewStateStore.readOperatorCommentRequests(path, { id: first.id })[0]?.errorClass).toBeNull();
+      expect(ReviewStateStore.readOperatorCommentRequests(path, { id: first.id })[0])
+        .toMatchObject({ status: "claimed", errorClass: null });
       state.finishOperatorComment(first.id, { status, errorClass: "fixture" });
       const second = peer.enqueueOperatorComment(input);
       expect(second.id).not.toBe(first.id);

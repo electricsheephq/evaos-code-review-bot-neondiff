@@ -195,8 +195,9 @@ export class GitHubApiRequestError extends Error {
   readonly statusText: string;
   readonly path: string;
   readonly responseText: string;
+  readonly isRateLimited: boolean;
 
-  constructor(input: { status: number; statusText: string; path: string; responseText: string }) {
+  constructor(input: { status: number; statusText: string; path: string; responseText: string; headers?: Headers }) {
     const responseText = redactSecrets(input.responseText);
     super(`GitHub API ${input.status} ${input.statusText} for ${input.path}: ${responseText.slice(0, 400)}`);
     this.name = "GitHubApiRequestError";
@@ -204,6 +205,10 @@ export class GitHubApiRequestError extends Error {
     this.statusText = input.statusText;
     this.path = input.path;
     this.responseText = responseText;
+    this.isRateLimited = input.status === 429 || (input.status === 403 && (
+      input.headers?.get("x-ratelimit-remaining") === "0" || input.headers?.has("retry-after") === true ||
+      /\b(rate limit|abuse detection)\b/i.test(responseText)
+    ));
     Object.defineProperty(this, "responseText", {
       value: responseText,
       enumerable: false,
@@ -805,7 +810,8 @@ export class GitHubApi {
           status: response.status,
           statusText: response.statusText,
           path,
-          responseText: text
+          responseText: text,
+          headers: response.headers
         });
       }
       options.onResponse?.(response);

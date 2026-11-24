@@ -26,7 +26,7 @@ type AutoRetryScheduleResult = { granted: true; attempt: number; nextEligibleAt:
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
 type OperatorCommentKey = { repo: string; number: number; bodySha256: string };
-type OperatorCommentStatus = "pending" | "posted" | "refused" | "failed";
+type OperatorCommentStatus = "pending" | "claimed" | "posted" | "refused" | "failed";
 type OperatorCommentRequest = OperatorCommentKey & {
   id: string;
   status: OperatorCommentStatus;
@@ -36,22 +36,36 @@ type OperatorCommentRequest = OperatorCommentKey & {
   commentId: number | null;
   commentUrl: string | null;
   errorClass: string | null;
+  nextAttemptAt: string | null;
 };
 type OperatorCommentFilter = Partial<OperatorCommentKey & { id: string }>;
 type OperatorCommentOutcome =
   | { status: "posted"; id: number; html_url?: string }
-  | { status: "pending" | "refused" | "failed"; errorClass: string };
+  | { status: "pending"; errorClass: string; nextAttemptAt: string }
+  | { status: "refused" | "failed"; errorClass: string };
 
-const OPERATOR_COMMENT_COLUMNS = `id, repo, number, body_sha256 as bodySha256, status, attempts,
-  requested_at as requestedAt, updated_at as updatedAt, comment_id as commentId, comment_url as commentUrl,
-  case when error_class like 'worker:%' then null else error_class end as errorClass`;
+const OPERATOR_COMMENT_COLUMNS = `id, repo, number, body_sha256 as bodySha256, attempts,
+  requested_at as requestedAt, updated_at as updatedAt, comment_id as commentId, comment_url as commentUrl`;
+const OPERATOR_COMMENT_STATUS_COLUMNS = `case when claimed_by_pid is not null then 'claimed' else status end as status,
+  error_class as errorClass, next_attempt_at as nextAttemptAt`;
+const OPERATOR_COMMENT_DUE = `status = 'pending' and (next_attempt_at is null or next_attempt_at <= ?)
+  and (claimed_by_pid is null or claimed_at < ? or claimed_by_pid = ?)`;
+const OPERATOR_COMMENT_CLAIM_TTL_MS = 10 * 60_000;
+const operatorCommentClaims = new Map<string, { owner: ReviewStateStore; at: string }>();
 
-function selectOperatorCommentRequests(db: DatabaseSync, filter: OperatorCommentFilter): OperatorCommentRequest[] {
-  return db.prepare(`select ${OPERATOR_COMMENT_COLUMNS} from operator_comment_requests
+function selectOperatorCommentRequests(db: DatabaseSync, filter: OperatorCommentFilter, legacy = false): OperatorCommentRequest[] {
+  const statusColumns = legacy ? `case when error_class like 'worker:%' then 'claimed' else status end as status,
+    case when error_class like 'worker:%' then null else error_class end as errorClass, null as nextAttemptAt`
+    : OPERATOR_COMMENT_STATUS_COLUMNS;
+  return db.prepare(`select ${OPERATOR_COMMENT_COLUMNS}, ${statusColumns} from operator_comment_requests
     where id = coalesce(?, id) and repo = coalesce(?, repo) and number = coalesce(?, number)
       and (? is null or (body_sha256 = ? and status in ('pending', 'posted')))
     order by requested_at, rowid`).all(filter.id ?? null, filter.repo ?? null, filter.number ?? null,
     filter.bodySha256 ?? null, filter.bodySha256 ?? null) as unknown as OperatorCommentRequest[];
+}
+
+function hasOperatorCommentClaimColumns(db: DatabaseSync): boolean {
+  return Boolean(db.prepare("select 1 from pragma_table_info('operator_comment_requests') where name = 'claimed_by_pid'").get());
 }
 
 export type ProcessedCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
@@ -683,6 +697,9 @@ export class ReviewStateStore {
         comment_id integer,
         comment_url text,
         error_class text,
+        claimed_by_pid integer,
+        claimed_at text,
+        next_attempt_at text,
         updated_at text not null
       );
       create unique index if not exists operator_comment_requests_active_key
@@ -1052,6 +1069,21 @@ export class ReviewStateStore {
       );
     `);
     this.ensureReviewEventAuthorizationOutcomeColumns();
+    if (!hasOperatorCommentClaimColumns(this.db)) {
+      this.db.exec("begin immediate");
+      try {
+        if (!hasOperatorCommentClaimColumns(this.db)) this.db.exec(`
+          alter table operator_comment_requests add column claimed_by_pid integer;
+          alter table operator_comment_requests add column claimed_at text;
+          alter table operator_comment_requests add column next_attempt_at text;
+          update operator_comment_requests set error_class = null where error_class like 'worker:%';
+        `);
+        this.db.exec("commit");
+      } catch (error) {
+        this.db.exec("rollback");
+        throw error;
+      }
+    }
   }
 
   static readOperatorCommentRequests(dbPath: string, filter: OperatorCommentFilter = {}): OperatorCommentRequest[] {
@@ -1059,7 +1091,7 @@ export class ReviewStateStore {
     const db = new DatabaseSync(dbPath, { readOnly: true, timeout: 5000 });
     try {
       if (!db.prepare("select 1 from sqlite_schema where name = 'operator_comment_requests' and type = 'table'").get()) return [];
-      return selectOperatorCommentRequests(db, filter);
+      return selectOperatorCommentRequests(db, filter, !hasOperatorCommentClaimColumns(db));
     } finally {
       db.close();
     }
@@ -1084,38 +1116,54 @@ export class ReviewStateStore {
   }
 
   listPendingOperatorComments(limit: number): Array<OperatorCommentRequest & { body: string }> {
-    return this.db.prepare(`select ${OPERATOR_COMMENT_COLUMNS}, body from operator_comment_requests
-      where status = 'pending' order by requested_at, rowid limit ?`)
-      .all(limit) as unknown as Array<OperatorCommentRequest & { body: string }>;
+    const now = Date.now();
+    return this.db.prepare(`select ${OPERATOR_COMMENT_COLUMNS}, ${OPERATOR_COMMENT_STATUS_COLUMNS}, body
+      from operator_comment_requests where ${OPERATOR_COMMENT_DUE} and id not in (select value from json_each(?))
+      order by requested_at, rowid limit ?`).all(new Date(now).toISOString(), new Date(now - OPERATOR_COMMENT_CLAIM_TTL_MS).toISOString(),
+      process.pid, JSON.stringify([...operatorCommentClaims.keys()]), limit) as unknown as Array<OperatorCommentRequest & { body: string }>;
   }
 
-  // A pending row temporarily records the worker PID, so another daemon cannot
-  // race its read/post pair and a new daemon can reconcile after a crash.
+  // A matching PID alone does not prove ownership after a restart.
   tryClaimOperatorComment(id: string, attempts: number): boolean {
-    const row = this.db.prepare(`select error_class from operator_comment_requests
-      where id = ? and status = 'pending' and attempts = ?`).get(id, attempts);
-    if (!row) return false;
-    const errorClass = row.error_class as string | null;
-    const pid = errorClass?.match(/^worker:([1-9]\d*)$/)?.[1];
-    if (pid && isProcessAlive(Number(pid))) return false;
-    return this.db.prepare(`update operator_comment_requests set error_class = ?
-      where id = ? and status = 'pending' and attempts = ? and error_class is ?`)
-      .run(`worker:${process.pid}`, id, attempts, errorClass).changes === 1;
+    if (operatorCommentClaims.has(id)) return false;
+    const now = Date.now();
+    const at = new Date(now).toISOString();
+    const claimed = this.db.prepare(`update operator_comment_requests set claimed_by_pid = ?, claimed_at = ?
+      where id = ? and attempts = ? and ${OPERATOR_COMMENT_DUE}`)
+      .run(process.pid, at, id, attempts, at, new Date(now - OPERATOR_COMMENT_CLAIM_TTL_MS).toISOString(), process.pid).changes === 1;
+    if (claimed) operatorCommentClaims.set(id, { owner: this, at });
+    return claimed;
   }
 
-  finishOperatorComment(id: string, outcome: OperatorCommentOutcome): void {
+  isOperatorCommentClaimCurrent(id: string): boolean {
+    const claim = operatorCommentClaims.get(id);
+    return claim?.owner === this && Date.now() - Date.parse(claim.at) <= OPERATOR_COMMENT_CLAIM_TTL_MS &&
+      Boolean(this.db.prepare(`select 1 from operator_comment_requests
+        where id = ? and claimed_by_pid = ? and claimed_at = ?`).get(id, process.pid, claim.at));
+  }
+
+  finishOperatorComment(id: string, outcome: OperatorCommentOutcome): boolean {
+    const claim = operatorCommentClaims.get(id);
+    if (claim?.owner !== this) return false;
     const posted = outcome.status === "posted";
-    this.db.prepare(`update operator_comment_requests
-      set status = ?, attempts = attempts + ?, comment_id = ?, comment_url = ?, error_class = ?, updated_at = ?
-      where id = ? and status = 'pending' and error_class = ?`).run(outcome.status,
+    const finished = this.db.prepare(`update operator_comment_requests
+      set status = ?, attempts = attempts + ?, comment_id = ?, comment_url = ?, error_class = ?, updated_at = ?,
+        next_attempt_at = ?, claimed_by_pid = null, claimed_at = null
+      where id = ? and status = 'pending' and claimed_by_pid = ? and claimed_at = ?`).run(outcome.status,
       outcome.status === "pending" || outcome.status === "failed" ? 1 : 0,
       posted ? outcome.id : null, posted ? outcome.html_url ?? null : null,
-      posted ? null : outcome.errorClass, new Date().toISOString(), id, `worker:${process.pid}`);
+      posted ? null : outcome.errorClass, new Date().toISOString(),
+      outcome.status === "pending" ? outcome.nextAttemptAt : null, id, process.pid, claim.at).changes === 1;
+    if (finished) operatorCommentClaims.delete(id);
+    return finished;
   }
 
   releaseOperatorComment(id: string): void {
-    this.db.prepare("update operator_comment_requests set error_class = null where id = ? and error_class = ?")
-      .run(id, `worker:${process.pid}`);
+    const claim = operatorCommentClaims.get(id);
+    if (claim?.owner !== this) return;
+    operatorCommentClaims.delete(id);
+    this.db.prepare(`update operator_comment_requests set claimed_by_pid = null, claimed_at = null
+      where id = ? and claimed_by_pid = ? and claimed_at = ?`).run(id, process.pid, claim.at);
   }
 
   hasProcessed(repo: string, pullNumber: number, headSha: string): boolean {

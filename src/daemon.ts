@@ -298,8 +298,11 @@ function startOperatorCommentPass(
     } finally {
       state.close();
     }
-  }).catch(() => {
-    stderr(formatDaemonLog({ event: "daemon_operator_comment_pass_failed", level: "error", cycle: input.cycle }));
+  }).catch((error: unknown) => {
+    try {
+      stderr(formatDaemonLog({ event: "daemon_operator_comment_pass_failed", level: "error", cycle: input.cycle,
+        errorClass: error instanceof Error ? error.constructor.name : "unknown" }));
+    } catch { /* The log sink can fail too. */ }
   }).finally(() => { operatorCommentPassInFlight = undefined; });
 }
 
