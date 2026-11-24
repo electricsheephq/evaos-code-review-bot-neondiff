@@ -161,6 +161,7 @@ describe("asynchronous ZCode execution", () => {
       const prompt = process.argv[promptIndex + 1] ?? "";
       appendFileSync(process.env.NEONDIFF_TEST_ATTEMPTS_PATH, "attempt\\n");
       const response = prompt.includes("previous review output was rejected")
+        && prompt.includes("cite in evidence an excerpt of that file whose line range includes the finding's line")
         ? JSON.stringify({ findings: ${JSON.stringify(supplied)}, summary: "recovered" })
         : "not-json";
       process.stdout.write(JSON.stringify({ response }));

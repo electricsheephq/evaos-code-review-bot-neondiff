@@ -18,6 +18,7 @@ import {
 import { configFilePaths, loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
+import { collectRightSideLines } from "./diff.js";
 import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree, readHeadFileLineCounts } from "./git.js";
 import {
   buildGitNexusContextPacket,
@@ -138,6 +139,7 @@ import {
   extractZCodeResponse,
   isZCodeSchemaFailureError,
   mergeReviewModelSummaries,
+  renderReviewFilePatches,
   reviewPromptForbiddenFragments,
   runZCodeRawJson,
   runZCodeReview,
@@ -2276,9 +2278,18 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_context_budget";
     }
-    const executedReviewPrompts = contextBudget.mode === "chunk"
-      ? contextBudget.chunks.map((chunk) => promptForFiles(chunk.files))
-      : [prompt];
+    const promptFileGroups = contextBudget.mode === "chunk" ? contextBudget.chunks.map((chunk) => chunk.files) : [reviewFiles];
+    const executedReviewPrompts = contextBudget.mode === "chunk" ? promptFileGroups.map(promptForFiles) : [prompt];
+    const shownPatches = githubPatchlessPaths.size === 0 ? [] : promptFileGroups.flatMap((filesForPrompt) =>
+      renderReviewFilePatches(filesForPrompt, config.zcode.maxPatchBytes).flatMap(({ file, patch }) => {
+        if (!githubPatchlessPaths.has(file.filename) || !file.patch) return [];
+        if (patch === file.patch) return [file];
+        // When clipped, leave out the truncation notice and any partial row before it.
+        const prefix = patch.slice(0, Math.max(0, patch.lastIndexOf("\n")));
+        return [{ ...file, patch: prefix.slice(0, prefix.lastIndexOf("\n") + 1) }];
+      })
+    );
+    const outsideDiffShownLines = collectRightSideLines(shownPatches, { requireHunkLinePrefixes: true });
     const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile, {
       reviewPrompts: executedReviewPrompts
     });
@@ -2333,6 +2344,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             receipts: ensemble.receipts,
             gatePolicy: {
               headLineCounts,
+              outsideDiffShownLines,
               maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
               maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
               repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
@@ -2416,6 +2428,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       findings: gatedFindings,
       files: gateFiles,
       headLineCounts,
+      outsideDiffShownLines,
       droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,

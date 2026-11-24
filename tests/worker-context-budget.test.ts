@@ -22,8 +22,8 @@ const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: str
 const severeRawResponse = vi.hoisted(() => ({ value: "" }));
 const zcodeRawResponseOverride = vi.hoisted(() => ({ value: "" }));
 const zcodeProvenanceOverride = vi.hoisted(() => ({ attempts: 1, degradedRecovery: false }));
-const lcmHydrationControl = vi.hoisted((): { error?: Error } => ({}));
-const headLineCountControl = vi.hoisted((): { error?: Error } => ({}));
+const lcmHydrationControl = vi.hoisted((): { error?: Error; patch?: string } => ({}));
+const headLineCountControl = vi.hoisted((): { error?: Error; lines?: number } => ({}));
 const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
 const severeWorktreePath = vi.hoisted(() => ({ value: "" }));
 const createdReviews = vi.hoisted((): Array<{
@@ -56,13 +56,13 @@ vi.mock("../src/git.js", async (importOriginal) => {
       if (lcmHydrationControl.error) throw lcmHydrationControl.error;
       return input.files.map((file) => ({
         ...file,
-        patch: typeof file.patch === "string" ? file.patch : "@@ -1 +1 @@\n-old\n+new",
+        patch: typeof file.patch === "string" ? file.patch : lcmHydrationControl.patch ?? "@@ -1 +1 @@\n-old\n+new",
         patchComplete: true
       }));
     }),
     readHeadFileLineCounts: vi.fn(async ({ paths }: { paths: Iterable<string> }) => {
       if (headLineCountControl.error) throw headLineCountControl.error;
-      return new Map([...paths].map(path => [path, 1]));
+      return new Map([...paths].map(path => [path, headLineCountControl.lines ?? 1]));
     }),
     assertGitClean: vi.fn()
   };
@@ -198,7 +198,9 @@ describe("worker context budget preflight", () => {
     zcodeProvenanceOverride.attempts = 1;
     zcodeProvenanceOverride.degradedRecovery = false;
     delete lcmHydrationControl.error;
+    delete lcmHydrationControl.patch;
     delete headLineCountControl.error;
+    delete headLineCountControl.lines;
     severeCurrentWorktree.enabled = false;
     severeWorktreePath.value = "";
     createdReviews.length = 0;
@@ -250,6 +252,7 @@ describe("worker context budget preflight", () => {
           return;
         }
         if (mode === "no-citation") {
+          expect(checkout.prompts[0]).toContain(`### ${file.filename}\n\n` + "```diff\n[binary or too large for GitHub patch]\n```");
           expect(gate).toMatchObject({ outsideDiffFindings: [],
             dropped: [{ title, reason: "outside_diff_without_evidence" }],
             summary: { dropReasonCounts: { outside_diff_without_evidence: 1 } } });
@@ -687,25 +690,34 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
-  it.each(["inline", "hydrated patchless"])("runs the enabled shadow ensemble on %s findings without changing the canonical post", async (mode) => {
+  it.each(["inline", "hydrated patchless", "hydrated patchless with truncation"])("runs the enabled shadow ensemble on %s findings without changing the canonical post", async (mode) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-shadow-"));
     roots.push(root);
     const config = minimalConfig(root);
     config.reviewEnsemble = { enabled: true, mode: "shadow" };
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(421, "9".repeat(40));
-    const patchless = mode === "hydrated patchless";
+    const patchless = mode !== "inline";
+    const truncated = mode === "hydrated patchless with truncation";
     const repo = patchless ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
     const path = "src/a.ts";
     const files = [patchless ? { filename: path, status: "modified", changes: 1 } : pullFile(path, 200)];
-    const anchor = withCheckoutCitation(finding(path, "Anchor finding"));
-    const specialist = withCheckoutCitation(finding(path, "State-only finding"));
-    const checkout = patchless ? await mockCheckoutReview(config, [anchor], (prompt) => ({
+    const anchor = finding(path, "Anchor finding");
+    const specialist = finding(path, "State-only finding");
+    const missingCitation = { ...anchor, title: "Outside shown patch", line: 4 };
+    const cited = withCheckoutCitation({ ...anchor, title: "Covered by citation", line: 4 });
+    const pastEnd = { ...anchor, title: "Past end of head", line: 6 };
+    const hidden = { ...anchor, title: "Unshown line", line: truncated ? 3 : 2 };
+    const shownPatch = "@@ -1 +1 @@\n---old\n+fixture checkout line";
+    if (patchless) {
+      lcmHydrationControl.patch = truncated ? `${shownPatch}\n@@ -3 +3 @@\n-old\n+hidden\n` : `${shownPatch}\n`;
+      headLineCountControl.lines = 5;
+    }
+    if (truncated) config.zcode.maxPatchBytes = shownPatch.length + 1;
+    const checkout = patchless ? await mockCheckoutReview(config, [cited], (prompt) => ({
       findings: [
-        anchor, { ...anchor, title: "Past end of head", line: 2 },
-        ...(prompt.includes("State and lifecycle review") ? [
-          specialist, { ...specialist, title: "Missing specialist citation", evidence: [] }
-        ] : [])
+        anchor, missingCitation, cited, pastEnd, hidden,
+        ...(prompt.includes("State and lifecycle review") ? [specialist] : [])
       ]
     })) : undefined;
     if (!patchless) {
@@ -730,9 +742,24 @@ describe("worker context budget preflight", () => {
     expect(prompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(1);
     expect(createdReviews).toHaveLength(1);
     expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(patchless ? [] : ["Anchor finding"]);
+    const dropped = [
+      { title: missingCitation.title, reason: "outside_diff_without_evidence" },
+      { title: pastEnd.title, reason: "outside_diff_line_not_in_head_file" },
+      { title: hidden.title, reason: "outside_diff_without_evidence" }
+    ];
     if (patchless) {
+      for (const prompt of prompts) {
+        expect(prompt).toContain(`### ${path}\n\n` + "```diff\n" + shownPatch + "\n");
+        expect(prompt).not.toContain("[binary or too large for GitHub patch]\n```");
+        expect(prompt).not.toContain("+hidden");
+        if (truncated) expect(prompt).toContain("[patch truncated to fit prompt budget]");
+      }
       expect(createdReviews[0].body).toContain("Anchor finding");
-      expect(createdReviews[0].body).not.toContain("Past end of head");
+      expect(createdReviews[0].body).toContain(cited.title);
+      const evidenceDir = join(root, "evidence", localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
+      const gate = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
+      expect(gate.outsideDiffFindings).toMatchObject([{ title: anchor.title, line: 1 }, { title: cited.title, line: 4 }]);
+      expect(gate.dropped).toMatchObject(dropped);
     }
     expect(state.getProcessedReview(repo, pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
 
@@ -754,11 +781,8 @@ describe("worker context budget preflight", () => {
       postingEligible: false,
       gate: patchless ? {
         comments: [],
-        outsideDiffFindings: expect.arrayContaining([expect.objectContaining({ title: "State-only finding", line: 1 })]),
-        dropped: expect.arrayContaining([
-          expect.objectContaining({ title: "Past end of head", reason: "outside_diff_line_not_in_head_file" }),
-          expect.objectContaining({ title: "Missing specialist citation", reason: "outside_diff_without_evidence" })
-        ])
+        outsideDiffFindings: expect.arrayContaining([anchor, specialist, cited].map(({ title, line }) => expect.objectContaining({ title, line }))),
+        dropped: expect.arrayContaining(dropped.map(finding => expect.objectContaining(finding)))
       } : { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
     });
     state.close();
@@ -3994,7 +4018,8 @@ async function mockCheckoutReview(config: BotConfig, fixtures: Finding[], respon
   for (const { path } of fixtures) {
     const target = join(cwd, path);
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, "fixture checkout line\n");
+    const lineCount = Math.max(...fixtures.filter(item => item.path === path).map(item => item.line));
+    writeFileSync(target, "fixture checkout line\n".repeat(lineCount));
   }
   config.codexRuntime = { enabled: true, checkoutReads: true, cliPath: "/unused/codex", model: "gpt-6.1-sol",
     reasoningEffort: "high", contextWindowTokens: 500_000, timeoutMs: 1000, maxOutputBytes: 100000 };

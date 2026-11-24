@@ -399,7 +399,7 @@ export async function readHeadFileLineCounts(input: {
     throw new Error("head file line counts require an exact commit SHA");
   }
   const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
-  const git = ["--no-replace-objects", "-c", `safe.directory=${input.repoPath}`, "-C", input.repoPath];
+  const git = ["--no-replace-objects", "-C", input.repoPath];
   const counts = new Map<string, number>();
   for (const path of input.paths) {
     const { stdout: entry } = await run([...git, "ls-tree", "--full-tree", "-l", "-z", input.headSha, "--", `:(literal)${path}`], timeoutMs);

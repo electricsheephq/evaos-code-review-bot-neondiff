@@ -2,7 +2,9 @@ import type { DroppedFinding, Finding, PullFilePatch } from "./types.js";
 
 const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 
-export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<number>> {
+export function collectRightSideLines(
+  files: PullFilePatch[], { requireHunkLinePrefixes = false } = {}
+): Map<string, Set<number>> {
   const byPath = new Map<string, Set<number>>();
 
   for (const file of files) {
@@ -18,13 +20,12 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
 
       if (newLine === null || rawLine.startsWith("\\ No newline")) continue;
 
-      if (rawLine.startsWith("+") && !rawLine.startsWith("+++")) {
-        lines.add(newLine);
-        newLine += 1;
+      if (requireHunkLinePrefixes) {
+        // Only actual context and added rows can ground a finding in a rendered patch.
+        if (!rawLine.startsWith(" ") && !rawLine.startsWith("+")) continue;
+      } else if (rawLine.startsWith("-") && !rawLine.startsWith("---")) {
         continue;
       }
-
-      if (rawLine.startsWith("-") && !rawLine.startsWith("---")) continue;
 
       lines.add(newLine);
       newLine += 1;
@@ -46,7 +47,8 @@ export function isPatchlessChangedFile(file: PullFilePatch): boolean {
 
 /** Finding citations must already be verified against the checkout by the review runtime. */
 export function validateFindingLocations(
-  findings: Finding[], files: PullFilePatch[], headLineCounts?: ReadonlyMap<string, number>
+  findings: Finding[], files: PullFilePatch[], headLineCounts?: ReadonlyMap<string, number>,
+  outsideDiffShownLines?: ReadonlyMap<string, ReadonlySet<number>>
 ): {
   valid: Finding[];
   dropped: DroppedFinding[];
@@ -66,7 +68,7 @@ export function validateFindingLocations(
       } else if (headLineCounts && !(Number.isInteger(finding.line) && finding.line >= 1 &&
           finding.line <= (headLineCounts.get(finding.path) ?? 0))) {
         dropped.push({ ...finding, reason: "outside_diff_line_not_in_head_file" });
-      } else if (!finding.evidence?.some((ref) =>
+      } else if (!outsideDiffShownLines?.get(finding.path)?.has(finding.line) && !finding.evidence?.some((ref) =>
         ref.path === finding.path && ref.startLine <= finding.line && finding.line <= ref.endLine
       )) {
         dropped.push({ ...finding, reason: "outside_diff_without_evidence" });
