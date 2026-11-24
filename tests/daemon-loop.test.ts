@@ -1003,6 +1003,7 @@ describe("daemon operator comments", () => {
   const user = { login: DEFAULT_BOT_LOGIN, type: "Bot" };
   const commentUrl = "https://github.test/owner/repo/pull/7#issuecomment-900";
   const body = "Follow-up shipped.";
+  const appId = 789;
   let privateKey: string | undefined;
 
   afterEach(async () => {
@@ -1012,7 +1013,7 @@ describe("daemon operator comments", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  async function fixture(options: { repo?: string; botLogin?: string | null; throwLoggers?: boolean } = {}) {
+  async function fixture(options: { repo?: string; appId?: string; botLogin?: string | null; throwLoggers?: boolean } = {}) {
     const root = mkdtempSync(join(tmpdir(), "neondiff-operator-comment-daemon-"));
     roots.push(root);
     const statePath = join(root, "state.sqlite");
@@ -1027,7 +1028,7 @@ describe("daemon operator comments", () => {
     });
     if (!admitted.ok) throw new Error("expected public daemon admission");
     const credentials = {
-      appId: "123",
+      appId: options.appId ?? String(appId),
       privateKey: privateKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 })
         .privateKey.export({ type: "pkcs1", format: "pem" }).toString()
     };
@@ -1157,34 +1158,77 @@ describe("daemon operator comments", () => {
     const request = f.enqueue();
     const marker = `<!-- neondiff-operator-comment:${request.id}:${request.bodySha256} -->`;
     f.rest.page = () => [
-      { id: 899, body: marker, user, performed_via_github_app: { id: 456 } },
-      { id: 900, body: marker, user: { login: "customer[bot]", type: "Bot" }, performed_via_github_app: { id: 123 }, html_url: commentUrl }
+      { id: 899, body: marker, user, performed_via_github_app: { id: 123 } },
+      { id: 900, body: marker, user: { login: "customer[bot]", type: "Bot" }, performed_via_github_app: { id: appId }, html_url: commentUrl }
     ];
     await f.runCycle();
     expect(f.postCalls).toHaveLength(0);
     expect(f.status(request.id)).toMatchObject({ status: "posted", commentId: 900, commentUrl });
   });
 
-  it("upgrades a queued request from the previous schema and reconciles its old marker", async () => {
+  it("reconciles a lost POST response using the bot login with a client ID", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const f = await fixture({ appId: "Iv23liTestClientId" });
+    const request = f.enqueue();
+    f.rest.postStatus = 503;
+    await f.runCycle();
+    expect(f.status(request.id)).toMatchObject({ status: "pending", errorClass: "github_503" });
+    expect(f.postCalls).toHaveLength(1);
+    f.rest.page = () => [{ id: 900, body: f.postCalls[0]!.body, user, performed_via_github_app: { id: appId }, html_url: commentUrl }];
+    vi.setSystemTime(Date.now() + 60_000);
+    await f.runCycle();
+    expect(f.postCalls).toHaveLength(1);
+    expect(f.status(request.id)).toMatchObject({ status: "posted", commentId: 900, commentUrl });
+  });
+
+  it.each([true, false])("migrates a request with an old marker (legacy claim columns missing: %s)", async (legacyClaims) => {
     const f = await fixture();
     const request = f.enqueue();
     const db = new DatabaseSync(f.statePath);
     try {
-      db.exec(`alter table operator_comment_requests drop column claimed_by_pid;
-        alter table operator_comment_requests drop column claimed_at;
-        alter table operator_comment_requests drop column next_attempt_at;`);
-      db.prepare("update operator_comment_requests set error_class = ? where id = ?")
-        .run(`worker:${process.pid}`, request.id);
+      if (db.prepare("select 1 from pragma_table_info('operator_comment_requests') where name = 'first_attempt_at'").get()) {
+        db.exec("alter table operator_comment_requests drop column first_attempt_at");
+      }
+      if (legacyClaims) {
+        db.exec(`alter table operator_comment_requests drop column claimed_by_pid;
+          alter table operator_comment_requests drop column claimed_at;
+          alter table operator_comment_requests drop column next_attempt_at;`);
+        db.prepare("update operator_comment_requests set error_class = ? where id = ?")
+          .run(`worker:${process.pid}`, request.id);
+      }
     } finally {
       db.close();
     }
-    expect(f.status(request.id)).toMatchObject({ status: "claimed", errorClass: null });
+    expect(f.status(request.id)).toMatchObject({ status: legacyClaims ? "claimed" : "pending", errorClass: null });
     f.rest.page = () => [{
       id: 900, body: `${body}\n\n<!-- neondiff-operator-comment:${request.id} -->`, user, html_url: commentUrl
     }];
     await f.runCycle();
     expect(f.postCalls).toHaveLength(0);
     expect(f.status(request.id)).toMatchObject({ status: "posted", commentId: 900, commentUrl });
+    const migrated = new DatabaseSync(f.statePath, { readOnly: true });
+    try {
+      expect(migrated.prepare("select first_attempt_at from operator_comment_requests where id = ?").get(request.id))
+        .toMatchObject({ first_attempt_at: expect.any(String) });
+    } finally { migrated.close(); }
+  });
+
+  it("skips the POST and leaves the outcome untouched when the claim is lost before posting", async () => {
+    const f = await fixture();
+    const request = f.enqueue();
+    const loseClaim = vi.fn(() => {
+      const db = new DatabaseSync(f.statePath);
+      try {
+        db.prepare("update operator_comment_requests set claimed_by_pid = ? where id = ?").run(process.pid + 1, request.id);
+      } finally { db.close(); }
+      return [];
+    });
+    f.rest.page = loseClaim;
+    await f.runCycle();
+    expect(loseClaim).toHaveBeenCalledOnce();
+    expect(f.postCalls).toHaveLength(0);
+    expect(f.status(request.id)).toEqual({ ...request, status: "claimed" });
+    expect(f.logs.filter((line) => line.includes("daemon_operator_comment_"))).toEqual([]);
   });
 
   it("rechecks queued content and refuses unsafe bodies without making a GitHub request", async () => {
@@ -1254,14 +1298,26 @@ describe("daemon operator comments", () => {
     }
   });
 
-  it("ends retries at 24 hours and reconciles an ambiguous failed post when the body is re-queued", async () => {
+  it("posts a request queued 30 hours before its first attempt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const f = await fixture();
+    const request = f.enqueue();
+    vi.setSystemTime(Date.now() + 30 * 60 * 60_000);
+    await f.runCycle();
+    expect(f.postCalls).toHaveLength(1);
+    expect(f.status(request.id)).toMatchObject({ status: "posted", commentId: 900, commentUrl });
+  });
+
+  it("ends retries 24 hours after the first attempt and reconciles an ambiguous post when re-queued", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const f = await fixture();
     const first = f.enqueue();
+    const firstAttemptAt = Date.now() + 30 * 60 * 60_000;
+    vi.setSystemTime(firstAttemptAt);
     f.rest.postStatus = 503;
     await f.runCycle();
     expect(f.status(first.id)).toMatchObject({ status: "pending", errorClass: "github_503", attempts: 1 });
-    vi.setSystemTime(Date.parse(first.requestedAt) + 86_400_000);
+    vi.setSystemTime(firstAttemptAt + 86_400_000);
     await f.runCycle();
     expect(f.postCalls).toHaveLength(1);
     expect(f.status(first.id)).toMatchObject({ status: "failed", errorClass: "retry_exhausted" });

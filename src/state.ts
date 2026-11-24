@@ -64,8 +64,8 @@ function selectOperatorCommentRequests(db: DatabaseSync, filter: OperatorComment
     filter.bodySha256 ?? null, filter.bodySha256 ?? null) as unknown as OperatorCommentRequest[];
 }
 
-function hasOperatorCommentClaimColumns(db: DatabaseSync): boolean {
-  return Boolean(db.prepare("select 1 from pragma_table_info('operator_comment_requests') where name = 'claimed_by_pid'").get());
+function hasOperatorCommentColumn(db: DatabaseSync, name: string): boolean {
+  return Boolean(db.prepare("select 1 from pragma_table_info('operator_comment_requests') where name = ?").get(name));
 }
 
 export type ProcessedCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
@@ -700,6 +700,7 @@ export class ReviewStateStore {
         claimed_by_pid integer,
         claimed_at text,
         next_attempt_at text,
+        first_attempt_at text,
         updated_at text not null
       );
       create unique index if not exists operator_comment_requests_active_key
@@ -1069,15 +1070,18 @@ export class ReviewStateStore {
       );
     `);
     this.ensureReviewEventAuthorizationOutcomeColumns();
-    if (!hasOperatorCommentClaimColumns(this.db)) {
+    if (!hasOperatorCommentColumn(this.db, "first_attempt_at")) {
       this.db.exec("begin immediate");
       try {
-        if (!hasOperatorCommentClaimColumns(this.db)) this.db.exec(`
+        if (!hasOperatorCommentColumn(this.db, "claimed_by_pid")) this.db.exec(`
           alter table operator_comment_requests add column claimed_by_pid integer;
           alter table operator_comment_requests add column claimed_at text;
           alter table operator_comment_requests add column next_attempt_at text;
           update operator_comment_requests set error_class = null where error_class like 'worker:%';
         `);
+        if (!hasOperatorCommentColumn(this.db, "first_attempt_at")) {
+          this.db.exec("alter table operator_comment_requests add column first_attempt_at text");
+        }
         this.db.exec("commit");
       } catch (error) {
         this.db.exec("rollback");
@@ -1091,7 +1095,7 @@ export class ReviewStateStore {
     const db = new DatabaseSync(dbPath, { readOnly: true, timeout: 5000 });
     try {
       if (!db.prepare("select 1 from sqlite_schema where name = 'operator_comment_requests' and type = 'table'").get()) return [];
-      return selectOperatorCommentRequests(db, filter, !hasOperatorCommentClaimColumns(db));
+      return selectOperatorCommentRequests(db, filter, !hasOperatorCommentColumn(db, "claimed_by_pid"));
     } finally {
       db.close();
     }
@@ -1124,15 +1128,17 @@ export class ReviewStateStore {
   }
 
   // A matching PID alone does not prove ownership after a restart.
-  tryClaimOperatorComment(id: string, attempts: number): boolean {
-    if (operatorCommentClaims.has(id)) return false;
+  tryClaimOperatorComment(id: string, attempts: number): string | undefined {
+    if (operatorCommentClaims.has(id)) return undefined;
     const now = Date.now();
     const at = new Date(now).toISOString();
-    const claimed = this.db.prepare(`update operator_comment_requests set claimed_by_pid = ?, claimed_at = ?
-      where id = ? and attempts = ? and ${OPERATOR_COMMENT_DUE}`)
-      .run(process.pid, at, id, attempts, at, new Date(now - OPERATOR_COMMENT_CLAIM_TTL_MS).toISOString(), process.pid).changes === 1;
-    if (claimed) operatorCommentClaims.set(id, { owner: this, at });
-    return claimed;
+    const claimed = this.db.prepare(`update operator_comment_requests
+      set claimed_by_pid = ?, claimed_at = ?, first_attempt_at = coalesce(first_attempt_at, ?)
+      where id = ? and attempts = ? and ${OPERATOR_COMMENT_DUE} returning first_attempt_at as firstAttemptAt`)
+      .get(process.pid, at, at, id, attempts, at, new Date(now - OPERATOR_COMMENT_CLAIM_TTL_MS).toISOString(), process.pid);
+    if (!claimed) return undefined;
+    operatorCommentClaims.set(id, { owner: this, at });
+    return claimed.firstAttemptAt as string;
   }
 
   isOperatorCommentClaimCurrent(id: string): boolean {

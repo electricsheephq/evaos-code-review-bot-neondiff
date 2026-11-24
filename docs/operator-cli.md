@@ -35,6 +35,7 @@ evaos-review-bot status --config config.local.json
   to list requests, with optional `--id I` or `--repo owner/name --number N`
   filtering. An optional `--state-path` must point to the daemon's SQLite DB for
   it to see the request.
+  Run one daemon per state database because two daemons sharing it can both pass the claim check and post the same comment.
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
   durable queue counts, and recommended actions.

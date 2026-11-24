@@ -67,9 +67,10 @@ export async function processOperatorComments(input: {
 }): Promise<void> {
   let github: GitHubApi | undefined;
   for (const request of input.state.listPendingOperatorComments(5)) {
-    if (!input.state.tryClaimOperatorComment(request.id, request.attempts)) continue;
+    const firstAttemptAt = input.state.tryClaimOperatorComment(request.id, request.attempts);
+    if (!firstAttemptAt) continue;
     try {
-      const outcome = await postOperatorComment(request, input.config, input.admission,
+      const outcome = await postOperatorComment(request, firstAttemptAt, input.config, input.admission,
         () => github ??= new GitHubApi(input.config.github), () => input.state.isOperatorCommentClaimCurrent(request.id));
       if (outcome && input.state.finishOperatorComment(request.id, outcome) && outcome.status !== "pending") {
         input.recordOutcome(request.id, outcome);
@@ -82,6 +83,7 @@ export async function processOperatorComments(input: {
 
 async function postOperatorComment(
   request: PendingComment,
+  firstAttemptAt: string,
   config: BotConfig,
   admission: ProductionLicenseAdmission,
   getGithub: () => GitHubApi,
@@ -101,7 +103,7 @@ async function postOperatorComment(
   } catch {
     return { status: "refused", errorClass: "unsafe_body" };
   }
-  const retryDeadline = Date.parse(request.requestedAt) + RETRY_WINDOW_MS;
+  const retryDeadline = Date.parse(firstAttemptAt) + RETRY_WINDOW_MS;
   const exhausted = { status: "failed", errorClass: "retry_exhausted" } as const;
   try {
     const github = getGithub();
@@ -115,9 +117,11 @@ async function postOperatorComment(
     const bodyMarker = new RegExp(`${OPERATOR_COMMENT_MARKER}[^:\\s>]+:${request.bodySha256} -->`);
     const identity = await github.postingIdentity();
     const comments = await github.listIssueComments(target.repo, request.number);
+    const configuredAppId = Number(config.github.appId);
     const existing = comments.find((comment) => {
       const appId = comment.performed_via_github_app?.id;
-      const ownComment = appId === undefined ? isAuthoredBy(comment.user, identity) : appId === Number(config.github.appId);
+      const ownComment = appId !== undefined && Number.isSafeInteger(configuredAppId) && configuredAppId > 0
+        ? appId === configuredAppId : isAuthoredBy(comment.user, identity);
       if (!ownComment || !comment.body) return false;
       const legacy = comment.body.match(/\n\n<!-- neondiff-operator-comment:[a-f0-9-]{36} -->$/);
       return bodyMarker.test(comment.body) || (legacy !== null && comment.body.slice(0, legacy.index) === request.body);

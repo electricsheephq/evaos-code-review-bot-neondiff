@@ -38,14 +38,14 @@ describe("review state store", () => {
     try {
       const first = state.enqueueOperatorComment(input);
       expect(peer.enqueueOperatorComment(input)).toEqual(first);
-      expect(state.tryClaimOperatorComment(first.id, 0)).toBe(true);
-      expect(peer.tryClaimOperatorComment(first.id, 0)).toBe(false);
+      expect(state.tryClaimOperatorComment(first.id, 0)).toEqual(expect.any(String));
+      expect(peer.tryClaimOperatorComment(first.id, 0)).toBeUndefined();
       expect(ReviewStateStore.readOperatorCommentRequests(path, { id: first.id })[0])
         .toMatchObject({ status: "claimed", errorClass: null });
       state.finishOperatorComment(first.id, { status, errorClass: "fixture" });
       const second = peer.enqueueOperatorComment(input);
       expect(second.id).not.toBe(first.id);
-      expect(peer.tryClaimOperatorComment(second.id, 0)).toBe(true);
+      expect(peer.tryClaimOperatorComment(second.id, 0)).toEqual(expect.any(String));
       peer.finishOperatorComment(second.id, { status: "posted", id: 123, html_url: "https://github.test/comment/123" });
       expect(state.enqueueOperatorComment(input)).toMatchObject({
         id: second.id, status: "posted", commentId: 123, commentUrl: "https://github.test/comment/123"
@@ -59,6 +59,29 @@ describe("review state store", () => {
     const readback = new DatabaseSync(path, { readOnly: true });
     try { expect(readback.prepare("select name from legacy_data").get()?.name).toBe("preserve"); }
     finally { readback.close(); }
+  });
+
+  it("rejects a direct operator comment claim while another PID holds it within the 10-minute TTL", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const root = mkdtempSync(join(tmpdir(), "neondiff-operator-comment-claim-"));
+    roots.push(root);
+    const path = join(root, "state.sqlite");
+    const state = new ReviewStateStore(path);
+    const db = new DatabaseSync(path);
+    try {
+      const request = state.enqueueOperatorComment({ repo: "owner/repo", number: 7, body: "Follow-up", bodySha256: "a".repeat(64) });
+      const pid = process.pid + 1;
+      const claimedAt = new Date(Date.now() - 599_999).toISOString();
+      db.prepare("update operator_comment_requests set claimed_by_pid = ?, claimed_at = ? where id = ?")
+        .run(pid, claimedAt, request.id);
+      expect(state.listPendingOperatorComments(5)).toEqual([]);
+      expect(state.tryClaimOperatorComment(request.id, request.attempts)).toBeUndefined();
+      expect(db.prepare("select claimed_by_pid, claimed_at from operator_comment_requests where id = ?").get(request.id))
+        .toEqual({ claimed_by_pid: pid, claimed_at: claimedAt });
+    } finally {
+      db.close();
+      state.close();
+    }
   });
 
   it("persists a two-attempt auto-retry budget and atomically claims each due insertion", () => {
