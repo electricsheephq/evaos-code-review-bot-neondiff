@@ -5365,6 +5365,139 @@ describe("provider-aware review scheduler", () => {
   });
 });
 
+describe("per-repo command overrides in the scheduler", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  async function runCommandCycle(input: {
+    globalEnabled: boolean;
+    globalTrustedAuthors: string[];
+    repoXCommands: { enabled?: boolean; trustedAuthors?: string[] };
+    comments: Array<[string, ReturnType<typeof comment>[]]>;
+  }) {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-repo-commands-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-x", "org/repo-y"]);
+    config.commands = {
+      enabled: input.globalEnabled,
+      botMentions: ["@neondiff"],
+      trustedAuthors: input.globalTrustedAuthors,
+      acknowledge: false
+    };
+    config.repoProfiles = { repos: { "org/repo-x": { commands: input.repoXCommands }, "org/repo-y": {} } };
+    const state = new ReviewStateStore(config.statePath);
+    for (const repo of ["org/repo-x", "org/repo-y"]) {
+      // Already-reviewed heads, so only a command can enqueue a job.
+      state.recordProcessed({ repo, pullNumber: 1, headSha: HEAD_A, status: "posted", event: "COMMENT" });
+    }
+    const github = githubFromMap(
+      new Map([["org/repo-x", [pull("org/repo-x", 1, HEAD_A)]], ["org/repo-y", [pull("org/repo-y", 1, HEAD_A)]]]),
+      new Map(input.comments)
+    );
+    try {
+      await runScheduledCycleWithDeps({
+        config,
+        github,
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: async () => "reviewed_command"
+      });
+      return state.listReviewQueueJobs()
+        .filter((job) => job.source === "manual_command")
+        .map((job) => `${job.repo}:${job.commentId}`)
+        .sort();
+    } finally {
+      state.close();
+    }
+  }
+
+  it("runs a trusted command on the one enabled repo and ignores the same command elsewhere", async () => {
+    expect(await runCommandCycle({
+      globalEnabled: false,
+      globalTrustedAuthors: [],
+      repoXCommands: { enabled: true, trustedAuthors: ["maintainer"] },
+      comments: [
+        ["org/repo-x#1", [comment(801, "maintainer", "@neondiff review")]],
+        ["org/repo-y#1", [comment(802, "maintainer", "@neondiff review")]]
+      ]
+    })).toEqual(["org/repo-x:801"]);
+  });
+
+  it("ignores an untrusted author on the enabled repo", async () => {
+    expect(await runCommandCycle({
+      globalEnabled: false,
+      globalTrustedAuthors: ["drive-by"],
+      repoXCommands: { enabled: true, trustedAuthors: ["maintainer"] },
+      comments: [["org/repo-x#1", [comment(803, "drive-by", "@neondiff review")]]]
+    })).toEqual([]);
+  });
+
+  it("applies a per-repo trusted author list to that repo only", async () => {
+    expect(await runCommandCycle({
+      globalEnabled: true,
+      globalTrustedAuthors: ["global-maintainer"],
+      repoXCommands: { trustedAuthors: ["maintainer"] },
+      comments: [
+        ["org/repo-x#1", [comment(804, "global-maintainer", "@neondiff review"), comment(805, "maintainer", "@neondiff re-review")]],
+        ["org/repo-y#1", [comment(806, "maintainer", "@neondiff review"), comment(807, "global-maintainer", "@neondiff re-review")]]
+      ]
+    })).toEqual(["org/repo-x:805", "org/repo-y:807"]);
+  });
+
+  it("scopes the request-changes command to the enabled repo", async () => {
+    const requestChanges = (repo: string) => `@neondiff request-changes --repo ${repo} --pr 1 --head ${HEAD_A}`;
+    expect(await runCommandCycle({
+      globalEnabled: false,
+      globalTrustedAuthors: [],
+      repoXCommands: { enabled: true, trustedAuthors: ["maintainer"] },
+      comments: [
+        ["org/repo-x#1", [comment(808, "maintainer", requestChanges("org/repo-x")), comment(809, "drive-by", requestChanges("org/repo-x"))]],
+        ["org/repo-y#1", [comment(810, "maintainer", requestChanges("org/repo-y"))]]
+      ]
+    })).toEqual(["org/repo-x:808"]);
+  });
+
+  it("re-resolves and acknowledges the command in the worker for the enabled repo only", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-repo-commands-worker-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-x", "org/repo-y"]);
+    config.commands = { enabled: false, botMentions: ["@neondiff"], trustedAuthors: [], acknowledge: true };
+    config.repoProfiles = { repos: { "org/repo-x": { commands: { enabled: true, trustedAuthors: ["maintainer"] } }, "org/repo-y": {} } };
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+    const github = githubFromMap(
+      new Map([["org/repo-x", [pull("org/repo-x", 1, HEAD_A)]], ["org/repo-y", [pull("org/repo-y", 1, HEAD_A)]]]),
+      new Map([
+        ["org/repo-x#1", [comment(811, "maintainer", "@neondiff explain")]],
+        ["org/repo-y#1", [comment(812, "maintainer", "@neondiff explain")]]
+      ]),
+      statusCalls
+    );
+    try {
+      for (const repo of ["org/repo-x", "org/repo-y"]) {
+        state.recordProcessed({ repo, pullNumber: 1, headSha: HEAD_A, status: "posted", event: "COMMENT" });
+      }
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github,
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: reviewPull
+      });
+      expect(result.skippedCommandExplain).toBe(1);
+      expect(state.getProcessedCommand("org/repo-x", 1, HEAD_A, 811)).toMatchObject({ status: "explained", author: "maintainer" });
+      expect(state.getProcessedCommand("org/repo-y", 1, HEAD_A, 812)).toBeUndefined();
+      const acknowledgements = statusCalls.filter((call) => call.marker.startsWith("<!-- evaos-command-status"));
+      expect(acknowledgements.map((call) => call.repo)).toEqual(["org/repo-x"]);
+    } finally {
+      state.close();
+    }
+  });
+});
+
 function schedulerConfig(root: string, repos: string[]): BotConfig {
   return {
     pilotRepos: repos,

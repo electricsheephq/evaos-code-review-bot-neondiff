@@ -55,6 +55,7 @@ import {
   listReposToScan,
   PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW,
   publicReviewForbiddenProfileFragments,
+  resolveRepoCommandConfig,
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
@@ -112,6 +113,7 @@ import {
   isActivationBaselineProcessedReview,
   autoRetryOwnsGrant,
   parseProviderCooldownError,
+  PROVIDER_USAGE_LIMIT_REASON,
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
@@ -142,7 +144,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { CODEX_USAGE_LIMIT_MARKER, CODEX_USAGE_LIMIT_MAX_WAIT_MS, resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -354,6 +356,8 @@ export interface ProviderErrorClassification {
   providerCode?: string;
   providerRequestId?: string;
   retryAfterMs?: number;
+  /** Absolute reset time a provider printed (Codex usage limit, #1267); bounds the quota cooldown. */
+  resetsAt?: string;
   reason: string;
   retryable: boolean;
   cooldown: boolean;
@@ -1050,12 +1054,13 @@ export async function retryFailedHeadWithDeps(input: {
       status: retryStatus
     };
   } catch (error) {
+    // Classify this attempt's own error; the joined history below is for storage only (#1267).
     if (recordProviderRateLimitCooldownIfNeeded({
       config,
       state,
       repo: options.repo,
       pull,
-      error: retryFailureError(retryTarget.previousError, error)
+      error
     })) {
       updateRetryQueueJobsAfterRetry({
         state,
@@ -1804,7 +1809,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       currentHeadSha: livePull.head.sha,
       commentId: finishingTouchDecision.commandId,
       author: finishingTouchDecision.command.author,
-      trustedAuthors: config.commands.trustedAuthors,
+      trustedAuthors: resolveRepoCommandConfig(config, repo).trustedAuthors,
       worktreeClean: await isExistingPullWorktreeClean(config, repo, pull),
       action: finishingTouchAction,
       proposedOutput: draft
@@ -1869,7 +1874,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pull,
       commandCommentId: input.commandCommentId,
-      commandConfig: config.commands
+      commandConfig: resolveRepoCommandConfig(config, repo)
     })
     : undefined;
   let exactOwnerReviewRequested = queuedAuthorization?.status === "eligible";
@@ -2459,7 +2464,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           repo,
           pull,
           commandCommentId: input.commandCommentId,
-          commandConfig: config.commands,
+          commandConfig: resolveRepoCommandConfig(config, repo),
           dryRun: true
         })
       : undefined;
@@ -2664,7 +2669,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo,
       pull,
       commandCommentId: input.commandCommentId,
-      commandConfig: config.commands
+      commandConfig: resolveRepoCommandConfig(config, repo)
     });
     if (reviewEventPolicyMode === "trusted_command_only" && queuedOwnerRequestChanges) {
       const concurrentConsumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
@@ -4096,7 +4101,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
   const retryAttempt = nextProviderCooldownRetryAttempt(previous?.error, classification);
   const jitterMs = providerCooldownJitterMs(input.config, classification, retryAttempt);
-  const durationMs = providerCooldownDurationMs(input.config, classification, retryAttempt, jitterMs);
+  const durationMs = providerCooldownDurationMs(input.config, classification, retryAttempt, jitterMs, now);
   const cooldownUntil = new Date(now.getTime() + durationMs);
   // The untrusted-author lane uses its own provider: its 429 defers only this head (through the head's cooldown
   // record below), never the repository's other reviews.
@@ -4370,6 +4375,8 @@ export function classifyAutoRetry(error: unknown): { retryable: boolean; reason:
     { retryable: false, reason: "unclassified" };
 }
 
+const CODEX_USAGE_LIMIT_ERROR = new RegExp(`^codex_runtime_nonzero_exit: status=\\d+ ${CODEX_USAGE_LIMIT_MARKER} resets_at=([^;\\s]+);`);
+
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
   const message = stripFetchCauseChain(error instanceof Error ? error.message : String(error));
   const normalized = message.toLowerCase();
@@ -4400,6 +4407,15 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     ...(providerRequestId ? { providerRequestId } : {}),
     ...(retryAfterMs ? { retryAfterMs } : {})
   };
+  // Anchored on the runtime's own prefix so prompt or diff text cannot match.
+  const usageLimit = CODEX_USAGE_LIMIT_ERROR.exec(message);
+  if (usageLimit) {
+    const resetsAt = Number.isFinite(Date.parse(usageLimit[1] ?? "")) ? usageLimit[1] : undefined;
+    return {
+      ...base, ...(resetsAt ? { resetsAt } : {}),
+      category: "quota_exhausted", reason: PROVIDER_USAGE_LIMIT_REASON, retryable: false, cooldown: true
+    };
+  }
   if (quotaExhausted) {
     return { ...base, category: "quota_exhausted", reason: "provider_quota_exhausted", retryable: false, cooldown: true };
   }
@@ -4428,7 +4444,8 @@ export function providerCooldownDurationMs(
   config: BotConfig,
   classification: ProviderErrorClassification,
   retryAttempt = 1,
-  jitterMs = 0
+  jitterMs = 0,
+  now = new Date()
 ): number {
   if (classification.category === "request_rate_limit") return config.providerCooldown.requestRateLimitDurationMs;
   if (classification.category === "overloaded") {
@@ -4440,7 +4457,10 @@ export function providerCooldownDurationMs(
     );
     return Math.min(config.providerCooldown.overloadBackoffMaxDurationMs, exponential + boundedJitter);
   }
-  if (classification.category === "quota_exhausted") return config.providerCooldown.quotaDurationMs;
+  if (classification.category === "quota_exhausted") {
+    const untilResetMs = classification.resetsAt ? Date.parse(classification.resetsAt) - now.getTime() : Number.NaN;
+    return untilResetMs > 0 && untilResetMs <= CODEX_USAGE_LIMIT_MAX_WAIT_MS ? untilResetMs : config.providerCooldown.quotaDurationMs;
+  }
   return config.providerCooldown.durationMs;
 }
 
@@ -4889,6 +4909,8 @@ async function runChunkedZCodeReview(input: {
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
       // The lane's terminal and throttle outcomes must reach reviewPull's handlers (skip record / head cooldown) unwrapped.
       if (error instanceof UntrustedProviderUnavailable || isUntrustedProviderThrottle(error)) throw error;
+      // A Codex usage limit defers the head through the provider cooldown, like an unchunked review (#1267).
+      if (classifyProviderError(error).reason === PROVIDER_USAGE_LIMIT_REASON) throw error;
       const failure = new Error(`context_budget_chunk_provider_failure chunk=${chunk.index}: ${message}`);
       writeRedactedJson(join(chunkDir, "review-error.json"), {
         repo: input.repo,
@@ -5423,10 +5445,11 @@ async function resolvePullCommandDecision(input: {
   pull: PullRequestSummary;
   commandCommentId?: number;
 }): Promise<CommandDecision> {
-  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+  const commandConfig = resolveRepoCommandConfig(input.config, input.repo);
+  if (!commandConfig.enabled) return { action: "none", shouldReview: false };
 
   const comments = await input.github.listIssueComments(input.repo, input.pull.number);
-  const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const collected = collectTrustedReviewCommands(comments, commandConfig);
   const repoProfile = resolveRepoProfile(input.config, input.repo);
   // A public command (#345) reaching this re-resolution path was already authorized (bot + cooldown
   // gated) at enqueue, so match it by its known commentId without re-running the cooldown. Without a
@@ -5485,7 +5508,7 @@ async function recordAndAcknowledgeCommandDecision(input: {
     }
   }
 
-  if (input.acknowledge !== false && input.config.commands.acknowledge && input.github.canPost()) {
+  if (input.acknowledge !== false && resolveRepoCommandConfig(input.config, input.repo).acknowledge && input.github.canPost()) {
     await input.github.upsertIssueComment({
       repo: input.repo,
       issueNumber: input.pull.number,

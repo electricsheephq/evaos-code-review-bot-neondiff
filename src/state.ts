@@ -364,6 +364,9 @@ export function isDailyCapDeferredQueueJob(job: Pick<ReviewQueueJobRecord, "stat
     job.lastError?.startsWith(DAILY_CAP_ERROR_PREFIX) === true;
 }
 
+/** Cooldown reason for a Codex ChatGPT usage limit; status reports it as "provider at usage limit until <time>" (#1267). */
+export const PROVIDER_USAGE_LIMIT_REASON = "provider_usage_limit";
+
 export interface ParsedProviderCooldownError {
   cooldownUntil: string;
   reason?: string;

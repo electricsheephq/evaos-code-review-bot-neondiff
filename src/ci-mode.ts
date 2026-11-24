@@ -10,6 +10,7 @@ import { WALKTHROUGH_MARKER_PREFIX } from "./walkthrough.js";
 import { callLicenseApi } from "./license.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { readProductionFileLicenseSecret } from "./license-secret-store.js";
+import { withoutRepoCommandOverrides } from "./repo-policy.js";
 
 // CI-only metadata: only buildCiConfig can set it; never loaded from user config.
 const ciMachineIds = new WeakMap<BotConfig, string | undefined>();
@@ -95,6 +96,7 @@ export function buildCiConfig(base: BotConfig, ctx: CiPullContext, env: NodeJS.P
     evidenceDir: join(root, "evidence"),
     workRoot: join(root, "work"),
     commands: { ...base.commands, enabled: false },
+    ...(base.repoProfiles ? { repoProfiles: withoutRepoCommandOverrides(base.repoProfiles) } : {}),
     github: { ...base.github, botLogin: "github-actions[bot]" },
     license: {
       ...base.license!, storageBackend: "file", keyPath: env.NEONDIFF_LICENSE_KEY_FILE || undefined,

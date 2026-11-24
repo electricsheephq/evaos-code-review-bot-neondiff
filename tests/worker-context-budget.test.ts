@@ -162,7 +162,8 @@ const {
   recoverPostedReviewReceiptForCurrentHead,
   reviewPull: reviewPullImpl,
   reviewWasAlreadyPosted,
-  classifyAutoRetry
+  classifyAutoRetry,
+  recordProviderRateLimitCooldownIfNeeded
 } = await import("../src/worker.js");
 const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
   ...input,
@@ -2501,6 +2502,33 @@ describe("worker context budget preflight", () => {
     expect(chunkError.error).toContain("context_budget_chunk_provider_failure chunk=2");
     expect(chunkError.error).not.toContain(fakeSecret);
     expect(existsSync(join(evidenceDir, "review-error.json"))).toBe(false);
+    state.close();
+  });
+
+  it("passes a Codex usage limit in a context chunk through to the provider cooldown (#1267)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-chunk-usage-limit-"));
+    roots.push(root);
+    const config = minimalConfig(root); config.providerCooldown.enabled = true;
+    config.contextBudget = { enabled: true, overflow: "chunk", reservedOutputTokens: 50, charsPerToken: 1, providerFudgeFactor: 1, maxChunks: 5 };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(407, "u".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000)];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+    const resetsAt = new Date(Date.now() + 2 * 3_600_000).toISOString();
+    zcodeFailuresByPath.set("src/b.ts", `codex_runtime_nonzero_exit: status=1 codex_usage_limit resets_at=${resetsAt}; ` +
+      "ERROR: You\u2019ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits.");
+
+    const error = await reviewPull({ config, github: githubForPull(pull, files), state, repo: "electricsheephq/WorldOS",
+      pull, dryRun: false, useZCode: true }).then(() => undefined, (caught: unknown) => caught);
+
+    expect(String(error)).toContain("codex_usage_limit");
+    expect(String(error)).not.toContain("context_budget_chunk_provider_failure");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)?.status).not.toBe("failed");
+    expect(recordProviderRateLimitCooldownIfNeeded({ config, state, repo: "electricsheephq/WorldOS", pull, error })).toBe(true);
+    expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS")).toMatchObject({ cooldownUntil: resetsAt, reason: "provider_usage_limit" });
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)?.status).toBe("skipped");
+    expect(createdReviews).toEqual([]);
     state.close();
   });
 

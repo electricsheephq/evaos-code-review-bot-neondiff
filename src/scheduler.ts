@@ -21,7 +21,7 @@ import {
   requireActiveProductionLicense,
   type ProductionLicenseAdmission
 } from "./license-admission.js";
-import { listReposToScan, resolveDailyReviewCap, resolveRepoProfile } from "./repo-policy.js";
+import { listReposToScan, resolveDailyReviewCap, resolveRepoCommandConfig, resolveRepoProfile } from "./repo-policy.js";
 import {
   buildReviewStatusMarker,
   isRepairableReviewStatusCommentState,
@@ -1204,7 +1204,8 @@ async function resolveSchedulerCommandDecision(input: {
   pull: PullRequestSummary;
   onCommandFetchError?: () => void;
 }): Promise<CommandDecision> {
-  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+  const commandConfig = resolveRepoCommandConfig(input.config, input.repo);
+  if (!commandConfig.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
@@ -1212,8 +1213,8 @@ async function resolveSchedulerCommandDecision(input: {
     input.onCommandFetchError?.();
     return { action: "none", shouldReview: false };
   }
-  const collected = collectTrustedReviewCommands(comments, input.config.commands);
-  const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, input.config.commands, {
+  const collected = collectTrustedReviewCommands(comments, commandConfig);
+  const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, commandConfig, {
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha
@@ -1322,7 +1323,7 @@ export function admitPublicCommands(input: {
   comments: IssueCommentCommandSource[];
   now?: Date;
 }): ReviewCommand[] {
-  const publicCommands = input.config.commands.publicCommands;
+  const publicCommands = resolveRepoCommandConfig(input.config, input.repo).publicCommands;
   if (!publicCommands?.enabled || input.publicEligible.length === 0) return [];
   const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
   const commentsById = new Map(input.comments.map((comment) => [comment.id, comment]));
@@ -2731,7 +2732,7 @@ function providerCooldownFromError(config: BotConfig, error: unknown, now: Date)
   const classification = classifyProviderError(error);
   if (!classification.cooldown) return undefined;
   return {
-    cooldownUntil: new Date(now.getTime() + providerCooldownDurationMs(config, classification)).toISOString(),
+    cooldownUntil: new Date(now.getTime() + providerCooldownDurationMs(config, classification, 1, 0, now)).toISOString(),
     reason: classification.reason
   };
 }
