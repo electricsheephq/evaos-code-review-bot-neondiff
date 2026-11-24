@@ -194,6 +194,9 @@ describe("Codex usage-limit deferral through the scheduler (#1267)", () => {
     expect(status.database.providerUsageLimitUntil).toBe(resetAt);
     expect(status.gates.find((gate) => gate.name === "provider_cooldown_backlog")?.detail)
       .toContain(`provider at usage limit until ${resetAt}`);
+    for (const name of ["queue_no_failed_jobs", "live_db_no_errors", "provider_cooldown_backlog"]) {
+      expect(status.gates.find((gate) => gate.name === name)).toMatchObject({ ok: true });
+    }
 
     // Before the reset nothing starts.
     vi.setSystemTime(new Date(Date.parse(resetAt) - 60_000));
@@ -206,5 +209,22 @@ describe("Codex usage-limit deferral through the scheduler (#1267)", () => {
     expect(f.state.getProcessedReview(f.repo, 1, f.headSha)?.status).toBe("posted");
     expect(f.state.getReviewQueueJob(job.jobId)?.state).toBe("posted");
     expect(f.release().database.providerUsageLimitUntil).toBeUndefined();
+  });
+
+  it("1/2: without a printed time the job waits the default, then reviews once", async () => {
+    const f = fixture();
+    const limitError = await codexExitError(`${PREAMBLE}\n${LIMIT_NO_TIME}\n`);
+    const defaultUntil = new Date(Date.now() + 30 * 60_000).toISOString();
+
+    await f.cycle(async () => { throw limitError; });
+    const job = f.state.listReviewQueueJobs().at(-1)!;
+    expect(job).toMatchObject({ state: "provider_deferred", nextEligibleAt: defaultUntil });
+    expect(f.state.getActiveRepoProviderCooldown(f.repo)).toMatchObject({ cooldownUntil: defaultUntil, reason: "provider_usage_limit" });
+    expect(f.release().database.failedReviewQueueJobCount).toBe(0);
+
+    vi.setSystemTime(new Date(defaultUntil));
+    await f.cycle(); await f.cycle();
+    expect(f.post).toHaveBeenCalledTimes(1);
+    expect(f.state.getReviewQueueJob(job.jobId)?.state).toBe("posted");
   });
 });
