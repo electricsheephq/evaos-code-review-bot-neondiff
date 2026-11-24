@@ -22,6 +22,19 @@ describe("review scheduler config", () => {
     expect(loadConfig(writeConfig({ reviewAutoRetry: { maxRetries: 5, delaysMs: [1, 2, 3, 4, 5] } })).reviewAutoRetry.maxRetries).toBe(5);
   });
 
+  it("validates the optional daily review caps and leaves them unset by default", () => {
+    expect(loadConfig(writeConfig({})).reviewScheduler?.maxReviewsPerRepoPerDay).toBeUndefined();
+    const scheduler = { enabled: true, maxProviderActive: 2, maxOrgActive: 3, maxRepoActive: 1, maxQueuedPerRepo: 10, manualCommandReserve: 1, backgroundPriority: 50 };
+    expect(loadConfig(writeConfig({ reviewScheduler: { ...scheduler, maxReviewsPerRepoPerDay: 10 } })).reviewScheduler?.maxReviewsPerRepoPerDay).toBe(10);
+    const profiles = (maxReviewsPerDay: unknown) => ({ repoProfiles: { repos: { "org/repo": { maxReviewsPerDay } } } });
+    expect(loadConfig(writeConfig(profiles(3))).repoProfiles?.repos?.["org/repo"]?.maxReviewsPerDay).toBe(3);
+    for (const bad of [0, -1, 1.5, "10"]) {
+      expect(() => loadConfig(writeConfig({ reviewScheduler: { ...scheduler, maxReviewsPerRepoPerDay: bad } })))
+        .toThrow("config.reviewScheduler.maxReviewsPerRepoPerDay must be a positive integer");
+      expect(() => loadConfig(writeConfig(profiles(bad)))).toThrow(/org\/repo\.maxReviewsPerDay must be a positive integer/);
+    }
+  });
+
   it("loads disabled-by-default provider-aware queue settings", () => {
     const config = loadConfig(writeConfig({}));
 

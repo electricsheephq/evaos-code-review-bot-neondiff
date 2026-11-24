@@ -2991,7 +2991,8 @@ function readReviewQueueCounts(
          sum(case when state = 'leased' then 1 else 0 end) as leased,
          sum(case when state = 'running' then 1 else 0 end) as running,
          sum(case when state = 'provider_deferred' then 1 else 0 end) as providerDeferred,
-         sum(case when state = 'provider_deferred' and (next_eligible_at is null or datetime(next_eligible_at) <= datetime(?)) then 1 else 0 end) as retryableProviderDeferred,
+         sum(case when state = 'provider_deferred' and (next_eligible_at is null or datetime(next_eligible_at) <= datetime(?))
+           and coalesce(last_error, '') not like 'daily_cap_deferred_until=%' then 1 else 0 end) as retryableProviderDeferred,
          sum(case when state = 'failed' then 1 else 0 end) as failed
        from review_queue_jobs`
     )
@@ -3005,7 +3006,8 @@ function readReviewQueueCounts(
          sum(case when state = 'leased' then 1 else 0 end) as leased,
          sum(case when state = 'running' then 1 else 0 end) as running,
          sum(case when state = 'provider_deferred' then 1 else 0 end) as providerDeferred,
-         sum(case when state = 'provider_deferred' and (next_eligible_at is null or datetime(next_eligible_at) <= datetime(?)) then 1 else 0 end) as retryableProviderDeferred,
+         sum(case when state = 'provider_deferred' and (next_eligible_at is null or datetime(next_eligible_at) <= datetime(?))
+           and coalesce(last_error, '') not like 'daily_cap_deferred_until=%' then 1 else 0 end) as retryableProviderDeferred,
          sum(case when state = 'failed' then 1 else 0 end) as failed
        from review_queue_jobs
        group by repo

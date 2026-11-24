@@ -1,6 +1,6 @@
 import type { BotConfig } from "./config.js";
 import { resolveRepoProfile } from "./repo-policy.js";
-import type { ReviewQueueJobRecord } from "./state.js";
+import { DAILY_CAP_ERROR_PREFIX, isDailyCapDeferredQueueJob, type ReviewQueueJobRecord } from "./state.js";
 
 export type ReviewQueueDelayReason =
   | "provider_cooldown"
@@ -10,6 +10,7 @@ export type ReviewQueueDelayReason =
   | "head_active"
   | "manual_reserve"
   | "proof_cooldown"
+  | "daily_cap"
   | "lease_limit";
 
 export interface ReviewBudgetDelay {
@@ -94,7 +95,10 @@ export interface ReviewBudgetStatus {
     waitingHeadActive: number;
     waitingManualReserve: number;
     waitingLeaseLimit: number;
+    waitingDailyCap: number;
   };
+  /** Repos with automatic jobs waiting for the next UTC day because the daily review cap was reached. */
+  dailyCapReachedRepos: string[];
   manualReserve: {
     configured: number;
     activeManual: number;
@@ -196,11 +200,12 @@ export function buildReviewBudgetStatus(input: {
 
   const delayed: ReviewBudgetDelay[] = [];
   for (const job of queued) {
+    const dailyCapWaiting = job.lastError?.startsWith(DAILY_CAP_ERROR_PREFIX) === true && !isRetryEligibleByNextEligibleAt(job, now);
     if (job.state === "blocked_on_proof" && !isRetryEligibleByNextEligibleAt(job, now)) {
-      delayed.push(delay(job, "proof_cooldown"));
+      delayed.push(delay(job, dailyCapWaiting ? "daily_cap" : "proof_cooldown"));
     }
     if (job.state === "provider_deferred" && !isProviderDeferredEligible(job, now)) {
-      delayed.push(delay(job, "provider_cooldown"));
+      delayed.push(delay(job, dailyCapWaiting ? "daily_cap" : "provider_cooldown"));
     }
   }
 
@@ -252,6 +257,9 @@ export function buildReviewBudgetStatus(input: {
     delayedByReason[entry.reason] = (delayedByReason[entry.reason] ?? 0) + 1;
   }
   const providerDeferredJobs = queued.filter((job) => job.state === "provider_deferred");
+  // Daily-cap waits are reported under daily_cap; they are not provider-cooldown retries.
+  const dailyCapJobIds = new Set(queued.filter((job) => isDailyCapDeferredQueueJob(job)).map((job) => job.jobId));
+  const cooldownDeferredJobs = providerDeferredJobs.filter((job) => !dailyCapJobIds.has(job.jobId));
   const providerDeferredDelayed = delayed.filter((job) => job.state === "provider_deferred");
   const providerDeferredByReason = countBy(providerDeferredDelayed, (job) => job.reason);
   const returnedWouldLease = includeDetails ? applyDetailLimit(wouldLease, detailLimit) : [];
@@ -294,20 +302,22 @@ export function buildReviewBudgetStatus(input: {
       manual: manualQueued,
       background: queued.filter((job) => job.lane === "background").length,
       providerDeferred: providerDeferredJobs.length,
-      retryableProviderDeferred: providerDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length
+      retryableProviderDeferred: cooldownDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length
     },
     providerDeferred: {
       total: providerDeferredJobs.length,
-      retryable: providerDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length,
-      readyToRetry: wouldLease.filter((job) => job.state === "provider_deferred").length,
+      retryable: cooldownDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length,
+      readyToRetry: wouldLease.filter((job) => job.state === "provider_deferred" && !dailyCapJobIds.has(job.jobId)).length,
       waitingCooldown: providerDeferredByReason.get("provider_cooldown") ?? 0,
       waitingProviderCapacity: providerDeferredByReason.get("provider_capacity") ?? 0,
       waitingOrgCapacity: providerDeferredByReason.get("org_capacity") ?? 0,
       waitingRepoCapacity: providerDeferredByReason.get("repo_capacity") ?? 0,
       waitingHeadActive: providerDeferredByReason.get("head_active") ?? 0,
       waitingManualReserve: providerDeferredByReason.get("manual_reserve") ?? 0,
-      waitingLeaseLimit: providerDeferredByReason.get("lease_limit") ?? 0
+      waitingLeaseLimit: providerDeferredByReason.get("lease_limit") ?? 0,
+      waitingDailyCap: providerDeferredByReason.get("daily_cap") ?? 0
     },
+    dailyCapReachedRepos: [...new Set(delayed.filter((entry) => entry.reason === "daily_cap").map((entry) => entry.repo))].sort(),
     manualReserve: {
       configured: scheduler.manualCommandReserve,
       activeManual,

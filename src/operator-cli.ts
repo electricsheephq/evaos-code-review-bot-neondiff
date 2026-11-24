@@ -26,7 +26,9 @@ import {
   type ReviewQueueJobRecord,
   type ReviewAutoRetryRecord,
   type ReviewQueueJobState,
-  type RepoProviderCooldownRecord
+  type RepoProviderCooldownRecord,
+  DAILY_CAP_ERROR_PREFIX,
+  isDailyCapDeferredQueueJob
 } from "./state.js";
 import {
   buildZCodeTimeoutInspectCommand,
@@ -389,6 +391,7 @@ export interface PullStatusExplanation {
   nextAction:
     | "none"
     | "wait_or_retry_provider_cooldown"
+    | "wait_for_daily_review_cap"
     | "run_or_wait_for_daemon"
     | "wait_for_durable_queue_worker"
     | "inspect_github_read_failure"
@@ -886,6 +889,10 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     `leases: active=${inventory.summary.activeLeases} stale=${inventory.summary.staleLeases}`,
     `reviewerSessions: retryCovered=${inventory.summary.retryCoveredReviewerSessions}`
   ];
+
+  for (const repo of inventory.budget?.dailyCapReachedRepos ?? []) {
+    lines.push(`daily cap reached for ${repo}; automatic reviews wait for the next UTC day`);
+  }
 
   const failingGates = inventory.gates.filter((gate) => !gate.ok);
   if (failingGates.length > 0) {
@@ -1409,7 +1416,7 @@ export function buildOperatorDashboard(input: {
       checkStatus: "not_collected",
       reason: redactSecrets(entry.reason ?? entry.error ?? "provider cooldown"),
       updatedAt: entry.updatedAt,
-      nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+      nextAction: providerDeferredNextAction(entry)
     });
   }
 
@@ -1595,7 +1602,7 @@ export function explainPullStatus(
       headSha: providerDeferred.headSha,
       ...(providerDeferred.reason ? { reason: providerDeferred.reason } : {}),
       ...(providerDeferred.error ? { error: providerDeferred.error } : {}),
-      nextAction: "wait_or_retry_provider_cooldown"
+      nextAction: isDailyCapHeld(providerDeferred) ? "wait_for_daily_review_cap" : "wait_or_retry_provider_cooldown"
     };
   }
 
@@ -1703,8 +1710,19 @@ function providerDeferredQueueEntry(entry: CoverageProviderDeferredEntry): Opera
     url: entry.url,
     status: entry.status,
     reason: entry.reason ?? entry.error ?? "provider cooldown",
-    nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+    nextAction: providerDeferredNextAction(entry)
   };
+}
+
+function isDailyCapHeld(entry: CoverageProviderDeferredEntry): boolean {
+  return entry.error?.startsWith(DAILY_CAP_ERROR_PREFIX) === true;
+}
+
+/** A head held only by the daily review cap resumes on its own; retry-provider-cooldowns cannot advance it. */
+function providerDeferredNextAction(entry: CoverageProviderDeferredEntry): string {
+  return isDailyCapHeld(entry)
+    ? `waiting for the daily review cap; the scheduler resumes it at ${entry.cooldownUntil ?? "the next UTC midnight"} (UTC reset)`
+    : "wait for cooldown expiry or run retry-provider-cooldowns when expired";
 }
 
 function queuedQueueEntry(entry: CoverageQueuedEntry): OperatorQueueEntry {
@@ -1827,7 +1845,8 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
     leased: jobs.filter((job) => job.state === "leased").length,
     running: jobs.filter((job) => job.state === "running").length,
     providerDeferred: jobs.filter((job) => job.state === "provider_deferred").length,
-    retryableProviderDeferred: jobs.filter((job) => job.state === "provider_deferred" && isRetryableQueueJob(job, now)).length,
+    retryableProviderDeferred: jobs.filter((job) =>
+      job.state === "provider_deferred" && !isDailyCapDeferredQueueJob(job) && isRetryableQueueJob(job, now)).length,
     commandRecorded: jobs.filter((job) => job.state === "command_recorded").length,
     posted: jobs.filter((job) => job.state === "posted").length,
     failed: jobs.filter((job) => job.state === "failed").length,

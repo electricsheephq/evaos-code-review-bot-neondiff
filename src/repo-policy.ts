@@ -281,6 +281,13 @@ export function resolveRepoProfile(config: BotConfig, repo: string): RepoProfile
   return { allowed: false, reason: "repo_profile_missing" };
 }
 
+/** Daily automatic-review cap for a repo: the profile's maxReviewsPerDay wins over the scheduler default; undefined is unlimited. */
+export function resolveDailyReviewCap(config: BotConfig, repo: string): number | undefined {
+  const resolution = resolveRepoProfile(config, repo);
+  const profileCap = resolution.allowed ? resolution.profile.maxReviewsPerDay : undefined;
+  return profileCap ?? config.reviewScheduler?.maxReviewsPerRepoPerDay;
+}
+
 /**
  * Resolves the `@neondiff` command policy for one repo. Only an explicit `repoProfiles.repos` entry
  * can override it: set fields win, unset fields fall back to the global `commands` block, and a

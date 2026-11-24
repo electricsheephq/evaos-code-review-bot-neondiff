@@ -189,6 +189,8 @@ export interface RepoProfileConfig {
   preMergeChecks?: RepoPreMergeChecksConfig;
   finishingTouches?: RepoFinishingTouchesConfig;
   reviewScheduler?: RepoReviewSchedulerConfig;
+  /** Automatic reviews that may start on this repo per UTC day; the rest wait for the next day. Unset means no cap. */
+  maxReviewsPerDay?: number;
   suggestedLabels?: string[];
   suggestedReviewers?: string[];
   /** Per-repo `@neondiff` command override; explicit `repoProfiles.repos` entries only. */
@@ -273,6 +275,8 @@ export interface ReviewSchedulerConfig {
   maxQueuedPerRepo: number;
   manualCommandReserve: number;
   backgroundPriority: number;
+  /** Default daily automatic-review cap for every repo; a repo profile's maxReviewsPerDay wins. Unset means no cap. */
+  maxReviewsPerRepoPerDay?: number;
 }
 
 export const PUBLIC_REPO_AUTHOR_ASSOCIATIONS = [
@@ -1821,6 +1825,7 @@ function validateProfileRecord(record: Record<string, RepoProfileConfig> | undef
     validatePreMergeChecks(profile.preMergeChecks, `${label}.${key}.preMergeChecks`);
     validateFinishingTouches(profile.finishingTouches, `${label}.${key}.finishingTouches`);
     validateRepoReviewSchedulerConfig(profile.reviewScheduler, `${label}.${key}.reviewScheduler`);
+    if (profile.maxReviewsPerDay !== undefined) validatePositiveInteger(profile.maxReviewsPerDay, `${label}.${key}.maxReviewsPerDay`);
     if (profile.commands !== undefined) {
       // Org fallbacks would widen command handling to every repo in the org; only explicit repos may opt in.
       if (!label.endsWith(".repos")) throw new Error(`${label}.${key}.commands is only supported under repoProfiles.repos`);
@@ -1908,6 +1913,9 @@ function validateReviewSchedulerConfig(value: unknown, label: string): void {
   validatePositiveInteger(value.maxQueuedPerRepo, `${label}.maxQueuedPerRepo`);
   validateNonNegativeInteger(value.manualCommandReserve, `${label}.manualCommandReserve`);
   validateNonNegativeInteger(value.backgroundPriority, `${label}.backgroundPriority`);
+  if (value.maxReviewsPerRepoPerDay !== undefined) {
+    validatePositiveInteger(value.maxReviewsPerRepoPerDay, `${label}.maxReviewsPerRepoPerDay`);
+  }
   const maxProviderActive = Number(value.maxProviderActive);
   const manualCommandReserve = Number(value.manualCommandReserve);
   if (manualCommandReserve > maxProviderActive) {

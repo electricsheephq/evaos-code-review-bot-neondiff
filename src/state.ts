@@ -356,6 +356,14 @@ export interface RepoProviderCooldownRecord {
 }
 
 export const PROVIDER_COOLDOWN_ERROR_PREFIX = "provider_rate_limit_cooldown_until=";
+export const DAILY_CAP_ERROR_PREFIX = "daily_cap_deferred_until=";
+
+/** A waiting job held by the per-repo daily review cap (not a provider cooldown, not queue pressure). */
+export function isDailyCapDeferredQueueJob(job: Pick<ReviewQueueJobRecord, "state" | "lastError">): boolean {
+  return (job.state === "provider_deferred" || job.state === "blocked_on_proof") &&
+    job.lastError?.startsWith(DAILY_CAP_ERROR_PREFIX) === true;
+}
+
 /** Cooldown reason for a Codex ChatGPT usage limit; status reports it as "provider at usage limit until <time>" (#1267). */
 export const PROVIDER_USAGE_LIMIT_REASON = "provider_usage_limit";
 
@@ -2995,6 +3003,9 @@ export class ReviewStateStore {
     maxOrgActive: number;
     maxRepoActive: number;
     maxRepoActiveByRepo?: Record<string, number>;
+    /** Per-repo cap on automatic reviews started per UTC day; jobs over it wait until the next UTC midnight. */
+    maxAutomaticReviewsPerDayByRepo?: Record<string, number>;
+    onDailyCapDeferred?: (job: ReviewQueueJobRecord) => void;
     manualCommandReserve?: number;
     excludeJobIds?: Iterable<string>;
     reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo" | "pullNumber" | "headSha">>;
@@ -3009,6 +3020,10 @@ export class ReviewStateStore {
     validatePositiveQueueLimit(input.maxOrgActive, "maxOrgActive");
     validatePositiveQueueLimit(input.maxRepoActive, "maxRepoActive");
     const maxRepoActiveByRepo = normalizeRepoActiveLimitOverrides(input.maxRepoActiveByRepo);
+    const dailyCapByRepo = normalizeRepoActiveLimitOverrides(
+      input.maxAutomaticReviewsPerDayByRepo,
+      "maxAutomaticReviewsPerDayByRepo"
+    );
     const manualCommandReserve = input.manualCommandReserve ?? 0;
     if (!Number.isInteger(manualCommandReserve) || manualCommandReserve < 0) {
       throw new Error("manualCommandReserve must be a non-negative integer");
@@ -3048,6 +3063,10 @@ export class ReviewStateStore {
              )`
         )
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
+      if (dailyCapByRepo.size > 0) {
+        const deferred = this.deferDailyCappedQueueJobs(this.listReviewQueueJobs(), dailyCapByRepo, excludeJobIds, input.aging, nowIso);
+        for (const job of deferred) input.onDailyCapDeferred?.(job);
+      }
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
@@ -3111,6 +3130,54 @@ export class ReviewStateStore {
     }
 
     return leased;
+  }
+
+  /**
+   * Daily cap pass, run inside the lease transaction. A repo's count is its automatic jobs that are
+   * leased/running or whose started_at falls in the current UTC day, so failed and retried runs still
+   * count. Eligible automatic jobs beyond the remaining allowance (in lease order) wait until the next
+   * UTC midnight with reason=daily_cap; they are never failed, dropped or marked processed.
+   */
+  private deferDailyCappedQueueJobs(
+    jobs: ReviewQueueJobRecord[],
+    dailyCapByRepo: Map<string, number>,
+    excludeJobIds: Set<string>,
+    aging: { enabled: boolean; maxWaitMinutes: number } | undefined,
+    nowIso: string
+  ): ReviewQueueJobRecord[] {
+    const dayStartIso = `${nowIso.slice(0, 10)}T00:00:00.000Z`;
+    const nextDayIso = new Date(Date.parse(dayStartIso) + 24 * 60 * 60_000).toISOString();
+    const capped = jobs.filter((job) => job.source === "automatic" && dailyCapByRepo.has(job.repo.toLowerCase()));
+    const startedToday = (job: ReviewQueueJobRecord) => Boolean(job.startedAt && job.startedAt >= dayStartIso);
+    const used = countBy(
+      capped.filter((job) => job.state === "leased" || job.state === "running" || startedToday(job)),
+      (job) => job.repo.toLowerCase()
+    );
+    const deferred: ReviewQueueJobRecord[] = [];
+    const candidates = capped
+      .filter((job) => !excludeJobIds.has(job.jobId) && !startedToday(job) && isQueueJobEligible(job, nowIso))
+      .sort(buildLeaseComparator(aging, nowIso));
+    for (const job of candidates) {
+      const repoKey = job.repo.toLowerCase();
+      const limit = dailyCapByRepo.get(repoKey)!;
+      const count = used.get(repoKey) ?? 0;
+      if (count < limit) {
+        used.set(repoKey, count + 1);
+        continue;
+      }
+      this.db
+        .prepare(
+          `update review_queue_jobs
+           set state = case when state = 'blocked_on_proof' then state else 'provider_deferred' end,
+               next_eligible_at = ?,
+               last_error = ?,
+               updated_at = ?
+           where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
+        )
+        .run(nextDayIso, `${DAILY_CAP_ERROR_PREFIX}${nextDayIso}; reason=daily_cap; limit=${limit}`, nowIso, job.jobId);
+      deferred.push(this.getReviewQueueJob(job.jobId)!);
+    }
+    return deferred;
   }
 
   updateReviewQueueJobState(input: {
@@ -4618,12 +4685,15 @@ function validatePositiveQueueLimit(value: number, label: string): void {
   if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
 }
 
-function normalizeRepoActiveLimitOverrides(value: Record<string, number> | undefined): Map<string, number> {
+function normalizeRepoActiveLimitOverrides(
+  value: Record<string, number> | undefined,
+  label = "maxRepoActiveByRepo"
+): Map<string, number> {
   const result = new Map<string, number>();
   if (!value) return result;
   for (const [repo, limit] of Object.entries(value)) {
-    validateRepoName(repo, "maxRepoActiveByRepo");
-    validatePositiveQueueLimit(limit, `maxRepoActiveByRepo.${repo}`);
+    validateRepoName(repo, label);
+    validatePositiveQueueLimit(limit, `${label}.${repo}`);
     result.set(repo.toLowerCase(), limit);
   }
   return result;
