@@ -1,6 +1,6 @@
 import type { BotConfig } from "./config.js";
 import { resolveRepoProfile } from "./repo-policy.js";
-import { DAILY_CAP_ERROR_PREFIX, type ReviewQueueJobRecord } from "./state.js";
+import { DAILY_CAP_ERROR_PREFIX, isDailyCapDeferredQueueJob, type ReviewQueueJobRecord } from "./state.js";
 
 export type ReviewQueueDelayReason =
   | "provider_cooldown"
@@ -257,6 +257,9 @@ export function buildReviewBudgetStatus(input: {
     delayedByReason[entry.reason] = (delayedByReason[entry.reason] ?? 0) + 1;
   }
   const providerDeferredJobs = queued.filter((job) => job.state === "provider_deferred");
+  // Daily-cap waits are reported under daily_cap; they are not provider-cooldown retries.
+  const dailyCapJobIds = new Set(queued.filter((job) => isDailyCapDeferredQueueJob(job)).map((job) => job.jobId));
+  const cooldownDeferredJobs = providerDeferredJobs.filter((job) => !dailyCapJobIds.has(job.jobId));
   const providerDeferredDelayed = delayed.filter((job) => job.state === "provider_deferred");
   const providerDeferredByReason = countBy(providerDeferredDelayed, (job) => job.reason);
   const returnedWouldLease = includeDetails ? applyDetailLimit(wouldLease, detailLimit) : [];
@@ -299,12 +302,12 @@ export function buildReviewBudgetStatus(input: {
       manual: manualQueued,
       background: queued.filter((job) => job.lane === "background").length,
       providerDeferred: providerDeferredJobs.length,
-      retryableProviderDeferred: providerDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length
+      retryableProviderDeferred: cooldownDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length
     },
     providerDeferred: {
       total: providerDeferredJobs.length,
-      retryable: providerDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length,
-      readyToRetry: wouldLease.filter((job) => job.state === "provider_deferred").length,
+      retryable: cooldownDeferredJobs.filter((job) => isProviderDeferredEligible(job, now)).length,
+      readyToRetry: wouldLease.filter((job) => job.state === "provider_deferred" && !dailyCapJobIds.has(job.jobId)).length,
       waitingCooldown: providerDeferredByReason.get("provider_cooldown") ?? 0,
       waitingProviderCapacity: providerDeferredByReason.get("provider_capacity") ?? 0,
       waitingOrgCapacity: providerDeferredByReason.get("org_capacity") ?? 0,

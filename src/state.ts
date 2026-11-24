@@ -358,6 +358,12 @@ export interface RepoProviderCooldownRecord {
 export const PROVIDER_COOLDOWN_ERROR_PREFIX = "provider_rate_limit_cooldown_until=";
 export const DAILY_CAP_ERROR_PREFIX = "daily_cap_deferred_until=";
 
+/** A waiting job held by the per-repo daily review cap (not a provider cooldown, not queue pressure). */
+export function isDailyCapDeferredQueueJob(job: Pick<ReviewQueueJobRecord, "state" | "lastError">): boolean {
+  return (job.state === "provider_deferred" || job.state === "blocked_on_proof") &&
+    job.lastError?.startsWith(DAILY_CAP_ERROR_PREFIX) === true;
+}
+
 export interface ParsedProviderCooldownError {
   cooldownUntil: string;
   reason?: string;

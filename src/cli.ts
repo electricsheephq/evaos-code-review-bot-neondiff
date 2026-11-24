@@ -127,7 +127,8 @@ import {
   normalizeRetirementReason,
   ReviewStateStore,
   type ReviewQueueJobRecord,
-  type ReviewQueueJobState
+  type ReviewQueueJobState,
+  isDailyCapDeferredQueueJob
 } from "./state.js";
 import { readOutcomeObserverInput, recordNegativeControlLabels, runOutcomeObserverFromInput } from "./outcome-observer.js";
 import { aggregateCalibrationLabels, writeCalibrationAggregatePacket } from "./calibration-aggregate.js";
@@ -3269,7 +3270,7 @@ function queueActionableRows(
 }
 
 function isProviderDeferredQueueJobEligible(job: ReviewQueueJobRecord, now: Date): boolean {
-  if (job.state !== "provider_deferred") return false;
+  if (job.state !== "provider_deferred" || isDailyCapDeferredQueueJob(job)) return false;
   if (!job.nextEligibleAt) return true;
   const eligibleAtMs = Date.parse(job.nextEligibleAt);
   return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();

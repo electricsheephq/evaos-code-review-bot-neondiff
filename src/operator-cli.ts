@@ -26,7 +26,8 @@ import {
   type ReviewQueueJobRecord,
   type ReviewAutoRetryRecord,
   type ReviewQueueJobState,
-  type RepoProviderCooldownRecord
+  type RepoProviderCooldownRecord,
+  isDailyCapDeferredQueueJob
 } from "./state.js";
 import {
   buildZCodeTimeoutInspectCommand,
@@ -1828,7 +1829,8 @@ function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): Ope
     leased: jobs.filter((job) => job.state === "leased").length,
     running: jobs.filter((job) => job.state === "running").length,
     providerDeferred: jobs.filter((job) => job.state === "provider_deferred").length,
-    retryableProviderDeferred: jobs.filter((job) => job.state === "provider_deferred" && isRetryableQueueJob(job, now)).length,
+    retryableProviderDeferred: jobs.filter((job) =>
+      job.state === "provider_deferred" && !isDailyCapDeferredQueueJob(job) && isRetryableQueueJob(job, now)).length,
     commandRecorded: jobs.filter((job) => job.state === "command_recorded").length,
     posted: jobs.filter((job) => job.state === "posted").length,
     failed: jobs.filter((job) => job.state === "failed").length,

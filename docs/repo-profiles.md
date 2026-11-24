@@ -127,9 +127,20 @@ so it applies only when `reviewScheduler.enabled` is `true`.
   This is a point-in-time count: a job's `last_error` is replaced when it runs.
   The PR's sticky status comment stays `queued` while it waits, and its
   readiness reason carries the `daily_cap` text.
-- Deferred jobs still occupy `reviewScheduler.maxQueuedPerRepo` /
-  `reviewScheduler.maxQueuedHeads` slots, so with `overflowAction: "skip"` a
-  long-capped repo skips excess new heads sooner.
+- Jobs waiting on the cap do not count toward `reviewScheduler.maxQueuedPerRepo`
+  / `reviewScheduler.maxQueuedHeads`, so `overflowAction: "skip"` never drops a
+  new head because of cap waits. They are also left out of the provider-cooldown
+  readiness counts (`providerDeferred.retryable`, `readyToRetry`, and the
+  `queue_no_retryable_provider_deferred_jobs` /
+  `budget_no_ready_provider_deferred_jobs` gates); they show under `daily_cap`.
+
+The cap is a noise limit, not an exact meter. A day can start about one review
+more than the cap when a job that first started the day before (for example
+across a provider cooldown) re-runs after midnight, because a job counts only on
+its first start. Starts that do no provider work (stale, closed or license-gated
+heads) still use up the allowance. An unscoped operator `run-once` does not go
+through the scheduler queue and so bypasses the cap; the daemon uses the
+scheduled path. With `reviewScheduler.enabled: false` the cap does nothing.
 
 For issue enrichment, keep repo-specific policy in the separate
 `issueEnrichment.repos.<owner/repo>` object. It may define `advisoryPolicy`,

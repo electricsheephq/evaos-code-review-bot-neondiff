@@ -53,7 +53,8 @@ import {
   type ReviewerSessionJobState,
   type ReviewQueueJobRecord,
   type ReviewQueueJobState,
-  type ReviewQueueJobSource
+  type ReviewQueueJobSource,
+  isDailyCapDeferredQueueJob
 } from "./state.js";
 import type { ChangedSurfaceValidationReport, PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewEvent } from "./types.js";
 import type { IssueCommentCommandSource } from "./commands.js";
@@ -2760,7 +2761,8 @@ function hasRepoQueueCapacity(state: ReviewStateStore, repo: string, maxQueuedPe
   const active = state.listReviewQueueJobs({
     repo,
     states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"]
-  }).filter((job) => job.state !== "blocked_on_proof");
+  }).filter((job) => job.state !== "blocked_on_proof" && !isDailyCapDeferredQueueJob(job));
+  // Jobs waiting on the daily review cap never take queue capacity, so overflowAction "skip" cannot drop new heads.
   return active.length < maxQueuedPerRepo;
 }
 

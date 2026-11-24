@@ -8,6 +8,7 @@ import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type Schedu
 import { ReviewStateStore } from "../src/state.js";
 import { buildReviewBudgetStatus } from "../src/review-budget.js";
 import { resolveDailyReviewCap } from "../src/repo-policy.js";
+import { collectReleaseStatusWithConfig } from "../src/release-status.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { reviewPull as reviewPullImpl, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
 import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/license-admission.js";
@@ -5637,6 +5638,40 @@ describe("per-repo daily review cap", () => {
       expect(f.state.listReviewQueueJobs({ state: "provider_deferred" }).map((job) => job.headSha)).toEqual(["e".repeat(40)]);
       await f.cycle(new Date("2026-11-25T00:00:30.000Z"));
       expect(f.reviewed).toEqual(["org/capped#1@a", "org/capped#2@e"]);
+    } finally { f.state.close(); }
+  });
+
+  it("never lets cap-deferred jobs fill the queue, so overflowAction skip does not drop new heads", async () => {
+    const pulls = new Map([["org/capped", pullsFor("org/capped", 2)]]);
+    const f = capFixture("neondiff-daily-cap-skip-", pulls);
+    f.config.repoProfiles = { repos: { "org/capped": { maxReviewsPerDay: 1, reviewScheduler: { maxQueuedHeads: 2, overflowAction: "skip" } } } };
+    try {
+      await f.cycle(DAY1);
+      // One new head per cycle, each arriving while the earlier ones wait on the cap.
+      for (const [index, next] of pullsFor("org/capped", 5).slice(2).entries()) {
+        pulls.set("org/capped", [...pulls.get("org/capped")!, next]);
+        await f.cycle(f.minutes(DAY1, index + 1));
+      }
+      expect(f.reviewed).toEqual(["org/capped#1@a"]);
+      for (const [number, sha] of [[2, "b"], [3, "c"], [4, "d"], [5, "e"]] as const) {
+        expect(f.state.getProcessedReview("org/capped", number, sha.repeat(40))).toBeUndefined();
+      }
+      expect(f.state.listReviewQueueJobs({ state: "provider_deferred" }).map((job) => job.pullNumber).sort()).toEqual([2, 3, 4, 5]);
+    } finally { f.state.close(); }
+  });
+
+  it("keeps daily-cap waits out of the provider-cooldown readiness counts after midnight", async () => {
+    const f = capFixture("neondiff-daily-cap-readiness-", new Map([["org/capped", pullsFor("org/capped", 3)]]));
+    f.config.reviewScheduler!.maxReviewsPerRepoPerDay = 1;
+    try {
+      await f.cycle(DAY1);
+      const afterMidnight = new Date("2026-11-25T00:00:30.000Z");
+      const status = collectReleaseStatusWithConfig({ cwd: process.cwd(), statePath: f.config.statePath, budgetDetails: true, now: afterMidnight }, f.config);
+      expect(status.budget?.providerDeferred).toMatchObject({ total: 2, retryable: 0, readyToRetry: 0 });
+      expect(status.budget?.queued.retryableProviderDeferred).toBe(0);
+      expect(status.database.retryableProviderDeferredReviewQueueJobCount).toBe(0);
+      expect(status.gates.find((gate) => gate.name === "queue_no_retryable_provider_deferred_jobs")?.ok).toBe(true);
+      expect(status.budget?.wouldLease.map((job) => job.pullNumber)).toEqual([2]);
     } finally { f.state.close(); }
   });
 
