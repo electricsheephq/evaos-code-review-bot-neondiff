@@ -14,6 +14,7 @@ const setupSafeCommands = new Set([
   "runtime-inventory",
   "agents",
   "queue",
+  "post-comment",
   "budget-status",
   "cooldowns",
   "why",

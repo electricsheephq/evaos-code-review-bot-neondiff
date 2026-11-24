@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
 import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
 import { classifyIssueEnrichmentReceipt } from "./issue-enrichment-receipt.js";
+import { processOperatorComments } from "./operator-comment.js";
 import { runScheduledCycle } from "./scheduler.js";
 import {
   isAuthenticProductionLicenseAdmission,
@@ -28,10 +29,15 @@ let publicOnlyEnrichmentNoticeLogged = false;
 let issueEnrichmentPassInFlight: { cycle: number; promise: Promise<void> } | undefined;
 // A pass may still use its source-snapshot worktree, so a due cleanup waits (sticky) for a cycle with no pass in flight.
 let worktreeCleanupPending = false;
+let operatorCommentPassInFlight: Promise<void> | undefined;
 
 /** Settles once the in-flight issue-enrichment pass (if any) has ended; never rejects. */
 export function waitForIssueEnrichmentPass(): Promise<void> {
   return issueEnrichmentPassInFlight?.promise ?? Promise.resolve();
+}
+
+export function waitForOperatorCommentPass(): Promise<void> {
+  return operatorCommentPassInFlight ?? Promise.resolve();
 }
 
 export type DaemonCycleResult =
@@ -267,7 +273,34 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     await recordFailure({ failureKind: "runtime_failure", message, runId: heartbeatRunId });
     recordHeartbeat("daemon_cycle_failed", "daemon_cycle_failed", heartbeatRunId);
     return { ok: false, failureKind: "runtime_failure", error: message };
+  } finally {
+    // Start after the review work finishes and let the next cycle proceed while comments settle.
+    const admission = admissions?.daemonCycle;
+    if (!input.dryRun && admission && isAuthenticProductionLicenseAdmission(admission, "daemon_cycle")) {
+      startOperatorCommentPass(input, admission, stdout, stderr);
+    }
   }
+}
+
+function startOperatorCommentPass(
+  input: RunDaemonCycleOptions, admission: ProductionLicenseAdmission,
+  stdout: (line: string) => void, stderr: (line: string) => void
+): void {
+  if (operatorCommentPassInFlight) return;
+  operatorCommentPassInFlight = Promise.resolve().then(async () => {
+    const config = loadConfig(input.configPath);
+    const state = new ReviewStateStore(config.statePath);
+    try {
+      await processOperatorComments({ config, state, admission, recordOutcome: (id, outcome) => {
+        stdout(formatDaemonLog({ event: `daemon_operator_comment_${outcome.status}`, cycle: input.cycle, requestId: id,
+          ...(outcome.status === "posted" ? { commentId: outcome.id } : { errorClass: outcome.errorClass }) }));
+      } });
+    } finally {
+      state.close();
+    }
+  }).catch(() => {
+    stderr(formatDaemonLog({ event: "daemon_operator_comment_pass_failed", level: "error", cycle: input.cycle }));
+  }).finally(() => { operatorCommentPassInFlight = undefined; });
 }
 
 function emptyRunOnceResult(): RunOnceResult {

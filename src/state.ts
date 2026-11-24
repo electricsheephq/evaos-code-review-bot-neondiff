@@ -25,6 +25,35 @@ type AutoRetryKey = { repo: string; pullNumber: number; headSha: string };
 type AutoRetryScheduleResult = { granted: true; attempt: number; nextEligibleAt: string } | { granted: false };
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
+type OperatorCommentKey = { repo: string; number: number; bodySha256: string };
+type OperatorCommentStatus = "pending" | "posted" | "refused" | "failed";
+type OperatorCommentRequest = OperatorCommentKey & {
+  id: string;
+  status: OperatorCommentStatus;
+  requestedAt: string;
+  updatedAt: string;
+  attempts: number;
+  commentId: number | null;
+  commentUrl: string | null;
+  errorClass: string | null;
+};
+type OperatorCommentFilter = Partial<OperatorCommentKey & { id: string }>;
+type OperatorCommentOutcome =
+  | { status: "posted"; id: number; html_url?: string }
+  | { status: "pending" | "refused" | "failed"; errorClass: string };
+
+const OPERATOR_COMMENT_COLUMNS = `id, repo, number, body_sha256 as bodySha256, status, attempts,
+  requested_at as requestedAt, updated_at as updatedAt, comment_id as commentId, comment_url as commentUrl,
+  case when error_class like 'worker:%' then null else error_class end as errorClass`;
+
+function selectOperatorCommentRequests(db: DatabaseSync, filter: OperatorCommentFilter): OperatorCommentRequest[] {
+  return db.prepare(`select ${OPERATOR_COMMENT_COLUMNS} from operator_comment_requests
+    where id = coalesce(?, id) and repo = coalesce(?, repo) and number = coalesce(?, number)
+      and (? is null or (body_sha256 = ? and status in ('pending', 'posted')))
+    order by requested_at, rowid`).all(filter.id ?? null, filter.repo ?? null, filter.number ?? null,
+    filter.bodySha256 ?? null, filter.bodySha256 ?? null) as unknown as OperatorCommentRequest[];
+}
+
 export type ProcessedCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
 export type FinishingTouchDraftStatus = "drafted" | "rejected";
@@ -642,6 +671,23 @@ export class ReviewStateStore {
         primary key (repo, pull_number, head_sha)
       );
 
+      create table if not exists operator_comment_requests (
+        id text primary key,
+        repo text not null,
+        number integer not null,
+        body text not null,
+        body_sha256 text not null,
+        status text not null check (status in ('pending', 'posted', 'refused', 'failed')),
+        requested_at text not null,
+        attempts integer not null default 0,
+        comment_id integer,
+        comment_url text,
+        error_class text,
+        updated_at text not null
+      );
+      create unique index if not exists operator_comment_requests_active_key
+        on operator_comment_requests (repo, number, body_sha256) where status in ('pending', 'posted');
+
       create table if not exists finding_outcome_labels (
         fingerprint text not null,
         repo text not null,
@@ -1006,6 +1052,70 @@ export class ReviewStateStore {
       );
     `);
     this.ensureReviewEventAuthorizationOutcomeColumns();
+  }
+
+  static readOperatorCommentRequests(dbPath: string, filter: OperatorCommentFilter = {}): OperatorCommentRequest[] {
+    if (!existsSync(dbPath)) return [];
+    const db = new DatabaseSync(dbPath, { readOnly: true, timeout: 5000 });
+    try {
+      if (!db.prepare("select 1 from sqlite_schema where name = 'operator_comment_requests' and type = 'table'").get()) return [];
+      return selectOperatorCommentRequests(db, filter);
+    } finally {
+      db.close();
+    }
+  }
+
+  enqueueOperatorComment(input: OperatorCommentKey & { body: string }): OperatorCommentRequest {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare(`insert into operator_comment_requests (id, repo, number, body, body_sha256, status, requested_at, updated_at)
+        values (?, ?, ?, ?, ?, 'pending', ?, ?)
+        on conflict (repo, number, body_sha256) where status in ('pending', 'posted') do nothing`)
+        .run(id, input.repo, input.number, input.body, input.bodySha256, now, now);
+      const [request] = selectOperatorCommentRequests(this.db, input);
+      this.db.exec("commit");
+      return request!;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  listPendingOperatorComments(limit: number): Array<OperatorCommentRequest & { body: string }> {
+    return this.db.prepare(`select ${OPERATOR_COMMENT_COLUMNS}, body from operator_comment_requests
+      where status = 'pending' order by requested_at, rowid limit ?`)
+      .all(limit) as unknown as Array<OperatorCommentRequest & { body: string }>;
+  }
+
+  // A pending row temporarily records the worker PID, so another daemon cannot
+  // race its read/post pair and a new daemon can reconcile after a crash.
+  tryClaimOperatorComment(id: string, attempts: number): boolean {
+    const row = this.db.prepare(`select error_class from operator_comment_requests
+      where id = ? and status = 'pending' and attempts = ?`).get(id, attempts);
+    if (!row) return false;
+    const errorClass = row.error_class as string | null;
+    const pid = errorClass?.match(/^worker:([1-9]\d*)$/)?.[1];
+    if (pid && isProcessAlive(Number(pid))) return false;
+    return this.db.prepare(`update operator_comment_requests set error_class = ?
+      where id = ? and status = 'pending' and attempts = ? and error_class is ?`)
+      .run(`worker:${process.pid}`, id, attempts, errorClass).changes === 1;
+  }
+
+  finishOperatorComment(id: string, outcome: OperatorCommentOutcome): void {
+    const posted = outcome.status === "posted";
+    this.db.prepare(`update operator_comment_requests
+      set status = ?, attempts = attempts + ?, comment_id = ?, comment_url = ?, error_class = ?, updated_at = ?
+      where id = ? and status = 'pending' and error_class = ?`).run(outcome.status,
+      outcome.status === "pending" || outcome.status === "failed" ? 1 : 0,
+      posted ? outcome.id : null, posted ? outcome.html_url ?? null : null,
+      posted ? null : outcome.errorClass, new Date().toISOString(), id, `worker:${process.pid}`);
+  }
+
+  releaseOperatorComment(id: string): void {
+    this.db.prepare("update operator_comment_requests set error_class = null where id = ? and error_class = ?")
+      .run(id, `worker:${process.pid}`);
   }
 
   hasProcessed(repo: string, pullNumber: number, headSha: string): boolean {

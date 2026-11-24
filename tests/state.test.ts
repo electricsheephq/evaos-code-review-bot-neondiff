@@ -24,6 +24,42 @@ describe("review state store", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it.each(["failed", "refused"] as const)("allows a fresh operator comment after %s and deduplicates pending and posted rows", (status) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-operator-comment-state-"));
+    roots.push(root);
+    const path = join(root, "state.sqlite");
+    const legacyDb = new DatabaseSync(path);
+    legacyDb.exec("create table legacy_data (name text); insert into legacy_data values ('preserve')");
+    legacyDb.close();
+    expect(ReviewStateStore.readOperatorCommentRequests(path)).toEqual([]);
+    const state = new ReviewStateStore(path);
+    const peer = new ReviewStateStore(path);
+    const input = { repo: "owner/repo", number: 7, body: "Follow-up", bodySha256: "a".repeat(64) };
+    try {
+      const first = state.enqueueOperatorComment(input);
+      expect(peer.enqueueOperatorComment(input)).toEqual(first);
+      expect(state.tryClaimOperatorComment(first.id, 0)).toBe(true);
+      expect(peer.tryClaimOperatorComment(first.id, 0)).toBe(false);
+      expect(ReviewStateStore.readOperatorCommentRequests(path, { id: first.id })[0]?.errorClass).toBeNull();
+      state.finishOperatorComment(first.id, { status, errorClass: "fixture" });
+      const second = peer.enqueueOperatorComment(input);
+      expect(second.id).not.toBe(first.id);
+      expect(peer.tryClaimOperatorComment(second.id, 0)).toBe(true);
+      peer.finishOperatorComment(second.id, { status: "posted", id: 123, html_url: "https://github.test/comment/123" });
+      expect(state.enqueueOperatorComment(input)).toMatchObject({
+        id: second.id, status: "posted", commentId: 123, commentUrl: "https://github.test/comment/123"
+      });
+      expect(ReviewStateStore.readOperatorCommentRequests(path).map((request) => request.status)).toEqual([status, "posted"]);
+      expect(state.listPendingOperatorComments(5)).toEqual([]);
+    } finally {
+      peer.close();
+      state.close();
+    }
+    const readback = new DatabaseSync(path, { readOnly: true });
+    try { expect(readback.prepare("select name from legacy_data").get()?.name).toBe("preserve"); }
+    finally { readback.close(); }
+  });
+
   it("persists a two-attempt auto-retry budget and atomically claims each due insertion", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-state-")); roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));

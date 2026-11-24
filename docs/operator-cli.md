@@ -22,6 +22,15 @@ evaos-review-bot status --config config.local.json
 
 ## Commands
 
+- `post-comment`: preview or queue one issue or pull request comment, including
+  on closed or merged PRs. Pass the running daemon's `--config`, `--repo owner/name`,
+  `--number N`, and `--body-file comment.md`. The default preview reports the
+  body length, SHA-256, safety result, and any matching request. Add
+  `--dry-run false --confirm true` to queue it for the live daemon to post
+  using its GitHub App credentials. Use `post-comment --status --config PATH`
+  to list requests, with optional `--id I` or `--repo owner/name --number N`
+  filtering. An optional `--state-path` must point to the daemon's SQLite DB for
+  it to see the request.
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
   durable queue counts, and recommended actions.

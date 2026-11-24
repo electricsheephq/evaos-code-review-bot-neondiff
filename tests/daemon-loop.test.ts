@@ -1,18 +1,25 @@
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupReviewWorktreesFromConfig,
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
   waitForIssueEnrichmentPass,
+  waitForOperatorCommentPass,
   type RunDaemonCycleOptions
 } from "../src/daemon.js";
 import type { BotConfig } from "../src/config.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 import { requireActiveDaemonCycleAdmissions, type ProductionLicenseAdmission } from "../src/license-admission.js";
+import { withRuntimeGitHubCredentials } from "../src/runtime-github-credentials.js";
 import { ReviewStateStore } from "../src/state.js";
+import { runScheduledObservePass } from "../src/outcome-observer.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi } from "../src/github.js";
+import { findPostedCiReview } from "../src/ci-mode.js";
 
 // Cycles no longer await issue enrichment; settle the detached pass so each test sees its own lane output.
 const runDaemonCycle = async (input: RunDaemonCycleOptions) => {
@@ -987,6 +994,216 @@ describe("daemon cycle resilience", () => {
     });
     expect(failure).not.toHaveProperty("error");
     expect(stderr.join("\n")).not.toContain("ghp_fake_token");
+  });
+});
+
+describe("daemon operator comments", () => {
+  const roots: string[] = [];
+  const repo = "owner/repo";
+  const user = { login: DEFAULT_BOT_LOGIN, type: "Bot" };
+  const commentUrl = "https://github.test/owner/repo/pull/7#issuecomment-900";
+  const body = "Follow-up shipped.";
+  let privateKey: string | undefined;
+
+  afterEach(async () => {
+    await waitForOperatorCommentPass();
+    vi.unstubAllGlobals();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  async function fixture() {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-operator-comment-daemon-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({ statePath, pilotRepos: [repo], github: { botLogin: user.login } }));
+    const admitted = await requireActiveDaemonCycleAdmissions({
+      config: {} as NonNullable<BotConfig["license"]>, secretReader: { read: () => undefined }
+    });
+    if (!admitted.ok) throw new Error("expected public daemon admission");
+    const credentials = {
+      appId: "123",
+      privateKey: privateKey ??= generateKeyPairSync("rsa", { modulusLength: 2048 })
+        .privateKey.export({ type: "pkcs1", format: "pem" }).toString()
+    };
+    const postCalls: Array<{ path: string; body: string; auth: string | null }> = [];
+    const order: string[] = [];
+    const logs: string[] = [];
+    const rest = {
+      visibility: "public", postStatus: 201,
+      page: (_page: number): unknown[] => [],
+      waitBeforePost: Promise.resolve()
+    };
+    const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(input);
+      const path = url.pathname;
+      if (path === `/repos/${repo}/installation`) return Response.json({ id: 123 });
+      if (path === "/app/installations/123/access_tokens") {
+        return Response.json({ token: "test-installation", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (path === `/repos/${repo}`) return Response.json({ full_name: repo, visibility: rest.visibility });
+      if (path === `/repos/${repo}/pulls/7`) return Response.json({
+        number: 7, state: "closed", merged_at: "2026-07-06T10:00:00Z",
+        head: { sha: "a".repeat(40) }, base: { repo: { visibility: "public" } }
+      });
+      if (/\/issues\/\d+\/comments$/.test(path)) {
+        if (init?.method === "POST") {
+          const sentBody = JSON.parse(String(init.body)).body;
+          postCalls.push({ path, body: sentBody, auth: new Headers(init?.headers).get("authorization") });
+          order.push("post");
+          await rest.waitBeforePost;
+          return Response.json({ id: 900, html_url: commentUrl }, { status: rest.postStatus });
+        }
+        return Response.json(rest.page(Number(url.searchParams.get("page"))));
+      }
+      if (path === `/repos/${repo}/pulls/7/reviews`) return Response.json([]);
+      throw new Error(`unexpected fixture request: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    let cycle = 0;
+    const runCycle = (dryRun = false, settle = true) => withRuntimeGitHubCredentials(credentials, async () => {
+      const result = await runDaemonCycleImpl({
+        cycle: ++cycle, dryRun, configPath, pilotRepos: [repo], monitoredRepos: [repo],
+        canaryPulls: [], commandsEnabled: false,
+        admitDaemonCycleImpl: async () => admitted.admissions,
+        recordHeartbeatImpl: () => undefined,
+        runOnceImpl: async () => { order.push("review"); return { ...successfulRunOnceResult(), reviewed: 1 }; },
+        retryProviderCooldownsImpl: async () => { order.push("cooldown"); return successfulRetryResult(); },
+        stdout: (line) => logs.push(line), stderr: (line) => logs.push(line)
+      });
+      if (settle) await waitForOperatorCommentPass();
+      return result;
+    });
+    const enqueue = (text = body, number = 7) => {
+      const state = new ReviewStateStore(statePath);
+      try {
+        return state.enqueueOperatorComment({ repo, number, body: text, bodySha256: createHash("sha256").update(text).digest("hex") });
+      } finally { state.close(); }
+    };
+    const status = (id: string) => ReviewStateStore.readOperatorCommentRequests(statePath, { id })[0];
+    return { root, statePath, enqueue, status, runCycle, rest, fetch, postCalls, logs, order, credentials };
+  }
+
+  it("posts once as the App to a closed PR after review work and leaves the review and outcome ledgers untouched", async () => {
+    const f = await fixture();
+    const request = f.enqueue();
+    const github = new GitHubApi({ ...f.credentials, botLogin: user.login });
+    expect(await github.getPull(repo, 7)).toMatchObject({ state: "closed" });
+    const result = await f.runCycle();
+    expect(result).toMatchObject({ ok: true, result: { reviewed: 1 } });
+    expect(f.order).toEqual(["review", "cooldown", "post"]);
+    await f.runCycle();
+    const postedBody = `${body}\n\n<!-- neondiff-operator-comment:${request.id} -->`;
+    expect(f.postCalls).toEqual([{ path: "/repos/owner/repo/issues/7/comments", auth: "Bearer test-installation", body: postedBody }]);
+    expect(f.status(request.id)).toMatchObject({ status: "posted", commentId: 900, commentUrl });
+    expect(f.logs.filter((line) => line.includes("daemon_operator_comment_posted"))).toHaveLength(1);
+    expect(f.logs.join("\n")).not.toContain(body);
+    f.rest.page = () => [{ id: 900, body: postedBody, html_url: commentUrl, user }];
+    expect(await github.listIssueComments(repo, 7)).toHaveLength(1);
+    expect(await findPostedCiReview(github, repo, 7, "a".repeat(40))).toBeUndefined();
+    const state = new ReviewStateStore(f.statePath);
+    try {
+      const fetchOutcome = vi.fn();
+      expect(await runScheduledObservePass({
+        state, config: { enabled: true, intervalMinutes: 1, lookbackDays: 30, maxPullsPerCycle: 5, perRepoCooldownMinutes: 1 },
+        evidenceDir: join(f.root, "observe"), fetchOutcome
+      })).toMatchObject({ targets: 0, labeled: 0 });
+      expect(fetchOutcome).not.toHaveBeenCalled();
+      expect(state.listReviewFindings()).toEqual([]);
+      expect(state.listFindingOutcomeLabels()).toEqual([]);
+    } finally { state.close(); }
+  });
+
+  it("reclaims a crashed worker's row and reconciles an App marker on a later page", async () => {
+    const f = await fixture();
+    const request = f.enqueue();
+    const db = new DatabaseSync(f.statePath);
+    try {
+      db.prepare("update operator_comment_requests set error_class = ? where id = ?")
+        .run("worker:2147483647", request.id);
+    } finally { db.close(); }
+    const marker = `<!-- neondiff-operator-comment:${request.id} -->`;
+    f.rest.page = (page) => page === 1
+      ? Array.from({ length: 100 }, (_, index) => ({ id: index + 1, body: marker, user: { login: "human", type: "User" } }))
+      : [{ id: 900, body: marker, user, html_url: commentUrl }];
+    await f.runCycle();
+    expect(f.fetch.mock.calls.filter(([url]) => new URL(url).pathname.endsWith("/issues/7/comments"))).toHaveLength(2);
+    expect(f.postCalls).toHaveLength(0);
+    expect(f.status(request.id)).toMatchObject({ status: "posted", commentId: 900, commentUrl });
+  });
+
+  it("rechecks queued content and refuses unsafe bodies without making a GitHub request", async () => {
+    const f = await fixture();
+    const unsafe = ["ghp", "x".repeat(36)].join("_");
+    const request = f.enqueue(unsafe);
+    await f.runCycle();
+    expect(f.fetch).not.toHaveBeenCalled();
+    expect(f.status(request.id)).toMatchObject({ status: "refused", errorClass: "unsafe_body" });
+    expect(f.logs.filter((line) => line.includes("daemon_operator_comment_refused"))).toHaveLength(1);
+    expect(f.logs.join("\n")).not.toContain(unsafe);
+  });
+
+  it("checks that the daemon admission covers the target repo before commenting", async () => {
+    const f = await fixture();
+    const request = f.enqueue();
+    f.rest.visibility = "private";
+    await f.runCycle();
+    expect(f.postCalls).toHaveLength(0);
+    expect(f.status(request.id)).toMatchObject({ status: "refused", errorClass: "repo_admission" });
+  });
+
+  it.each([403, 404, 422])("marks GitHub %i terminal without retrying", async (status) => {
+    const f = await fixture();
+    const request = f.enqueue();
+    f.rest.postStatus = status;
+    await f.runCycle();
+    await f.runCycle();
+    expect(f.postCalls).toHaveLength(1);
+    expect(f.status(request.id)).toMatchObject({ status: "failed", errorClass: `github_${status}`, attempts: 1 });
+    expect(f.logs.filter((line) => line.includes("daemon_operator_comment_failed"))).toHaveLength(1);
+  });
+
+  it("keeps transient failures pending, then fails exactly at five attempts", async () => {
+    const f = await fixture();
+    const request = f.enqueue();
+    f.rest.postStatus = 503;
+    for (const attempts of [1, 2, 3, 4]) {
+      await f.runCycle();
+      expect(f.status(request.id)).toMatchObject({ status: "pending", errorClass: "github_503", attempts });
+    }
+    await f.runCycle();
+    await f.runCycle();
+    expect(f.postCalls).toHaveLength(5);
+    expect(f.status(request.id)).toMatchObject({ status: "failed", errorClass: "github_503", attempts: 5 });
+    expect(f.logs.filter((line) => line.includes("daemon_operator_comment_failed"))).toHaveLength(1);
+  });
+
+  it("leaves dry-run requests pending and drains at most five oldest requests per live cycle", async () => {
+    const f = await fixture();
+    const requests = [1, 2, 3, 4, 5, 6].map((number) => f.enqueue(body, number));
+    await f.runCycle(true);
+    expect(f.fetch).not.toHaveBeenCalled();
+    await f.runCycle();
+    expect(f.postCalls.map((call) => Number(call.path.split("/")[5]))).toEqual([1, 2, 3, 4, 5]);
+    expect(f.status(requests[5]!.id)?.status).toBe("pending");
+    await f.runCycle();
+    expect(f.status(requests[5]!.id)?.status).toBe("posted");
+  });
+
+  it("lets a later review cycle finish while an earlier comment is still posting", async () => {
+    const f = await fixture();
+    f.enqueue();
+    let release!: () => void;
+    f.rest.waitBeforePost = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await f.runCycle(false, false);
+      await vi.waitFor(() => expect(f.postCalls).toHaveLength(1));
+      expect(await f.runCycle(false, false)).toMatchObject({ ok: true, result: { reviewed: 1 } });
+      expect(f.order).toEqual(["review", "cooldown", "post", "review", "cooldown"]);
+    } finally { release(); }
+    await waitForOperatorCommentPass();
+    expect(f.postCalls).toHaveLength(1);
   });
 });
 

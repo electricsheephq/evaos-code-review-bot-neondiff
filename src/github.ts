@@ -663,11 +663,20 @@ export class GitHubApi {
       return { action: "updated", html_url: updated.html_url, id: updated.id };
     }
 
-    const created = await this.request<{ html_url?: string; id: number }>(
+    const { id, html_url } = await this.postIssueComment(input, token);
+    return { action: "created", id, html_url };
+  }
+
+  async createIssueComment(input: { repo: string; issueNumber: number; body: string }): Promise<{ html_url?: string; id: number }> {
+    const token = await this.getInstallationToken(input.repo);
+    return this.postIssueComment(input, token, false);
+  }
+
+  private async postIssueComment(input: { repo: string; issueNumber: number; body: string }, token: string, followRedirects = true) {
+    return this.request<{ html_url?: string; id: number }>(
       `/repos/${input.repo}/issues/${input.issueNumber}/comments`,
-      { method: "POST", token, body: { body: input.body } }
+      { method: "POST", token, body: { body: input.body }, followRedirects }
     );
-    return { action: "created", html_url: created.html_url, id: created.id };
   }
 
   private async findIssueCommentByMarker(
