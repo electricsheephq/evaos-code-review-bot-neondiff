@@ -115,15 +115,18 @@ so it applies only when `reviewScheduler.enabled` is `true`.
   Jobs are never failed, dropped or marked processed. After midnight they are
   leased again under that day's cap. A newer head on the same PR still retires
   the deferred older head, and the same head is not enqueued twice.
-- **Manual commands:** trusted `@bot review` style commands are neither capped
-  nor counted; they keep the existing `manualCommandReserve` behaviour.
+- **Commands:** every command-triggered review (`manual_command` queue jobs,
+  including admitted `publicCommands`, which keep their own cooldown) is neither
+  capped nor counted; they keep the existing `manualCommandReserve` behaviour.
 - **Observability:** each scheduler cycle reports `queue.dailyCapDeferred`.
   `budget-status` shows `daily_cap` in `delayedByReason`,
   `providerDeferred.waitingDailyCap` and `dailyCapReachedRepos`, and the human
   runtime inventory prints `daily cap reached for <repo>` while jobs wait. To
   count jobs waiting on the cap now:
-  `select repo, count(*) from review_queue_jobs where last_error like 'daily_cap_deferred_until=%' group by repo;`
+  `select repo, count(*) from review_queue_jobs where last_error like 'daily_cap_deferred_until=%' and datetime(next_eligible_at) > datetime('now') group by repo;`
   This is a point-in-time count: a job's `last_error` is replaced when it runs.
+  The PR's sticky status comment stays `queued` while it waits, and its
+  readiness reason carries the `daily_cap` text.
 - Deferred jobs still occupy `reviewScheduler.maxQueuedPerRepo` /
   `reviewScheduler.maxQueuedHeads` slots, so with `overflowAction: "skip"` a
   long-capped repo skips excess new heads sooner.
