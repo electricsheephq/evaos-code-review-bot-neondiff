@@ -356,6 +356,8 @@ export interface RepoProviderCooldownRecord {
 }
 
 export const PROVIDER_COOLDOWN_ERROR_PREFIX = "provider_rate_limit_cooldown_until=";
+/** Cooldown reason for a Codex ChatGPT usage limit; status reports it as "provider at usage limit until <time>" (#1267). */
+export const PROVIDER_USAGE_LIMIT_REASON = "provider_usage_limit";
 
 export interface ParsedProviderCooldownError {
   cooldownUntil: string;

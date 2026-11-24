@@ -401,6 +401,7 @@ function classifyProviderThrottle(error: string): ProviderThrottleCategory | und
   }
   if (
     normalized.includes("provider_quota_exhausted") ||
+    normalized.includes("provider_usage_limit") ||
     normalized.includes("usage limit reached") ||
     normalized.includes("weekly/monthly limit exhausted") ||
     normalized.includes("limit exhausted") ||

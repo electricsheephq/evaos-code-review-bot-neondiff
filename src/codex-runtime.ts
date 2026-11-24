@@ -242,6 +242,65 @@ export function parseCodexUsage(
   };
 }
 
+/** Marker the worker's provider classifier keys on for a Codex ChatGPT usage-limit exit (#1267). */
+export const CODEX_USAGE_LIMIT_MARKER = "codex_usage_limit";
+const CODEX_USAGE_LIMIT_LINE = /^ERROR:.*\b(?:hit|reached) your usage limit\b/i;
+export const CODEX_USAGE_LIMIT_MAX_WAIT_MS = 8 * 24 * 60 * 60_000;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * Codex's own usage-limit error, read only from the terminal stderr line: stderr also echoes the prompt
+ * and tool output, so a quoted limit line followed by a different final error is not a limit.
+ */
+export function detectCodexUsageLimit(stderr: string, now = new Date()): { line: string; resetsAt?: string } | undefined {
+  const lines = stderr.split(/\r?\n/).map((candidate) => candidate.trim()).filter(Boolean);
+  // Codex may finish with a "tokens used" footer (label line, then the count) after the error.
+  if (/^[\d,]+$/.test(lines.at(-1) ?? "") && /^tokens used$/i.test(lines.at(-2) ?? "")) lines.splice(-2);
+  const line = lines.at(-1);
+  if (!line || !CODEX_USAGE_LIMIT_LINE.test(line)) return undefined;
+  const resetsAt = parseCodexUsageLimitResetAt(line, now);
+  return { line: line.slice(0, 300), ...(resetsAt ? { resetsAt: resetsAt.toISOString() } : {}) };
+}
+
+/**
+ * "try again at 5:43 PM" is today's host-local time. A time-only reset that is already past, or that falls
+ * in a DST gap or fold, returns undefined: a stale clock or a doubled hour must not defer for a day. A
+ * dated form ("Nov 25th, 2026 5:43 PM") is taken as written. Anything unparseable or implausible returns
+ * undefined so the caller uses its bounded default.
+ */
+export function parseCodexUsageLimitResetAt(text: string, now = new Date()): Date | undefined {
+  const match = /try again at\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+)?(\d{1,2}):(\d{2})(?::\d{2})?(?:\s*([ap])\.?m\b)?/i.exec(text);
+  if (!match) return undefined;
+  const [, monthName, dayText, yearText, hourText, minuteText, meridiem] = match;
+  let hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (minute > 59) return undefined;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return undefined;
+    hour = (hour % 12) + (meridiem.toLowerCase() === "p" ? 12 : 0);
+  } else if (hour > 23) {
+    return undefined;
+  }
+  let resetsAt: Date;
+  if (monthName) {
+    const month = MONTHS.indexOf(monthName.toLowerCase());
+    const day = Number(dayText);
+    resetsAt = new Date(Number(yearText), month, day, hour, minute, 0, 0);
+    if (month < 0 || resetsAt.getMonth() !== month || resetsAt.getDate() !== day) return undefined;
+  } else {
+    resetsAt = new Date(now.getTime());
+    resetsAt.setHours(hour, minute, 0, 0);
+    if (resetsAt.getHours() !== hour || resetsAt.getMinutes() !== minute) return undefined;
+    const sameWallTime = (offsetMs: number) => {
+      const other = new Date(resetsAt.getTime() + offsetMs);
+      return other.getDate() === resetsAt.getDate() && other.getHours() === hour && other.getMinutes() === minute;
+    };
+    if ([-3_600_000, -1_800_000, 1_800_000, 3_600_000].some(sameWallTime)) return undefined;
+  }
+  const waitMs = resetsAt.getTime() - now.getTime();
+  return waitMs > 0 && waitMs <= CODEX_USAGE_LIMIT_MAX_WAIT_MS ? resetsAt : undefined;
+}
+
 export function buildCodexRuntimeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of CODEX_ENV_ALLOWLIST) {
@@ -717,6 +776,11 @@ export async function runCodexStructuredOutput<T>(input: {
     throw new Error(`codex_runtime_process_failure:${code} ${redactSecrets(result.error.message)}`);
   }
   if (result.status !== 0) {
+    const usageLimit = result.status === null ? undefined : detectCodexUsageLimit(stderr);
+    if (usageLimit) {
+      throw new Error(`codex_runtime_nonzero_exit: status=${result.status} ${CODEX_USAGE_LIMIT_MARKER} ` +
+        `resets_at=${usageLimit.resetsAt ?? "unknown"}; ${usageLimit.line}`);
+    }
     throw new Error(`codex_runtime_nonzero_exit: status=${result.status} ${stderr.slice(0, 1000)}`);
   }
 
