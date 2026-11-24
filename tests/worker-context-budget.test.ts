@@ -23,6 +23,7 @@ const severeRawResponse = vi.hoisted(() => ({ value: "" }));
 const zcodeRawResponseOverride = vi.hoisted(() => ({ value: "" }));
 const zcodeProvenanceOverride = vi.hoisted(() => ({ attempts: 1, degradedRecovery: false }));
 const lcmHydrationControl = vi.hoisted((): { error?: Error } => ({}));
+const headLineCountControl = vi.hoisted((): { error?: Error } => ({}));
 const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
 const severeWorktreePath = vi.hoisted(() => ({ value: "" }));
 const createdReviews = vi.hoisted((): Array<{
@@ -58,6 +59,10 @@ vi.mock("../src/git.js", async (importOriginal) => {
         patch: typeof file.patch === "string" ? file.patch : "@@ -1 +1 @@\n-old\n+new",
         patchComplete: true
       }));
+    }),
+    readHeadFileLineCounts: vi.fn(async ({ paths }: { paths: Iterable<string> }) => {
+      if (headLineCountControl.error) throw headLineCountControl.error;
+      return new Map([...paths].map(path => [path, 1]));
     }),
     assertGitClean: vi.fn()
   };
@@ -193,6 +198,7 @@ describe("worker context budget preflight", () => {
     zcodeProvenanceOverride.attempts = 1;
     zcodeProvenanceOverride.degradedRecovery = false;
     delete lcmHydrationControl.error;
+    delete headLineCountControl.error;
     severeCurrentWorktree.enabled = false;
     severeWorktreePath.value = "";
     createdReviews.length = 0;
@@ -205,7 +211,7 @@ describe("worker context budget preflight", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it.each(["disabled", "review", "issue", "verified-only", "verified-demote", "hydrated"])(
+  it.each(["disabled", "review", "issue", "verified-only", "verified-demote", "hydrated", "head-read-failed"])(
     "includes patchless findings in the posted review and gate evidence in %s mode",
     async (mode) => {
       const root = mkdtempSync(join(tmpdir(), "neondiff-patchless-"));
@@ -224,6 +230,7 @@ describe("worker context budget preflight", () => {
         };
       }
       zcodeFindingsByPath.set(file.filename, [severe ? p1Finding(file.filename, title) : finding(file.filename, title)]);
+      if (mode === "head-read-failed") headLineCountControl.error = new TypeError("fixture lookup failure");
 
       try {
         const repo = mode === "hydrated" ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
@@ -233,6 +240,13 @@ describe("worker context budget preflight", () => {
         expect(createdReviews[0]).toMatchObject({ event: "COMMENT", comments: [] });
         const evidenceDir = join(root, "evidence", localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
         const gate = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
+        if (mode === "head-read-failed") {
+          expect(gate).toMatchObject({ headLineCountsErrorClass: "TypeError", outsideDiffFindings: [],
+            dropped: [{ reason: "outside_diff_line_not_in_head_file" }],
+            summary: { dropReasonCounts: { outside_diff_line_not_in_head_file: 1 } } });
+          expect(createdReviews[0].body).not.toContain(title);
+          return;
+        }
         expect(gate).toMatchObject({
           comments: [], dropped: [],
           outsideDiffFindings: [{ path: file.filename, line: 1, title, severity: severe ? "P1" : "P2" }],
@@ -317,7 +331,7 @@ describe("worker context budget preflight", () => {
         expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).postVerification)
           .toMatchObject({ publishedOutsideDiffFindings: [], counts: { published: 0 } });
       } else {
-        expect(body).toContain("src/generated-0.ts:1</code> Generated fallback 0");
+        expect(body).toContain("P2 · <code>src/generated-0.ts:1</code> — Generated fallback 0");
       }
       expect(body).not.toContain("Detailed reasoning");
     } finally {
@@ -663,22 +677,26 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
-  it("runs the enabled shadow ensemble without changing the canonical posted review", async () => {
+  it.each(["inline", "hydrated patchless"])("runs the enabled shadow ensemble on %s findings without changing the canonical post", async (mode) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-shadow-"));
     roots.push(root);
     const config = minimalConfig(root);
     config.reviewEnsemble = { enabled: true, mode: "shadow" };
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(421, "9".repeat(40));
-    const files = [pullFile("src/a.ts", 200)];
-    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Anchor finding")]);
+    const patchless = mode === "hydrated patchless";
+    const repo = patchless ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
+    const path = "src/a.ts";
+    const files = [patchless ? { filename: path, status: "modified", changes: 1 } : pullFile(path, 200)];
+    const anchor = finding(path, "Anchor finding");
+    zcodeFindingsByPath.set(path, patchless ? [anchor, { ...anchor, title: "Past end of head", line: 2 }] : [anchor]);
     zcodeFindingsByPath.set("State and lifecycle review", [finding("src/a.ts", "State-only finding")]);
 
     const result = await reviewPull({
       config,
       github: githubForPull(pull, files),
       state,
-      repo: "electricsheephq/WorldOS",
+      repo,
       pull,
       dryRun: false,
       useZCode: true
@@ -690,26 +708,34 @@ describe("worker context budget preflight", () => {
     expect(zcodePrompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(1);
     expect(zcodePrompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(1);
     expect(createdReviews).toHaveLength(1);
-    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Anchor finding"]);
-    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(patchless ? [] : ["Anchor finding"]);
+    if (patchless) {
+      expect(createdReviews[0].body).toContain("Anchor finding");
+      expect(createdReviews[0].body).not.toContain("Past end of head");
+    }
+    expect(state.getProcessedReview(repo, pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
 
     const ensembleDir = join(
       root,
       "evidence",
       localDateFolder(),
-      "electricsheephq__WorldOS",
+      repo.replace("/", "__"),
       `pr-${pull.number}`,
       pull.head.sha,
       "review-ensemble"
     );
     expect(JSON.parse(readFileSync(join(ensembleDir, "manifest.json"), "utf8"))).toMatchObject({
       complete: true,
-      subject: { repo: "electricsheephq/WorldOS", pullNumber: pull.number, headSha: pull.head.sha }
+      subject: { repo, pullNumber: pull.number, headSha: pull.head.sha }
     });
     expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
       complete: true,
       postingEligible: false,
-      gate: { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
+      gate: patchless ? {
+        comments: [],
+        outsideDiffFindings: expect.arrayContaining([expect.objectContaining({ title: "State-only finding", line: 1 })]),
+        dropped: expect.arrayContaining([expect.objectContaining({ title: "Past end of head", reason: "outside_diff_line_not_in_head_file" })])
+      } : { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
     });
     state.close();
   });

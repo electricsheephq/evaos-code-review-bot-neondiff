@@ -36,35 +36,37 @@ const pull: PullRequestSummary = {
 };
 
 describe("walkthrough comment rendering", () => {
+  const literalCode = "if (a < b) start();\n";
+  const openFence = "```ts\n<details>\n";
+  const clippedCloserPadding = 1500 - "Fallback is skipped".length - "\n\n… (truncated)".length - 8 -
+    (literalCode + openFence + "\n``` ").length;
   it.each([
-    { opening: "<details>\n\n", closing: "\n\n</details>", kept: "&lt;details&gt;", cut: /<details>/ },
-    { opening: "```ts\n", closing: "\n```", kept: "\n```\n\n… (truncated)", cut: undefined },
-    { opening: "`", closing: "`", kept: "&#96;", cut: /`/ }
-  ])("keeps the next section visible when cutting $opening", ({ opening, closing, kept, cut }) => {
+    ["HTML", "<details>\n"],
+    ["indented closer", "```ts\n    ```\n<details>\n"],
+    ["list-item fence", "- Repro:\n\n  ```ts\n  <details>\n"],
+    ["tab before a fence", "\t~~~ts\n<details>\n"],
+    ["partly clipped closer with trailing spaces", openFence + "x".repeat(clippedCloserPadding) + "\n```" + " ".repeat(30)],
+    ["long tilde runs", "<details>\n" + "~".repeat(100) + "\n" + "~".repeat(800)]
+  ])("keeps the next section visible when clipping %s", (_name, opening) => {
     const finding = {
       severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
       path: "dist/bundle.js", line: 7, title: "Fallback is skipped", fingerprint: "fixture"
     };
-    const short = `${opening}Short description${closing}`;
+    const short = "```ts\nif (a < b) start();\n```";
     expect(formatOutsideDiffFindings([{ ...finding, body: short }]).lines.join("\n")).toContain(short);
-    const { lines } = formatOutsideDiffFindings([{ ...finding, body: `${opening}${"a".repeat(1600)}${closing}` }]);
-    expect(lines[2]).toContain(kept);
-    if (cut) expect(lines[2]).not.toMatch(cut);
-    expect(lines[2].slice(lines[2].indexOf("\n\n") + 2).length).toBeLessThanOrEqual(1500);
-  });
-
-  it("closes a clipped fence inside a list item at the list item's indentation and keeps its code literal", () => {
-    const finding = {
-      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
-      path: "dist/bundle.js", line: 7, title: "Fallback is skipped", fingerprint: "fixture"
-    };
-    const body = `- Repro:\n\n  \`\`\`ts\n  if (a < b) start();\n${"  x();\n".repeat(400)}  \`\`\``;
-    const { lines } = formatOutsideDiffFindings([{ ...finding, body }]);
-    const rendered = lines[2];
-    expect(rendered).toContain("  if (a < b) start();");
-    expect(rendered).not.toContain("&lt;");
-    expect(rendered.endsWith("\n  ```\n\n… (truncated)")).toBe(true);
-    expect(rendered).not.toMatch(/\n```/);
+    const input = [{ ...finding, body: `${literalCode}${opening}\n${"x".repeat(1600)}` }];
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS", pull, files: [], comments: [], outsideDiffFindings: input, dropped: [], event: "COMMENT"
+    });
+    const match = /\n(~{3,})\n([\s\S]*?)\n\1\n\n… \(truncated\)\n\n### Maintainer Analysis/.exec(walkthrough.body);
+    expect(match).not.toBeNull();
+    const [block, fence, excerpt] = match!;
+    expect(excerpt).toContain(literalCode);
+    if (opening.startsWith(openFence)) expect(excerpt.endsWith("\n``` ")).toBe(true);
+    expect(excerpt).toContain("<details>");
+    expect(walkthrough.body.replace(block, "")).not.toContain("<details>");
+    expect(walkthrough.body.slice(0, match!.index)).toContain("dist/bundle.js:7</code> — Fallback is skipped");
+    expect(fence.length).toBe(Math.max(3, 1 + Math.max(0, ...(excerpt.match(/~+/g) ?? []).map(run => run.length))));
   });
 
   it.each([["titles", 500], ["count", 220], ["count-line", 75]] as const)("matches the LCM walkthrough headline to its %s mode", (mode, remaining) => {
@@ -86,7 +88,7 @@ describe("walkthrough comment rendering", () => {
     expect(body).not.toContain("detail detail");
     if (mode === "titles") {
       expect(body).toContain("is listed below.");
-      expect(body).toContain("dist/bundle.js:7</code> Fallback is skipped");
+      expect(body).toContain("P1 · <code>dist/bundle.js:7</code> — Fallback is skipped");
       expect(publishedOutsideDiffFindings).toHaveLength(1);
     } else {
       expect(body.includes("was left out of this review's text to stay within the size limit.")).toBe(mode === "count");
@@ -94,6 +96,16 @@ describe("walkthrough comment rendering", () => {
       expect(body).not.toContain("listed below");
       expect(publishedOutsideDiffFindings).toEqual([]);
     }
+  });
+
+  it("includes the published severity and demotion note in compact entries", () => {
+    const finding = {
+      path: "dist/<bundle>.js", line: 7, severity: "P2" as const, severityDemotedFrom: "P1" as const,
+      confidence: 0.9, category: "runtime_correctness" as const, title: "Fallback\n<!-- hidden --> is skipped", body: "Details", fingerprint: "fixture"
+    };
+    expect(formatOutsideDiffFindings([finding], undefined, "titles").lines[2]).toBe(
+      "P2 · <code>dist/&lt;bundle&gt;.js:7</code> — Fallback [hidden comment removed] is skipped (lowered from P1: not re-checked)"
+    );
   });
 
   it("shows sanitized outside-diff findings even when there are no inline findings", () => {
@@ -128,10 +140,11 @@ describe("walkthrough comment rendering", () => {
     const { lines, listedCount } = formatOutsideDiffFindings(findings);
     const section = lines.join("\n");
     expect(section.length).toBeLessThanOrEqual(20_000);
-    const detail = lines.find((line) => line.endsWith("… (truncated)"))!.split("\n\n")[1];
+    const clipped = lines.find((line) => line.endsWith("… (truncated)"))!;
+    const detail = clipped.slice(clipped.indexOf("\n\n") + 2);
     expect(detail.length).toBeLessThanOrEqual(1_500);
     expect(detail.isWellFormed()).toBe(true);
-    expect(section).toMatch(/<\/code> [^\n]*Finding \d+ title/);
+    expect(section).toMatch(/<\/code> — Finding [1-9]\d+ title/);
     expect(listedCount).toBeLessThan(findings.length);
     expect(section).toContain(`${findings.length - listedCount} more findings are in the review evidence`);
   });

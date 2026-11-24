@@ -3,13 +3,37 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { hydratePullFilePatchesFromWorktree, planPullWorktreePaths, prepareBranchWorktree, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
+import { hydratePullFilePatchesFromWorktree, planPullWorktreePaths, prepareBranchWorktree, readHeadFileLineCounts, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
 
 describe("pull worktree path planning", () => {
   const roots: string[] = [];
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("counts regular text at the exact requested head and skips unreviewable paths", async () => {
+    const repoPath = mkdtempSync(join(tmpdir(), "neondiff-head-lines-"));
+    roots.push(repoPath);
+    const git = (...args: string[]) => execFileSync("git", ["-C", repoPath, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q");
+    const literalPath = "plain[1]\tfile\n.txt";
+    writeFileSync(join(repoPath, literalPath), "one\ntwo\n");
+    writeFileSync(join(repoPath, "plain1\tfile\n.txt"), "one\n");
+    writeFileSync(join(repoPath, "no-ending"), "one\ntwo\nthree", { mode: 0o755 });
+    writeFileSync(join(repoPath, "empty"), "");
+    writeFileSync(join(repoPath, "binary"), Buffer.from([1, 0, 10, 2]));
+    writeFileSync(join(repoPath, "too-large"), Buffer.alloc(10 * 1024 * 1024 + 1, 65));
+    symlinkSync("no-ending", join(repoPath, "link"));
+    git("add", ".");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "head");
+    const headSha = git("rev-parse", "HEAD");
+    writeFileSync(join(repoPath, literalPath), "newer head\n");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qam", "new head");
+    writeFileSync(join(repoPath, "no-ending"), "dirty checkout\n");
+    const paths = [literalPath, "no-ending", "empty", "binary", "too-large", "link", "missing"];
+    expect(await readHeadFileLineCounts({ repoPath, headSha, paths }))
+      .toEqual(new Map([[literalPath, 2], ["no-ending", 3], ["empty", 0]]));
   });
 
   it("rejects a review workRoot inside the protected live checkout", () => {

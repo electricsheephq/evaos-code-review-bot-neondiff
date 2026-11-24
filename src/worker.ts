@@ -18,7 +18,7 @@ import {
 import { configFilePaths, loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree, readHeadFileLineCounts } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -2134,6 +2134,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     }
+    // Hydrated patches can help the reviewer reason about a file without creating GitHub anchors.
+    const patchlessFiles = files.filter((file) => !file.patch?.trim());
+    const githubPatchlessPaths = new Set(patchlessFiles.map((file) => file.filename));
+    const gateFiles = reviewFiles.map((file) => githubPatchlessPaths.has(file.filename) ? { ...file, patch: undefined } : file);
+    const headPaths = patchlessFiles.filter((file) => file.status !== "removed").map((file) => file.filename);
+    let headLineCounts: ReadonlyMap<string, number> = new Map();
+    let headLineCountsErrorClass: string | undefined;
+    if (headPaths.length > 0) {
+      try {
+        headLineCounts = await readHeadFileLineCounts({ repoPath: worktree.path, headSha: pull.head.sha, paths: headPaths });
+      } catch (error) {
+        headLineCountsErrorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const reviewModeSelection = selectReviewMode({
       config,
       repo,
@@ -2315,9 +2329,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
               baseSha: pull.base.sha,
               headSha: pull.head.sha
             },
-            files: reviewFiles,
+            files: gateFiles,
             receipts: ensemble.receipts,
             gatePolicy: {
+              headLineCounts,
               maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
               maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
               repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
@@ -2397,11 +2412,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         priorThreadEvidence.errorClass = error instanceof Error ? error.name : "UnknownError";
       }
     }
-    // A hydrated patch can help the reviewer reason about a file without creating GitHub anchors.
-    const githubPatchlessPaths = new Set(files.filter((file) => !file.patch?.trim()).map((file) => file.filename));
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
-      files: reviewFiles.map((file) => githubPatchlessPaths.has(file.filename) ? { ...file, patch: undefined } : file),
+      files: gateFiles,
+      headLineCounts,
       droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
@@ -2469,6 +2483,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const gateEvidenceDropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDrops], config.confidenceCalibration?.publicDisplay);
     const gateEvidence = (publishedOutsideDiffFindings: OutsideDiffFinding[] = []) => ({
       ...gate,
+      headLineCountsErrorClass,
       dropped: gateEvidenceDropped,
       postVerification: {
         publishedOutsideDiffFindings, droppedOutsideDiffFindings, demotedOutsideDiffFindings, priorThreadDrops,
@@ -2814,7 +2829,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_processed";
     }
-    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review", outsideDiffCountMode?: OutsideDiffCountMode) =>
+    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review", outsideDiffCountMode?: OutsideDiffCountMode, sectionStarts?: number[]) =>
       buildWalkthroughComment({
         repo,
         pull,
@@ -2830,6 +2845,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         postIssueComment: config.walkthrough.postIssueComment,
         outsideDiffSection,
         outsideDiffCountMode,
+        sectionStarts,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
     if (config.walkthrough.enabled) {
@@ -2909,11 +2925,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo, outsideDiffFindings, model: buildReviewProviderMetadata(reviewConfig).model,
       publicConfidencePolicy: summaryInput.publicConfidencePolicy, assessment: assessmentBody,
       initialBody: reviewBodyAfterWalkthroughPost(plan),
-      render: (lines, countMode) => reviewBodyAfterWalkthroughPost({
-        ...plan,
-        summary: buildSummary({ ...summaryInput, outsideDiffSection: lines }),
-        walkthrough: plan.walkthrough && buildReviewWalkthrough(lines, countMode)
-      })
+      render: (lines, countMode, sectionStarts) => {
+        if (plan.walkthrough && (!plan.walkthrough.postIssueComment || !plan.walkthroughComment?.posted)) {
+          return buildReviewWalkthrough(lines, countMode, sectionStarts).body;
+        }
+        return buildSummary({ ...summaryInput, outsideDiffSection: lines });
+      }
     });
     assertReviewOutputSafe(escapeOrdinaryLcmReviewBody(postedBody.body));
     let review: Awaited<ReturnType<GitHubApi["createReview"]>>;

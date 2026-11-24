@@ -57,6 +57,17 @@ describe("diff coordinate validation", () => {
   });
 
   it.each([
+    ["text.ts", 2, true], ["text.ts", 3, false], ["text.ts", 0, false],
+    ["missing.ts", 1, false], ["binary.dat", 1, false], ["empty.ts", 1, false]
+  ] as const)("checks patchless coordinate %s:%i against the head", (path, line, exists) => {
+    const finding: Finding = { severity: "P2", path, line, title: "Invalid fallback", body: "The fallback is invalid.", confidence: 0.9 };
+    const result = validateFindingLocations([finding], [{ filename: path, status: "modified" }],
+      new Map([["text.ts", 2], ["empty.ts", 0]]));
+    expect(result.outsideDiff).toEqual(exists ? [finding] : []);
+    expect(result.dropped).toEqual(exists ? [] : [{ ...finding, reason: "outside_diff_line_not_in_head_file" }]);
+  });
+
+  it.each([
     [{ status: "renamed", changes: 0 }, false],
     [{ status: "copied", changes: 0 }, false],
     [{ status: "changed", changes: 0 }, false],

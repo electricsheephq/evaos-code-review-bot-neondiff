@@ -388,6 +388,34 @@ export async function hydratePullFilePatchesFromWorktree(input: {
   return hydrated;
 }
 
+/** Count lines in regular text blobs at the supplied commit, independent of the checkout. */
+export async function readHeadFileLineCounts(input: {
+  repoPath: string;
+  headSha: string;
+  paths: Iterable<string>;
+  gitCommandTimeoutMs?: number;
+}): Promise<ReadonlyMap<string, number>> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(input.headSha)) {
+    throw new Error("head file line counts require an exact commit SHA");
+  }
+  const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
+  const git = ["--no-replace-objects", "-c", `safe.directory=${input.repoPath}`, "-C", input.repoPath];
+  const counts = new Map<string, number>();
+  for (const path of input.paths) {
+    const { stdout: entry } = await run([...git, "ls-tree", "--full-tree", "-l", "-z", input.headSha, "--", `:(literal)${path}`], timeoutMs);
+    const metadata = /^100(?:644|755) blob [a-f0-9]+ +(\d+)\t/.exec(entry);
+    if (!metadata || Number(metadata[1]) > 10 * 1024 * 1024 || entry.slice(metadata[0].length) !== `${path}\0`) continue;
+    const { stdout: blob } = await runBuffer([...git, "cat-file", "blob", `${input.headSha}:${path}`], timeoutMs);
+    if (blob.subarray(0, 8192).includes(0)) continue;
+    let lines = blob.length > 0 && blob[blob.length - 1] !== 10 ? 1 : 0;
+    for (const byte of blob) {
+      if (byte === 10) lines += 1;
+    }
+    counts.set(path, lines);
+  }
+  return counts;
+}
+
 async function existsAsGitMirror(path: string, timeoutMs: number): Promise<boolean> {
   const result = await probe(["--git-dir", path, "rev-parse", "--is-bare-repository"], timeoutMs);
   return result?.stdout.trim() === "true";

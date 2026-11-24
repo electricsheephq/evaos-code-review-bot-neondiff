@@ -71,18 +71,29 @@ it("maps final comments and Codex usage to ReviewBench; an empty result succeeds
 });
 it("appends patchless content findings in both formats without displacing inline findings", async () => {
   const diff = join(root, "diff.patch"), config = join(root, "config.json");
-  fs.writeFileSync(diff, git("diff", `${base}...${head}`) +
-    "\ndiff --git a/bundle.js b/bundle.js\nBinary files a/bundle.js and b/bundle.js differ\n");
-  fs.writeFileSync(config, JSON.stringify({ reviewGate: { maxInlineComments: 1 } }));
+  fs.writeFileSync(join(repo, "bundle.js"), "line\n".repeat(7));
+  fs.writeFileSync(join(repo, "binary.dat"), Buffer.from([1, 0, 2]));
+  git("add", "bundle.js", "binary.dat"); git("commit", "-qm", "patchless fixtures"); head = git("rev-parse", "HEAD");
+  fs.writeFileSync(diff, git("diff", `${base}...${head}`, "--", "file.ts", "binary.dat") +
+    "\ndiff --git a/bundle.js b/bundle.js\nnew file mode 100644\n" +
+    "\ndiff --git a/missing.js b/missing.js\nnew file mode 100644\n");
+  fs.writeFileSync(config, JSON.stringify({ reviewGate: { maxInlineComments: 1 }, codexRuntime: { checkoutReads: false } }));
+  fs.appendFileSync(join(repo, "bundle.js"), "dirty extra line\n");
   findings = [
     { ...findings[0], confidence: 0.8 },
-    { ...findings[0], path: "bundle.js", line: 7, confidence: 0.99 }
+    { ...findings[0], path: "bundle.js", line: 7, confidence: 0.99 },
+    { ...findings[0], path: "bundle.js", line: 8, title: "Invalid extra line" },
+    { ...findings[0], path: "binary.dat", line: 1 },
+    { ...findings[0], path: "missing.js", line: 1 }
   ];
-  const input = { ...args(), "diff-file": diff, config };
+  const evidence = join(root, "evidence");
+  const input = { ...args(), "diff-file": diff, config, "evidence-dir": evidence, "keep-evidence": "true" };
   await runReviewLocal(input);
   expect(JSON.parse(fs.readFileSync(input.out, "utf8"))).toMatchObject([
     { path: "file.ts", side: "RIGHT" }, { path: "bundle.js", line: 7, placement: "body" }
   ]);
+  const gate = JSON.parse(fs.readFileSync(join(evidence, fs.readdirSync(evidence)[0], "deterministic-gate.json"), "utf8"));
+  expect(gate.summary.dropReasonCounts).toEqual({ outside_diff_line_not_in_head_file: 3 });
   await runReviewLocal({ ...input, format: "reviewbench" });
   expect(JSON.parse(fs.readFileSync(input.out, "utf8")).findings).toMatchObject([
     { file: "file.ts", start_line: 1, end_line: 1 }, { file: "bundle.js", start_line: 7, end_line: 7 }

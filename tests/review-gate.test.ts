@@ -52,6 +52,22 @@ describe("deterministic review gate", () => {
     });
   });
 
+  it("counts head-coordinate drops and retains the real outside-diff and inline lines", () => {
+    const binary = "dist/binary.dat", missing = "dist/missing.js";
+    const gate = applyDeterministicReviewGate({
+      files: [...files, unpatchedFile, ...[binary, missing].map(filename => ({ filename, status: "modified" }))],
+      findings: [unpatchedFinding, { ...unpatchedFinding, line: 8 },
+        { ...unpatchedFinding, path: binary }, { ...unpatchedFinding, path: missing },
+        { ...unpatchedFinding, path: files[0].filename, line: 2 }],
+      headLineCounts: new Map([[unpatchedFinding.path, 7]])
+    });
+    expect(gate.outsideDiffFindings).toMatchObject([{ path: unpatchedFinding.path, line: 7 }]);
+    expect(gate.comments).toMatchObject([{ path: files[0].filename, line: 2 }]);
+    expect(gate.dropped).toMatchObject([unpatchedFinding.path, binary, missing]
+      .map(path => ({ path, reason: "outside_diff_line_not_in_head_file" })));
+    expect(gate.summary.dropReasonCounts).toEqual({ outside_diff_line_not_in_head_file: 3 });
+  });
+
   it.each([[0.8, "REQUEST_CHANGES", 1], [0.95, "COMMENT", 0]] as const)(
     "applies the same escalation rules to either location with a confidence floor of %s",
     (floor, event, requestChangesEligible) => {

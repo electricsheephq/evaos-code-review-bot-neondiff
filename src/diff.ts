@@ -36,7 +36,9 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
   return byPath;
 }
 
-export function validateFindingLocations(findings: Finding[], files: PullFilePatch[]): {
+export function validateFindingLocations(
+  findings: Finding[], files: PullFilePatch[], headLineCounts?: ReadonlyMap<string, number>
+): {
   valid: Finding[];
   dropped: DroppedFinding[];
   outsideDiff: Finding[];
@@ -56,8 +58,14 @@ export function validateFindingLocations(findings: Finding[], files: PullFilePat
   for (const finding of findings) {
     const fileLines = rightLines.get(finding.path);
     if (!fileLines) {
-      if (pathsWithoutPatch.has(finding.path)) outsideDiff.push(finding);
-      else dropped.push({ ...finding, reason: "file_not_in_diff" });
+      if (!pathsWithoutPatch.has(finding.path)) {
+        dropped.push({ ...finding, reason: "file_not_in_diff" });
+      } else if (headLineCounts && !(Number.isInteger(finding.line) && finding.line >= 1 &&
+          finding.line <= (headLineCounts.get(finding.path) ?? 0))) {
+        dropped.push({ ...finding, reason: "outside_diff_line_not_in_head_file" });
+      } else {
+        outsideDiff.push(finding);
+      }
       continue;
     }
     if (!fileLines.has(finding.line)) {
