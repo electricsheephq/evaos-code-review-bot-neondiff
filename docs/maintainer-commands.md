@@ -23,6 +23,29 @@ Commands are disabled by default:
 Enable them only in a tracked beta promotion after GitHub App permissions and
 comment-volume behavior are verified.
 
+### Per-repo override
+
+An explicit `repoProfiles.repos` entry can override `enabled` and
+`trustedAuthors` for that repo only:
+
+```json
+{
+  "commands": { "enabled": false, "botMentions": ["@neondiff"], "trustedAuthors": [], "acknowledge": false },
+  "repoProfiles": {
+    "repos": {
+      "owner/name": { "commands": { "enabled": true, "trustedAuthors": ["100yenadmin"] } }
+    }
+  }
+}
+```
+
+The per-repo value wins and unset fields fall back to the global `commands`
+block. A per-repo `trustedAuthors` list replaces the global list for that repo
+(it is never merged), so it can be narrower. `botMentions`, `acknowledge` and
+`publicCommands` always come from the global block. Org fallbacks cannot set
+`commands`, and CI mode ignores per-repo overrides. `doctor` reports
+`commandsEnabledRepos`, the monitored repos with commands on.
+
 ## Supported Commands
 
 Each command must appear as its own trimmed line in a PR comment:

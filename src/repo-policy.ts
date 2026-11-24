@@ -1,4 +1,4 @@
-import type { BotConfig, RepoProfileConfig } from "./config.js";
+import type { BotConfig, CommandConfig, RepoProfileConfig, RepoProfilesConfig } from "./config.js";
 import type { PullFilePatch } from "./types.js";
 
 export type RepoProfileSource = "default" | "explicit" | "org_fallback";
@@ -279,6 +279,38 @@ export function resolveRepoProfile(config: BotConfig, repo: string): RepoProfile
   }
 
   return { allowed: false, reason: "repo_profile_missing" };
+}
+
+/**
+ * Resolves the `@neondiff` command policy for one repo. Only an explicit `repoProfiles.repos` entry
+ * can override it: set fields win, unset fields fall back to the global `commands` block, and a
+ * per-repo `trustedAuthors` list replaces (never extends) the global list. Every command consumer
+ * must read this instead of `config.commands` so one repo's override never applies to another.
+ */
+export function resolveRepoCommandConfig(config: BotConfig, repo: string): CommandConfig {
+  const override = findProfileByRepo(config.repoProfiles?.repos, repo)?.[1].commands;
+  if (!override) return config.commands;
+  return {
+    ...config.commands,
+    ...(override.enabled !== undefined ? { enabled: override.enabled } : {}),
+    ...(override.trustedAuthors !== undefined ? { trustedAuthors: [...override.trustedAuthors] } : {})
+  };
+}
+
+export function listCommandEnabledRepos(config: BotConfig, repos: string[]): string[] {
+  return repos.filter((repo) => resolveRepoCommandConfig(config, repo).enabled);
+}
+
+/** Drops per-repo command overrides, for callers (CI mode) that force command handling off. */
+export function withoutRepoCommandOverrides(registry: RepoProfilesConfig | undefined): RepoProfilesConfig | undefined {
+  if (!registry?.repos) return registry;
+  return {
+    ...registry,
+    repos: Object.fromEntries(Object.entries(registry.repos).map(([repo, profile]) => {
+      const { commands: _commands, ...rest } = profile;
+      return [repo, rest];
+    }))
+  };
 }
 
 export function buildRepoPolicySnapshot(config: BotConfig, repo: string): RepoPolicySnapshot {

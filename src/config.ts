@@ -191,6 +191,17 @@ export interface RepoProfileConfig {
   reviewScheduler?: RepoReviewSchedulerConfig;
   suggestedLabels?: string[];
   suggestedReviewers?: string[];
+  /** Per-repo `@neondiff` command override; explicit `repoProfiles.repos` entries only. */
+  commands?: RepoCommandConfig;
+}
+
+/**
+ * Unset fields fall back to the global `commands` block. A set `trustedAuthors` replaces the
+ * global list for this repo (never merged), so a per-repo list can be narrower than the global one.
+ */
+export interface RepoCommandConfig {
+  enabled?: boolean;
+  trustedAuthors?: string[];
 }
 
 export interface RepoReviewSchedulerConfig {
@@ -1810,7 +1821,23 @@ function validateProfileRecord(record: Record<string, RepoProfileConfig> | undef
     validatePreMergeChecks(profile.preMergeChecks, `${label}.${key}.preMergeChecks`);
     validateFinishingTouches(profile.finishingTouches, `${label}.${key}.finishingTouches`);
     validateRepoReviewSchedulerConfig(profile.reviewScheduler, `${label}.${key}.reviewScheduler`);
+    if (profile.commands !== undefined) {
+      // Org fallbacks would widen command handling to every repo in the org; only explicit repos may opt in.
+      if (!label.endsWith(".repos")) throw new Error(`${label}.${key}.commands is only supported under repoProfiles.repos`);
+      validateRepoCommandConfig(profile.commands, `${label}.${key}.commands`);
+    }
   }
+}
+
+function validateRepoCommandConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "enabled" && key !== "trustedAuthors") {
+      throw new Error(`${label} has unknown key "${key}"; expected only enabled or trustedAuthors`);
+    }
+  }
+  if (value.enabled !== undefined) validateBoolean(value.enabled, `${label}.enabled`);
+  validateOptionalStringArray(value.trustedAuthors, `${label}.trustedAuthors`);
 }
 
 function validateRepoReviewSchedulerConfig(value: unknown, label: string): void {

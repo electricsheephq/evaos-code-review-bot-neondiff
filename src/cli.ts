@@ -117,7 +117,7 @@ import {
   getProtectedCheckoutRoots,
   resolvePathFollowingExistingSymlinks
 } from "./path-safety.js";
-import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { buildRepoPolicySnapshot, listCommandEnabledRepos, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
@@ -489,6 +489,7 @@ async function main(): Promise<void> {
       issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
     const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
+    const commandsEnabledRepos = listCommandEnabledRepos(config, monitoredRepos);
     console.log(stringifyRedactedJson({
       ok,
       pilotRepos: config.pilotRepos,
@@ -500,7 +501,8 @@ async function main(): Promise<void> {
       reviewerSessions: config.reviewerSessions,
       repoMemory: config.repoMemory,
       issueEnrichment,
-      commandsEnabled: config.commands.enabled,
+      commandsEnabled: config.commands.enabled || commandsEnabledRepos.length > 0,
+      commandsEnabledRepos,
       statePath: config.statePath,
       workRoot: config.workRoot,
       ...(codexRuntime
@@ -2566,7 +2568,7 @@ async function runRawDaemon(args: ParsedArgs): Promise<void> {
       pilotRepos: config.pilotRepos,
       monitoredRepos,
       canaryPulls: config.canaryPulls ?? [],
-      commandsEnabled: config.commands.enabled,
+      commandsEnabled: config.commands.enabled || listCommandEnabledRepos(config, monitoredRepos).length > 0,
       reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
       issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
       worktreeCleanupDue:
