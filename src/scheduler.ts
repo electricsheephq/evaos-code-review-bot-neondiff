@@ -2707,7 +2707,7 @@ function providerCooldownFromError(config: BotConfig, error: unknown, now: Date)
   const classification = classifyProviderError(error);
   if (!classification.cooldown) return undefined;
   return {
-    cooldownUntil: new Date(now.getTime() + providerCooldownDurationMs(config, classification)).toISOString(),
+    cooldownUntil: new Date(now.getTime() + providerCooldownDurationMs(config, classification, 1, 0, now)).toISOString(),
     reason: classification.reason
   };
 }

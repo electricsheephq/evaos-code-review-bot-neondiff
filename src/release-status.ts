@@ -12,6 +12,7 @@ import {
   normalizeDaemonReviewLane,
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
+  PROVIDER_USAGE_LIMIT_REASON,
   type DaemonReviewLane
 } from "./state.js";
 import { buildZCodeTimeoutInspectCommand, summarizeZCodeTimeoutErrors } from "./zcode-timeout.js";
@@ -56,6 +57,8 @@ export interface ReleaseDatabaseStatus {
   coveredByActiveQueueRetryProviderCooldownCount?: number;
   retryableExpiredProviderCooldownCount?: number;
   providerThrottleState?: "none" | "active" | "expired_retryable";
+  /** Latest active usage-limit cooldown end (#1267); these deferrals are not failed queue jobs. */
+  providerUsageLimitUntil?: string;
   reviewQueueJobCount?: number;
   queuedReviewQueueJobCount?: number;
   leasedReviewQueueJobCount?: number;
@@ -404,9 +407,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     {
       name: "provider_cooldown_backlog",
       ok: expiredProviderCooldownOk,
-      detail: expiredProviderCooldownOk
+      detail: describeProviderUsageLimit(input.database) + (expiredProviderCooldownOk
         ? describeProviderCooldownBacklog(input.database, providerThrottleState)
-        : `${describeProviderCooldownBacklog(input.database, providerThrottleState)}; retry: ${retryProviderCooldownCommand}`
+        : `${describeProviderCooldownBacklog(input.database, providerThrottleState)}; retry: ${retryProviderCooldownCommand}`)
     },
     {
       name: "queue_no_failed_jobs",
@@ -2790,6 +2793,11 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       })
       .filter((cooldown): cooldown is ProviderCooldownCandidate => Boolean(cooldown));
     const activeGlobalProviderCooldowns = readActiveGlobalProviderCooldowns(db, now);
+    const providerUsageLimitUntil = activeGlobalProviderCooldowns
+      .filter((cooldown) => cooldown.reason === PROVIDER_USAGE_LIMIT_REASON)
+      .map((cooldown) => cooldown.cooldownUntil)
+      .sort((left, right) => Date.parse(left) - Date.parse(right))
+      .at(-1);
     const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => {
       const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
       return !Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now.getTime();
@@ -2837,6 +2845,7 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       coveredByActiveQueueRetryProviderCooldownCount,
       retryableExpiredProviderCooldownCount,
       providerThrottleState,
+      ...(providerUsageLimitUntil ? { providerUsageLimitUntil } : {}),
       reviewQueueJobCount: reviewQueue.total,
       queuedReviewQueueJobCount: reviewQueue.queued,
       leasedReviewQueueJobCount: reviewQueue.leased,
@@ -3305,20 +3314,24 @@ function countExpiredProviderCooldownsCoveredByActiveQueueRetry(
   }).length;
 }
 
-function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{ repo: string; cooldownUntil: string }> {
+function readActiveGlobalProviderCooldowns(db: DatabaseSync, now: Date): Array<{ repo: string; cooldownUntil: string; reason: string }> {
   const hasTable = db
     .prepare("select 1 from sqlite_master where type = 'table' and name = 'repo_provider_cooldowns' limit 1")
     .get();
   if (!hasTable) return [];
   const rows = db
-    .prepare("select repo, cooldown_until from repo_provider_cooldowns")
-    .all() as unknown as Array<{ repo: string; cooldown_until: string }>;
+    .prepare("select repo, cooldown_until, reason from repo_provider_cooldowns")
+    .all() as unknown as Array<{ repo: string; cooldown_until: string; reason: string }>;
   return rows
-    .map((row) => ({ repo: row.repo, cooldownUntil: row.cooldown_until }))
+    .map((row) => ({ repo: row.repo, cooldownUntil: row.cooldown_until, reason: row.reason }))
     .filter((row) => {
       const cooldownUntilMs = Date.parse(row.cooldownUntil);
       return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now.getTime();
     });
+}
+
+function describeProviderUsageLimit(database: ReleaseDatabaseStatus): string {
+  return database.providerUsageLimitUntil ? `provider at usage limit until ${database.providerUsageLimitUntil}; ` : "";
 }
 
 function describeProviderCooldownCounts(database: ReleaseDatabaseStatus): string {
