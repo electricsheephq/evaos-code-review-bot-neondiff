@@ -112,6 +112,7 @@ import {
   isActivationBaselineProcessedReview,
   autoRetryOwnsGrant,
   parseProviderCooldownError,
+  PROVIDER_USAGE_LIMIT_REASON,
   ReviewStateStore,
   type ProcessedStatus,
   type ReviewQueueJobState,
@@ -142,7 +143,7 @@ import {
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
+import { CODEX_USAGE_LIMIT_MARKER, resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
@@ -354,6 +355,8 @@ export interface ProviderErrorClassification {
   providerCode?: string;
   providerRequestId?: string;
   retryAfterMs?: number;
+  /** Absolute reset time a provider printed (Codex usage limit, #1267); bounds the quota cooldown. */
+  resetsAt?: string;
   reason: string;
   retryable: boolean;
   cooldown: boolean;
@@ -4096,7 +4099,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
   const retryAttempt = nextProviderCooldownRetryAttempt(previous?.error, classification);
   const jitterMs = providerCooldownJitterMs(input.config, classification, retryAttempt);
-  const durationMs = providerCooldownDurationMs(input.config, classification, retryAttempt, jitterMs);
+  const durationMs = providerCooldownDurationMs(input.config, classification, retryAttempt, jitterMs, now);
   const cooldownUntil = new Date(now.getTime() + durationMs);
   // The untrusted-author lane uses its own provider: its 429 defers only this head (through the head's cooldown
   // record below), never the repository's other reviews.
@@ -4370,6 +4373,8 @@ export function classifyAutoRetry(error: unknown): { retryable: boolean; reason:
     { retryable: false, reason: "unclassified" };
 }
 
+const CODEX_USAGE_LIMIT_ERROR = new RegExp(`^codex_runtime_nonzero_exit: status=\\S+ ${CODEX_USAGE_LIMIT_MARKER} resets_at=([^;\\s]+);`);
+
 export function classifyProviderError(error: unknown): ProviderErrorClassification {
   const message = stripFetchCauseChain(error instanceof Error ? error.message : String(error));
   const normalized = message.toLowerCase();
@@ -4400,6 +4405,15 @@ export function classifyProviderError(error: unknown): ProviderErrorClassificati
     ...(providerRequestId ? { providerRequestId } : {}),
     ...(retryAfterMs ? { retryAfterMs } : {})
   };
+  // Anchored on the runtime's own prefix so prompt or diff text in an error message cannot match.
+  const usageLimit = CODEX_USAGE_LIMIT_ERROR.exec(message);
+  if (usageLimit) {
+    const resetsAt = Number.isFinite(Date.parse(usageLimit[1] ?? "")) ? usageLimit[1] : undefined;
+    return {
+      ...base, ...(resetsAt ? { resetsAt } : {}),
+      category: "quota_exhausted", reason: PROVIDER_USAGE_LIMIT_REASON, retryable: false, cooldown: true
+    };
+  }
   if (quotaExhausted) {
     return { ...base, category: "quota_exhausted", reason: "provider_quota_exhausted", retryable: false, cooldown: true };
   }
@@ -4428,7 +4442,8 @@ export function providerCooldownDurationMs(
   config: BotConfig,
   classification: ProviderErrorClassification,
   retryAttempt = 1,
-  jitterMs = 0
+  jitterMs = 0,
+  now = new Date()
 ): number {
   if (classification.category === "request_rate_limit") return config.providerCooldown.requestRateLimitDurationMs;
   if (classification.category === "overloaded") {
@@ -4440,7 +4455,10 @@ export function providerCooldownDurationMs(
     );
     return Math.min(config.providerCooldown.overloadBackoffMaxDurationMs, exponential + boundedJitter);
   }
-  if (classification.category === "quota_exhausted") return config.providerCooldown.quotaDurationMs;
+  if (classification.category === "quota_exhausted") {
+    const untilResetMs = classification.resetsAt ? Date.parse(classification.resetsAt) - now.getTime() : Number.NaN;
+    return untilResetMs > 0 ? untilResetMs : config.providerCooldown.quotaDurationMs;
+  }
   return config.providerCooldown.durationMs;
 }
 

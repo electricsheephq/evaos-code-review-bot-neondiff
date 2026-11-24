@@ -874,7 +874,10 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     `cooldowns: expired=${inventory.summary.expiredProviderCooldowns}` +
       ` retryable=${inventory.summary.retryableExpiredProviderCooldowns}` +
       ` covered=${inventory.summary.coveredExpiredProviderCooldowns}` +
-      ` activeRepo=${inventory.summary.activeRepoCooldowns}`,
+      ` activeRepo=${inventory.summary.activeRepoCooldowns}` +
+      (inventory.release.database.providerUsageLimitUntil
+        ? ` provider at usage limit until ${inventory.release.database.providerUsageLimitUntil}`
+        : ""),
     `issueEnrichment: config=${inventory.summary.issueEnrichmentState ?? "unknown"}` +
       ` runtime=${inventory.summary.issueEnrichmentRuntimeState ?? "unknown"}` +
       ` failed=${inventory.issueEnrichmentRuntime?.summary.failed ?? 0}` +
