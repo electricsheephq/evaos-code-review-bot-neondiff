@@ -122,6 +122,10 @@ it("keeps a cited text finding when Git diffs the file as binary in a checkout o
   findings = [{ ...findings[0], path: "text.dat", line: 2,
     evidence: [{ path: "text.dat", startLine: 1, endLine: 2, excerpt: "after\nsecond line" }] }];
 
+  const globalConfig = join(root, "empty.gitconfig");
+  fs.writeFileSync(globalConfig, "");
+  vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
   try {
     await runReviewLocal(args());

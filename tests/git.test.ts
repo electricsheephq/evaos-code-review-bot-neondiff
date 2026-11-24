@@ -37,6 +37,10 @@ describe("pull worktree path planning", () => {
     expect(await readHeadFileLineCounts({ repoPath, headSha, paths }))
       .toEqual(new Map([[literalPath, 2], ["no-ending", 3], ["empty", 0]]));
 
+    const globalConfig = join(repoPath, "empty.gitconfig");
+    writeFileSync(globalConfig, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
     const unowned = { repoPath, headSha, paths: [literalPath] };
     await expect(readHeadFileLineCounts(unowned)).rejects.toThrow(/dubious ownership/);

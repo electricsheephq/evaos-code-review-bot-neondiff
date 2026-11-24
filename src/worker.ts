@@ -1651,6 +1651,16 @@ export function recordRestrictedReviewUnavailable(
   return reason;
 }
 
+function completeShownPatch(original: string, rendered: string): string {
+  if (rendered === original) return rendered;
+  // A clipped patch ends with a newline followed by the truncation notice.
+  const cut = rendered.lastIndexOf("\n");
+  if (cut < 0) return "";
+  const prefix = rendered.slice(0, cut);
+  if (cut === original.length || original[cut] === "\n") return prefix;
+  return prefix.slice(0, prefix.lastIndexOf("\n") + 1);
+}
+
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
   let autoRetryGrant: ReturnType<ReviewStateStore["getAutoRetry"]>;
@@ -2280,15 +2290,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     const promptFileGroups = contextBudget.mode === "chunk" ? contextBudget.chunks.map((chunk) => chunk.files) : [reviewFiles];
     const executedReviewPrompts = contextBudget.mode === "chunk" ? promptFileGroups.map(promptForFiles) : [prompt];
-    const shownPatches = githubPatchlessPaths.size === 0 ? [] : promptFileGroups.flatMap((filesForPrompt) =>
+    const shownPatchesForFiles = (filesForPrompt: PullFilePatch[]) =>
       renderReviewFilePatches(filesForPrompt, config.zcode.maxPatchBytes).flatMap(({ file, patch }) => {
         if (!githubPatchlessPaths.has(file.filename) || !file.patch) return [];
-        if (patch === file.patch) return [file];
-        // When clipped, leave out the truncation notice and any partial row before it.
-        const prefix = patch.slice(0, Math.max(0, patch.lastIndexOf("\n")));
-        return [{ ...file, patch: prefix.slice(0, prefix.lastIndexOf("\n") + 1) }];
-      })
-    );
+        return [{ ...file, patch: completeShownPatch(file.patch, patch) }];
+      });
+    const shownPatches = githubPatchlessPaths.size === 0 ? [] : promptFileGroups.flatMap(shownPatchesForFiles);
     const outsideDiffShownLines = collectRightSideLines(shownPatches, { requireHunkLinePrefixes: true });
     const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile, {
       reviewPrompts: executedReviewPrompts
@@ -2333,9 +2340,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (zcodeExecution.ensemblePromise) {
       ensembleEvidencePromise = zcodeExecution.ensemblePromise
         .then((ensemble) => {
-          // Shadow leaves plan their own prompt budgets, independent of the canonical review.
+          // A shadow leaf can show a file alone, but still uses the same per-file cap.
           const shadowShownLines = collectRightSideLines(
-            reviewFiles.filter((file) => githubPatchlessPaths.has(file.filename)),
+            reviewFiles.flatMap((file) => githubPatchlessPaths.has(file.filename) ? shownPatchesForFiles([file]) : []),
             { requireHunkLinePrefixes: true }
           );
           const shadowPacket = reduceReviewEnsemble({

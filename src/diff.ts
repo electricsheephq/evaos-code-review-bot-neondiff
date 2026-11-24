@@ -42,7 +42,13 @@ export function collectRightSideLines(
 }
 
 export function isPatchlessChangedFile(file: PullFilePatch): boolean {
-  return !file.patch?.split("\n").some((line) => HUNK_HEADER.test(line)) && (
+  const lines = (file.patch ?? "").split("\n");
+  if (lines.some((line) => HUNK_HEADER.test(line))) return false;
+  const modeChange = lines.some((line) => line.startsWith("old mode ")) &&
+    lines.some((line) => line.startsWith("new mode "));
+  const binary = lines.some((line) => line.startsWith("Binary files ") || line === "GIT binary patch");
+  if (modeChange && !binary) return false;
+  return (
     file.status === "added" || file.status === "modified" ||
     ((file.status === "renamed" || file.status === "copied") &&
       ((file.changes ?? 0) > 0 || (file.additions ?? 0) + (file.deletions ?? 0) > 0))

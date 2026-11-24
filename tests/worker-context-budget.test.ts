@@ -180,7 +180,7 @@ const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullIm
   },
   licenseAdmission: input.licenseAdmission ?? testLicenseAdmission
 });
-const { buildReviewPrompt } = await import("../src/zcode.js");
+const { buildReviewPrompt, renderReviewFilePatches } = await import("../src/zcode.js");
 
 describe("worker context budget preflight", () => {
   const roots: string[] = [];
@@ -690,7 +690,35 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
-  it.each(["inline", "hydrated patchless", "hydrated patchless with truncation"])("runs the enabled shadow ensemble on %s findings without changing the canonical post", async (mode) => {
+  it.each([
+    { repo: "ElectricSheepHQ/LCM-X", notice: "", showsMode: true },
+    { repo: "ElectricSheepHQ/LCM-X", notice: "\nBinary files a/tool and b/tool differ", showsMode: false },
+    { repo: "ElectricSheepHQ/LCM-X", notice: "\nGIT binary patch\nliteral 1", showsMode: false },
+    { repo: "electricsheephq/WorldOS", notice: "", showsMode: false }
+  ])("renders a patchless GitHub file in $repo with binary notice '$notice'", async ({ repo, notice, showsMode }) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-mode-prompt-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "9".repeat(40));
+    const modeLines = "old mode 100755\nnew mode 100644";
+    lcmHydrationControl.patch = `diff --git a/tool b/tool\n${modeLines}${notice}`;
+    const files = [{ filename: "tool", status: "modified", changes: 0 }];
+
+    try {
+      expect(await reviewPull({ config, github: githubForPull(pull, files), state, repo, pull, dryRun: true, useZCode: true }))
+        .toBe("reviewed");
+      if (showsMode) {
+        expect(zcodePrompts[0]).toContain(`\n${modeLines}\n`);
+      } else {
+        expect(zcodePrompts[0]).toContain("### tool\n\n```diff\n[binary or too large for GitHub patch]\n```");
+      }
+    } finally {
+      state.close();
+    }
+  });
+
+  it.each(["inline", "hydrated patchless", "cut at row end", "cut mid-row"])("runs the enabled shadow ensemble on %s findings without changing the canonical post", async (mode) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-shadow-"));
     roots.push(root);
     const config = minimalConfig(root);
@@ -698,25 +726,38 @@ describe("worker context budget preflight", () => {
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(421, "9".repeat(40));
     const patchless = mode !== "inline";
-    const truncated = mode === "hydrated patchless with truncation";
+    const truncated = mode.startsWith("cut ");
     const repo = patchless ? "ElectricSheepHQ/LCM-X" : "electricsheephq/WorldOS";
     const path = "src/a.ts";
-    const files = [patchless ? { filename: path, status: "modified", changes: 1 } : pullFile(path, 200)];
+    const file = { filename: path, status: "modified", changes: 1 };
+    const precedingFile = pullFile("src/first.ts", 80);
+    const files = truncated ? [precedingFile, file] : [patchless ? file : pullFile(path, 200)];
     const anchor = finding(path, "Anchor finding");
     const specialist = finding(path, "State-only finding");
     const missingCitation = { ...anchor, title: "Outside shown patch", line: 4 };
     const cited = withCheckoutCitation({ ...anchor, title: "Covered by citation", line: 4 });
     const pastEnd = { ...anchor, title: "Past end of head", line: 6 };
     const hidden = { ...anchor, title: "Unshown line", line: truncated ? 3 : 2 };
+    const shadowOnly = { ...anchor, title: "Within per-file budget", line: 2 };
     const shownPatch = "@@ -1 +1 @@\n---old\n+fixture checkout line";
+    const secondHunk = "\n@@ -2,2 +2,2 @@\n-old\n-old\n+shad";
     if (patchless) {
-      lcmHydrationControl.patch = truncated ? `${shownPatch}\n@@ -3 +3 @@\n-old\n+hidden\n` : `${shownPatch}\n`;
+      lcmHydrationControl.patch = truncated ? `${shownPatch}${secondHunk}ow row\n+hidden ${"x".repeat(200)}\n` : `${shownPatch}\n`;
       headLineCountControl.lines = 5;
     }
-    if (truncated) config.zcode.maxPatchBytes = shownPatch.length + 1;
+    const canonicalPrefix = mode === "cut mid-row" ? `${shownPatch}${secondHunk}` : shownPatch;
+    if (truncated) {
+      config.zcode.maxPatchBytes = precedingFile.patch.length + canonicalPrefix.length;
+      const [{ patch }] = renderReviewFilePatches([{ ...file, patch: lcmHydrationControl.patch }], config.zcode.maxPatchBytes);
+      expect(patch).toContain("+shadow row\n");
+      expect(patch).toContain("+hidden ");
+      expect(patch).not.toContain(`+hidden ${"x".repeat(200)}\n`);
+      expect(patch).toContain("[patch truncated to fit prompt budget]");
+    }
     const checkout = patchless ? await mockCheckoutReview(config, [cited], (prompt) => ({
       findings: [
         anchor, missingCitation, cited, pastEnd, hidden,
+        ...(truncated ? [shadowOnly] : []),
         ...(prompt.includes("State and lifecycle review") ? [specialist] : [])
       ]
     })) : undefined;
@@ -749,17 +790,19 @@ describe("worker context budget preflight", () => {
     ];
     if (patchless) {
       for (const prompt of prompts) {
-        expect(prompt).toContain(`### ${path}\n\n` + "```diff\n" + shownPatch + "\n");
+        expect(prompt).toContain(`### ${path}\n\n` + "```diff\n" + canonicalPrefix + "\n");
         expect(prompt).not.toContain("[binary or too large for GitHub patch]\n```");
         expect(prompt).not.toContain("+hidden");
-        if (truncated) expect(prompt).toContain("[patch truncated to fit prompt budget]");
+        if (truncated) expect(prompt).toContain(`${canonicalPrefix}\n[patch truncated to fit prompt budget]`);
       }
       expect(createdReviews[0].body).toContain("Anchor finding");
       expect(createdReviews[0].body).toContain(cited.title);
       const evidenceDir = join(root, "evidence", localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
       const gate = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
       expect(gate.outsideDiffFindings).toMatchObject([{ title: anchor.title, line: 1 }, { title: cited.title, line: 4 }]);
-      expect(gate.dropped).toMatchObject(dropped);
+      expect(gate.dropped).toMatchObject([
+        ...dropped, ...(truncated ? [{ title: shadowOnly.title, reason: "outside_diff_without_evidence" }] : [])
+      ]);
     }
     expect(state.getProcessedReview(repo, pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
 
@@ -782,9 +825,9 @@ describe("worker context budget preflight", () => {
       gate: patchless ? {
         comments: [],
         outsideDiffFindings: expect.arrayContaining([
-          anchor, specialist, cited, ...(truncated ? [hidden] : [])
+          anchor, specialist, cited, ...(truncated ? [shadowOnly] : [])
         ].map(({ title, line }) => expect.objectContaining({ title, line }))),
-        dropped: expect.arrayContaining((truncated ? dropped.slice(0, 2) : dropped).map(finding => expect.objectContaining(finding)))
+        dropped: expect.arrayContaining(dropped.map(finding => expect.objectContaining(finding)))
       } : { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
     });
     state.close();
