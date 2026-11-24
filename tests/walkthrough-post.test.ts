@@ -44,6 +44,34 @@ describe("walkthrough comment posting", () => {
     expect(result.body).toBe(appendReviewAttribution(prose, "fixture"));
   });
 
+  it("keeps the full base walkthrough when the outside-diff headline puts the compact render over the limit", () => {
+    const repo = "owner/repo";
+    const model = "fixture";
+    const outsideDiffFindings = [{
+      path: "src/generated.ts", line: 7, title: "Fallback title", body: "Full detail ".repeat(125),
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+    }];
+    let summary = "x";
+    const render: Parameters<typeof buildReviewBodyForPost>[0]["render"] = (lines, _countMode, sectionStarts) =>
+      buildWalkthroughComment({
+        repo, files: [], comments: [], dropped: [], event: "COMMENT", sectionStarts,
+        outsideDiffFindings, outsideDiffSection: lines,
+        pull: { number: 42, title: "Fixture", draft: false, html_url: "", head: { sha: "a".repeat(40), ref: "feature" },
+          base: { sha: "b".repeat(40), ref: "main", repo: { full_name: repo } } },
+        modelSummary: { changedBehavior: [summary], invariants: [], evidence: [], limitations: [], noFindingRationale: "fixture" }
+      }).body;
+    // Leave room for the compact count line by itself, but not for the headline that accompanies it.
+    summary = "x".repeat(64_945 - appendReviewAttribution(render([]), model).length + 1);
+    const base = appendReviewAttribution(render([]), model);
+    const result = buildReviewBodyForPost({ repo, model, outsideDiffFindings, render });
+
+    expect(result.body).toContain("### Pre-merge checklist");
+    expect(result.body).not.toContain("(truncated");
+    expect(result.body.length).toBeLessThanOrEqual(65_000);
+    expect(result.body).toBe(base);
+    expect(result.publishedOutsideDiffFindings).toEqual([]);
+  });
+
   it.each(["owner/repo", "ElectricSheepHQ/LCM-X"])("keeps a trailing walkthrough marker when truncating prose for %s", async (repo) => {
     const marker = buildWalkthroughMarker({ repo, pullNumber: 42 });
     const prose = `<details>\n\n\`\`\`ts\nif (a < b) start();\n${"a".repeat(66_000)}\n\`\`\`\n\n</details>\n${marker}`;

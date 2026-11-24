@@ -781,8 +781,10 @@ describe("worker context budget preflight", () => {
       postingEligible: false,
       gate: patchless ? {
         comments: [],
-        outsideDiffFindings: expect.arrayContaining([anchor, specialist, cited].map(({ title, line }) => expect.objectContaining({ title, line }))),
-        dropped: expect.arrayContaining(dropped.map(finding => expect.objectContaining(finding)))
+        outsideDiffFindings: expect.arrayContaining([
+          anchor, specialist, cited, ...(truncated ? [hidden] : [])
+        ].map(({ title, line }) => expect.objectContaining({ title, line }))),
+        dropped: expect.arrayContaining((truncated ? dropped.slice(0, 2) : dropped).map(finding => expect.objectContaining(finding)))
       } : { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
     });
     state.close();

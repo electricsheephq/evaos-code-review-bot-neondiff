@@ -354,7 +354,8 @@ export async function hydratePullFilePatchesFromWorktree(input: {
       .filter((path): path is string => Boolean(path))
       .map((path) => `:(literal)${path}`);
     const patch = (await run([
-      "-C", input.worktreePath, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--unified=3",
+      "-C", input.worktreePath, "-c", "diff.suppressBlankEmpty=false",
+      "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--unified=3",
       mergeBase, input.headSha, "--", ...pathspecs
     ], timeoutMs)).stdout;
     const numstat = (await run([
@@ -393,6 +394,7 @@ export async function readHeadFileLineCounts(input: {
   repoPath: string;
   headSha: string;
   paths: Iterable<string>;
+  trustRepoPath?: boolean;
   gitCommandTimeoutMs?: number;
 }): Promise<ReadonlyMap<string, number>> {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(input.headSha)) {
@@ -400,6 +402,7 @@ export async function readHeadFileLineCounts(input: {
   }
   const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   const git = ["--no-replace-objects", "-C", input.repoPath];
+  if (input.trustRepoPath) git.push("-c", `safe.directory=${input.repoPath}`);
   const counts = new Map<string, number>();
   for (const path of input.paths) {
     const { stdout: entry } = await run([...git, "ls-tree", "--full-tree", "-l", "-z", input.headSha, "--", `:(literal)${path}`], timeoutMs);

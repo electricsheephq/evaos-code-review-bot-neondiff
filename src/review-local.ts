@@ -177,7 +177,7 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
     let headLineCountsErrorClass: string | undefined;
     if (patchlessPaths.length > 0) {
       try {
-        headLineCounts = await readHeadFileLineCounts({ repoPath, headSha: head, paths: patchlessPaths });
+        headLineCounts = await readHeadFileLineCounts({ repoPath, headSha: head, paths: patchlessPaths, trustRepoPath: true });
       } catch (error) {
         headLineCountsErrorClass = error instanceof Error ? error.name : "UnknownError";
       }

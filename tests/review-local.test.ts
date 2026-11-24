@@ -110,7 +110,7 @@ it.each([true, false])("requires checkout evidence for patchless findings with c
     ...(checkoutReads ? [{ file: "bundle.js", start_line: 7, end_line: 7 }] : [])
   ]);
 });
-it("keeps a cited text finding when Git diffs the file as binary", async () => {
+it("keeps a cited text finding when Git diffs the file as binary in a checkout owned by another user", async () => {
   fs.writeFileSync(join(repo, ".gitattributes"), "*.dat -diff\n");
   fs.writeFileSync(join(repo, "text.dat"), "before\n");
   git("add", ".gitattributes", "text.dat");
@@ -122,7 +122,12 @@ it("keeps a cited text finding when Git diffs the file as binary", async () => {
   findings = [{ ...findings[0], path: "text.dat", line: 2,
     evidence: [{ path: "text.dat", startLine: 1, endLine: 2, excerpt: "after\nsecond line" }] }];
 
-  await runReviewLocal(args());
+  vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
+  try {
+    await runReviewLocal(args());
+  } finally {
+    vi.unstubAllEnvs();
+  }
 
   expect(vi.mocked(runCodexReview).mock.calls[0]?.[0].prompt)
     .toContain("### text.dat\n\n```diff\n[binary or too large for GitHub patch]\n```");

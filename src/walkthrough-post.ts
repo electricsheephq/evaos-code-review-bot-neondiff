@@ -109,12 +109,13 @@ function truncateReviewProse(body: string, limit: number, sectionStarts: number[
   });
   const tail = trailing.length ? `\n\n${trailing.join("\n")}` : "";
   const remaining = limit - leading.length - tail.length;
+  if (prose.length <= remaining) return leading + prose + tail;
   const suffix = "\n\n… (truncated: later sections omitted)";
   for (const start of sectionStarts.toReversed()) {
     const prefix = body.slice(0, start).replace(markerPattern, "").trimEnd();
     if (prefix && prefix.length + suffix.length <= remaining) return leading + prefix + suffix + tail;
   }
-  return leading + (prose.length <= remaining ? prose : truncateReviewText(prose, remaining)) + tail;
+  return leading + truncateReviewText(prose, remaining) + tail;
 }
 
 export const REVIEW_ATTRIBUTION_PREFIX = "Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ";

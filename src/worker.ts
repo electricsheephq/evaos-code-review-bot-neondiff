@@ -2333,6 +2333,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (zcodeExecution.ensemblePromise) {
       ensembleEvidencePromise = zcodeExecution.ensemblePromise
         .then((ensemble) => {
+          // Shadow leaves plan their own prompt budgets, independent of the canonical review.
+          const shadowShownLines = collectRightSideLines(
+            reviewFiles.filter((file) => githubPatchlessPaths.has(file.filename)),
+            { requireHunkLinePrefixes: true }
+          );
           const shadowPacket = reduceReviewEnsemble({
             subject: {
               repo,
@@ -2344,7 +2349,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             receipts: ensemble.receipts,
             gatePolicy: {
               headLineCounts,
-              outsideDiffShownLines,
+              outsideDiffShownLines: shadowShownLines,
               maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
               maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
               repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,

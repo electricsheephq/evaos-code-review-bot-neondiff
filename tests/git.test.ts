@@ -2,13 +2,15 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, wri
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { collectRightSideLines } from "../src/diff.js";
 import { hydratePullFilePatchesFromWorktree, planPullWorktreePaths, prepareBranchWorktree, readHeadFileLineCounts, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
 
 describe("pull worktree path planning", () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -34,6 +36,12 @@ describe("pull worktree path planning", () => {
     const paths = [literalPath, "no-ending", "empty", "binary", "too-large", "link", "missing"];
     expect(await readHeadFileLineCounts({ repoPath, headSha, paths }))
       .toEqual(new Map([[literalPath, 2], ["no-ending", 3], ["empty", 0]]));
+
+    vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
+    const unowned = { repoPath, headSha, paths: [literalPath] };
+    await expect(readHeadFileLineCounts(unowned)).rejects.toThrow(/dubious ownership/);
+    const trusted = { ...unowned, trustRepoPath: true };
+    await expect(readHeadFileLineCounts(trusted)).resolves.toEqual(new Map([[literalPath, 2]]));
   });
 
   it("rejects a review workRoot inside the protected live checkout", () => {
@@ -55,20 +63,24 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
     execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
     execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
-    writeFileSync(join(sourcePath, "review.ts"), "before\nunchanged\ntrailing\n");
+    execFileSync("git", ["-C", sourcePath, "config", "diff.suppressBlankEmpty", "true"]);
+    writeFileSync(join(sourcePath, "review.ts"), "before\n\nunchanged\ntrailing\n");
     execFileSync("git", ["-C", sourcePath, "add", "review.ts"], { stdio: "ignore" });
     execFileSync("git", ["-C", sourcePath, "commit", "-m", "base"], { stdio: "ignore" });
     const baseSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    writeFileSync(join(sourcePath, "review.ts"), "before\nchanged\ntrailing\n");
+    writeFileSync(join(sourcePath, "review.ts"), "before\n\nchanged\ntrailing\n");
     execFileSync("git", ["-C", sourcePath, "commit", "-am", "head"], { stdio: "ignore" });
     const headSha = execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
     const [file] = await hydratePullFilePatchesFromWorktree({
       worktreePath: sourcePath, baseSha, headSha,
-      files: [{ filename: "review.ts", patch: "@@ -1,3 +1,3 @@\n before\n-unchanged\n+changed" }]
+      files: [{ filename: "review.ts", patch: "@@ -1,4 +1,4 @@\n before\n \n-unchanged\n+changed" }]
     });
     expect(file?.patchComplete).toBe(true);
     expect(file?.patch).toContain(" trailing");
+    expect(file?.patch).toContain("\n \n");
+    expect(collectRightSideLines([file], { requireHunkLinePrefixes: true }).get("review.ts"))
+      .toEqual(new Set([1, 2, 3, 4]));
   });
 
   it("rejects a pull-file inventory that omits an exact worktree path", async () => {

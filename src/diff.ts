@@ -12,6 +12,10 @@ export function collectRightSideLines(
     let newLine: number | null = null;
 
     for (const rawLine of (file.patch ?? "").split("\n")) {
+      if (requireHunkLinePrefixes && rawLine.startsWith("diff --git ")) {
+        newLine = null;
+        continue;
+      }
       const hunk = rawLine.match(HUNK_HEADER);
       if (hunk) {
         newLine = Number(hunk[1]);
@@ -69,7 +73,8 @@ export function validateFindingLocations(
           finding.line <= (headLineCounts.get(finding.path) ?? 0))) {
         dropped.push({ ...finding, reason: "outside_diff_line_not_in_head_file" });
       } else if (!outsideDiffShownLines?.get(finding.path)?.has(finding.line) && !finding.evidence?.some((ref) =>
-        ref.path === finding.path && ref.startLine <= finding.line && finding.line <= ref.endLine
+        ref.path.replace(/^\.\//, "") === finding.path.replace(/^\.\//, "") &&
+          ref.startLine <= finding.line && finding.line <= ref.endLine
       )) {
         dropped.push({ ...finding, reason: "outside_diff_without_evidence" });
       } else {

@@ -228,6 +228,7 @@ export function formatOutsideDiffFindings(
 }
 
 export function truncateReviewText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
   const suffix = "\n\n… (truncated)";
   const room = limit - suffix.length - 2; // Reserve one newline on each side of the excerpt.
   if (room < 6) return limit >= suffix.length ? suffix.trimStart() : "";

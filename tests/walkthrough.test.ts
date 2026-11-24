@@ -109,6 +109,18 @@ describe("walkthrough comment rendering", () => {
     );
   });
 
+  it("keeps a fitting excerpt when a whitespace-heavy title triggers clipping", () => {
+    const title = `a${" ".repeat(400)}b`;
+    const description = "x".repeat(1_200);
+    const finding = {
+      path: "dist/bundle.js", line: 7, title, body: `**P2: ${title}**\n\n${description}`,
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+    };
+
+    expect(formatOutsideDiffFindings([finding]).lines[2])
+      .toBe(`P2 · <code>dist/bundle.js:7</code> — a b\n\n${description}`);
+  });
+
   it("shows sanitized outside-diff findings even when there are no inline findings", () => {
     const files = [{ filename: "dist/bundle.js", status: "modified" }];
     const gate = applyDeterministicReviewGate({

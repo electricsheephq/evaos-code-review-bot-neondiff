@@ -26,6 +26,27 @@ describe("diff coordinate validation", () => {
     expect(lines.get("src/game/combat.ts")).toEqual(new Set([10, 11, 12, 13, 44, 45]));
   });
 
+  it("counts only hunk rows across multiple diff sections in strict mode", () => {
+    const patch = [
+      "diff --git a/file b/file",
+      "--- a/file",
+      "+++ b/file",
+      "@@ -1,2 +1,2 @@",
+      " ",
+      "-old",
+      "+new",
+      "diff --git a/file b/file",
+      "--- a/file",
+      "+++ b/file",
+      "@@ -10 +10 @@",
+      "-before",
+      "+after"
+    ].join("\n");
+
+    expect(collectRightSideLines([{ filename: "file", patch }], { requireHunkLinePrefixes: true }).get("file"))
+      .toEqual(new Set([1, 2, 10]));
+  });
+
   it("drops deleted, missing, and out-of-diff findings while preserving valid findings", () => {
     const findings: Finding[] = [
       { severity: "P1", path: "src/game/combat.ts", line: 11, title: "Valid", body: "This is valid.", confidence: 0.9 },
@@ -82,6 +103,20 @@ describe("diff coordinate validation", () => {
     expect(result.outsideDiff).toEqual([covered]);
     expect(result.valid).toEqual([inline]);
     expect(result.dropped).toEqual(uncovered.map((candidate) => ({ ...candidate, reason: "outside_diff_without_evidence" })));
+  });
+
+  it("accepts a leading ./ on a covering citation for the same file", () => {
+    const path = "B/x.js";
+    const ref = { path: "./B/x.js", startLine: 1, endLine: 1, excerpt: "fixture" };
+    const covered: Finding = {
+      severity: "P2", path, line: 1, title: "Invalid fallback", body: "The fallback is invalid.", confidence: 0.9, evidence: [ref]
+    };
+    const unrelated = { ...covered, evidence: [{ ...ref, path: "./C/y.js" }] };
+    const result = validateFindingLocations([covered, unrelated], [{ filename: path, status: "modified" }],
+      new Map([[path, 1]]));
+
+    expect(result.outsideDiff).toEqual([covered]);
+    expect(result.dropped).toEqual([{ ...unrelated, reason: "outside_diff_without_evidence" }]);
   });
 
   it.each([
