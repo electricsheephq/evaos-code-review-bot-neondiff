@@ -134,10 +134,11 @@ so it applies only when `reviewScheduler.enabled` is `true`.
   `queue_no_retryable_provider_deferred_jobs` /
   `budget_no_ready_provider_deferred_jobs` gates); they show under `daily_cap`.
 
-The cap is a noise limit, not an exact meter. A day can start about one review
-more than the cap when a job that first started the day before (for example
-across a provider cooldown) re-runs after midnight, because a job counts only on
-its first start. Starts that do no provider work (stale, closed or license-gated
+The cap is a noise limit, not an exact meter. A job counts only on the day it
+first started (a re-run keeps its original `started_at`), so each job from an
+earlier day that re-runs today (for example after a provider cooldown crossed
+midnight) adds a start the cap does not see. With a cap of 2, two such re-runs
+plus two new heads give four starts in one day. Starts that do no provider work (stale, closed or license-gated
 heads) still use up the allowance. An unscoped operator `run-once` does not go
 through the scheduler queue and so bypasses the cap; the daemon uses the
 scheduled path. With `reviewScheduler.enabled: false` the cap does nothing.

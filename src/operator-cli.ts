@@ -27,6 +27,7 @@ import {
   type ReviewAutoRetryRecord,
   type ReviewQueueJobState,
   type RepoProviderCooldownRecord,
+  DAILY_CAP_ERROR_PREFIX,
   isDailyCapDeferredQueueJob
 } from "./state.js";
 import {
@@ -390,6 +391,7 @@ export interface PullStatusExplanation {
   nextAction:
     | "none"
     | "wait_or_retry_provider_cooldown"
+    | "wait_for_daily_review_cap"
     | "run_or_wait_for_daemon"
     | "wait_for_durable_queue_worker"
     | "inspect_github_read_failure"
@@ -1411,7 +1413,7 @@ export function buildOperatorDashboard(input: {
       checkStatus: "not_collected",
       reason: redactSecrets(entry.reason ?? entry.error ?? "provider cooldown"),
       updatedAt: entry.updatedAt,
-      nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+      nextAction: providerDeferredNextAction(entry)
     });
   }
 
@@ -1597,7 +1599,7 @@ export function explainPullStatus(
       headSha: providerDeferred.headSha,
       ...(providerDeferred.reason ? { reason: providerDeferred.reason } : {}),
       ...(providerDeferred.error ? { error: providerDeferred.error } : {}),
-      nextAction: "wait_or_retry_provider_cooldown"
+      nextAction: isDailyCapHeld(providerDeferred) ? "wait_for_daily_review_cap" : "wait_or_retry_provider_cooldown"
     };
   }
 
@@ -1705,8 +1707,19 @@ function providerDeferredQueueEntry(entry: CoverageProviderDeferredEntry): Opera
     url: entry.url,
     status: entry.status,
     reason: entry.reason ?? entry.error ?? "provider cooldown",
-    nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+    nextAction: providerDeferredNextAction(entry)
   };
+}
+
+function isDailyCapHeld(entry: CoverageProviderDeferredEntry): boolean {
+  return entry.error?.startsWith(DAILY_CAP_ERROR_PREFIX) === true;
+}
+
+/** A head held only by the daily review cap resumes on its own; retry-provider-cooldowns cannot advance it. */
+function providerDeferredNextAction(entry: CoverageProviderDeferredEntry): string {
+  return isDailyCapHeld(entry)
+    ? `waiting for the daily review cap; the scheduler resumes it at ${entry.cooldownUntil ?? "the next UTC midnight"} (UTC reset)`
+    : "wait for cooldown expiry or run retry-provider-cooldowns when expired";
 }
 
 function queuedQueueEntry(entry: CoverageQueuedEntry): OperatorQueueEntry {

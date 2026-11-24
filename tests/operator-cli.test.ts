@@ -1940,6 +1940,29 @@ describe("operator CLI summaries", () => {
     expect(collectOperatorReviewReadiness(join(tmpdir(), "missing-evaos-state.sqlite"))).toEqual([]);
   });
 
+  it("tells the operator a daily-cap head resumes on its own and keeps cooldown advice for real cooldowns", () => {
+    const resetAt = "2026-11-25T00:00:00.000Z";
+    const report = coverageReport({
+      providerDeferred: [
+        providerDeferredEntry(2, "head-cooldown"),
+        providerDeferredEntry(5, "head-capped", {
+          error: `daily_cap_deferred_until=${resetAt}; reason=daily_cap; limit=10`, reason: "daily_cap", cooldownUntil: resetAt
+        })
+      ]
+    });
+    const capText = `waiting for the daily review cap; the scheduler resumes it at ${resetAt} (UTC reset)`;
+    const cooldownText = "wait for cooldown expiry or run retry-provider-cooldowns when expired";
+    const queue = buildOperatorQueue(report).providerDeferred;
+    const dashboardItems = buildOperatorDashboard({ coverage: report }).items;
+    for (const entries of [queue, dashboardItems]) {
+      expect(entries.find((entry) => entry.pullNumber === 5)?.nextAction).toBe(capText);
+      expect(entries.find((entry) => entry.pullNumber === 2)?.nextAction).toBe(cooldownText);
+    }
+    expect(JSON.stringify([...queue, ...dashboardItems].filter((entry) => entry.pullNumber === 5))).not.toContain("retry-provider-cooldowns");
+    expect(explainPullStatus(report, "owner/repo", 5).nextAction).toBe("wait_for_daily_review_cap");
+    expect(explainPullStatus(report, "owner/repo", 2).nextAction).toBe("wait_or_retry_provider_cooldown");
+  });
+
   it("explains why a PR head is or is not reviewed", () => {
     const report = coverageReport({
       processed: [processedEntry(1, "head-posted", "posted")],
