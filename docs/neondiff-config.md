@@ -233,6 +233,9 @@ just under GitHub's limit. It reduces outside-diff detail before clipping prose 
 preserves review markers and attribution. For LCM-X reviews with an assessment,
 NeonDiff tries full detail, titles, then a count with the highest severity within the
 8,192-byte limit. It omits the section if the count would displace the assessment.
+Omitting the section keeps the assessment only when the rest of the body and the
+assessment fit within 8,192 bytes together. Otherwise the review is posted without the
+assessment, as before this change.
 
 **Safety invariants:**
 

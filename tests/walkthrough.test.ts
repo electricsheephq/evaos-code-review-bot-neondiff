@@ -53,6 +53,20 @@ describe("walkthrough comment rendering", () => {
     expect(lines[2].slice(lines[2].indexOf("\n\n") + 2).length).toBeLessThanOrEqual(1500);
   });
 
+  it("closes a clipped fence inside a list item at the list item's indentation and keeps its code literal", () => {
+    const finding = {
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
+      path: "dist/bundle.js", line: 7, title: "Fallback is skipped", fingerprint: "fixture"
+    };
+    const body = `- Repro:\n\n  \`\`\`ts\n  if (a < b) start();\n${"  x();\n".repeat(400)}  \`\`\``;
+    const { lines } = formatOutsideDiffFindings([{ ...finding, body }]);
+    const rendered = lines[2];
+    expect(rendered).toContain("  if (a < b) start();");
+    expect(rendered).not.toContain("&lt;");
+    expect(rendered.endsWith("\n  ```\n\n… (truncated)")).toBe(true);
+    expect(rendered).not.toMatch(/\n```/);
+  });
+
   it.each([["titles", 500], ["count", 220], ["count-line", 75]] as const)("matches the LCM walkthrough headline to its %s mode", (mode, remaining) => {
     const repo = "ElectricSheepHQ/LCM-X";
     const files = [{ filename: "dist/bundle.js", status: "modified" }];

@@ -2465,8 +2465,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const droppedOutsideDiffFindings = sanitizeDroppedFindings(selfConsistency.dropped, config.confidenceCalibration?.publicDisplay);
     const demotedOutsideDiffFindings = selfConsistency.outsideDiffFindings.filter((finding) => finding.severityDemotedFrom);
     const gateEvidencePath = join(evidenceDir, "deterministic-gate.json");
+    // The top-level `dropped` keeps its pre-#1276 meaning: gate drops plus answered-thread drops.
+    const gateEvidenceDropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDrops], config.confidenceCalibration?.publicDisplay);
     const gateEvidence = (publishedOutsideDiffFindings: OutsideDiffFinding[] = []) => ({
       ...gate,
+      dropped: gateEvidenceDropped,
       postVerification: {
         publishedOutsideDiffFindings, droppedOutsideDiffFindings, demotedOutsideDiffFindings, priorThreadDrops,
         counts: {

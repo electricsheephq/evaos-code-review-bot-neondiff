@@ -207,21 +207,24 @@ export function truncateReviewText(text: string, limit: number): string {
   const suffix = "\n\n… (truncated)";
   if (limit < suffix.length) return "";
   const entities: Record<string, string> = { "<": "&lt;", ">": "&gt;", "`": "&#96;", "~": "&#126;" };
-  const ending = (fence: string) => fence ? `\n${fence}${suffix}` : suffix;
+  type Fence = { indent: string; run: string };
+  // An open fence is closed with its opener's indentation, so a fence inside a list item stays inside it.
+  const ending = (open: Fence | undefined) => open ? `\n${open.indent}${open.run}${suffix}` : suffix;
   let kept = "";
-  let fence = "";
+  let fence: Fence | undefined;
   const prefix = text.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
   for (const [index, line] of prefix.split(/\r?\n/).entries()) {
     let nextFence = fence;
-    const delimiter = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const delimiter = /^([ \t]*)(`{3,}|~{3,})(.*)$/.exec(line);
     if (delimiter) {
-      const [, run, rest] = delimiter;
-      if (!fence && (run.startsWith("~") || !rest.includes("`"))) nextFence = run;
-      if (fence && run.startsWith(fence) && !rest.trim()) nextFence = "";
+      const [, indent, run, rest] = delimiter;
+      if (!fence && (run.startsWith("~") || !rest.includes("`"))) nextFence = { indent, run };
+      else if (fence && run[0] === fence.run[0] && run.length >= fence.run.length && !rest.trim()) nextFence = undefined;
     }
-    // Escape inline delimiters in clipped prose, but keep complete fence lines and their contents.
+    // Fenced code renders literally, so keep its text as is; outside a fence, escape HTML and inline delimiters.
+    const literal = Boolean(fence || nextFence);
     const newline = index ? "\n" : "";
-    const escaped = line.replace(fence || nextFence ? /[<>]/g : /[<>`~]/g, (char) => entities[char]);
+    const escaped = literal ? line : line.replace(/[<>`~]/g, (char) => entities[char]);
     if (kept.length + newline.length + escaped.length + ending(nextFence).length <= limit) {
       kept += newline + escaped;
       fence = nextFence;
@@ -230,7 +233,7 @@ export function truncateReviewText(text: string, limit: number): string {
     let room = limit - kept.length - newline.length - ending(fence).length;
     if (room > 0) kept += newline;
     for (const char of line) {
-      const safe = entities[char] ?? char;
+      const safe = fence ? char : (entities[char] ?? char);
       if (safe.length > room) break;
       kept += safe;
       room -= safe.length;
