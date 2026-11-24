@@ -4180,9 +4180,22 @@ export class ReviewStateStore {
 
   // Findings posted in the review body (#1276) are marked explicitly; NULL means an inline review comment.
   private ensureReviewFindingPlacementColumn(): void {
-    const columns = this.db.prepare("pragma table_info(review_findings)").all() as unknown as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "placement")) {
-      this.db.exec("alter table review_findings add column placement text");
+    const hasPlacement = () => (this.db.prepare("pragma table_info(review_findings)").all() as unknown as Array<{ name: string }>)
+      .some((column) => column.name === "placement");
+    // Upgraded databases take no write lock on open; only a missing column takes one, then re-checks under it.
+    if (hasPlacement()) return;
+    this.db.exec("begin immediate");
+    try {
+      if (!hasPlacement()) {
+        try { this.db.exec("alter table review_findings add column placement text"); }
+        catch (error) {
+          if (!(error instanceof Error) || !/^duplicate column name: placement$/i.test(error.message)) throw error;
+        }
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* transaction already rolled back */ }
+      throw error;
     }
   }
 

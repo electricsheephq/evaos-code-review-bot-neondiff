@@ -29,6 +29,8 @@ const REPO_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const HEAD_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 
+export type OutsideDiffCountMode = "count" | "count-line";
+
 export function buildWalkthroughMarker(input: { repo: string; pullNumber: number }): string {
   validateWalkthroughRepoPull(input);
   return `${WALKTHROUGH_MARKER_PREFIX} repo=${input.repo} pr=${input.pullNumber} -->`;
@@ -41,6 +43,7 @@ export function buildWalkthroughComment(input: {
   comments: ReviewComment[];
   outsideDiffFindings?: OutsideDiffFinding[];
   outsideDiffSection?: string[] | "review";
+  outsideDiffCountMode?: OutsideDiffCountMode;
   dropped: DroppedFinding[];
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
@@ -55,7 +58,13 @@ export function buildWalkthroughComment(input: {
   // Keep gate/count signal on original comments; use publicComments only for public-text safety checks.
   const publicComments = input.comments.map((comment) => sanitizeReviewCommentPublicText(comment, input.publicConfidencePolicy));
   const outsideDiffFindings = input.outsideDiffFindings ?? [];
-  const outsideDiffLocation = input.outsideDiffSection === "review" ? "in the review" : "below";
+  const oneOutside = outsideDiffFindings.length === 1;
+  const outsideDiffSubject = oneOutside
+    ? "1 finding on a file GitHub shows no diff for"
+    : `${outsideDiffFindings.length} findings on files GitHub shows no diff for`;
+  const outsideDiffHeadline = input.outsideDiffCountMode === "count"
+    ? `${outsideDiffSubject} ${oneOutside ? "was" : "were"} left out of this review's text to stay within the size limit.`
+    : `${outsideDiffSubject} ${oneOutside ? "is" : "are"} ${input.outsideDiffSection === "review" ? "in the review" : "listed below"}.`;
   const findings = [...input.comments, ...outsideDiffFindings];
   const files = input.files.map((file) => summarizeFile(file, findings));
   const visibleFiles = files.slice(0, MAX_CHANGED_FILE_ROWS);
@@ -91,9 +100,8 @@ export function buildWalkthroughComment(input: {
     input.comments.length === 0
       ? "No validated inline findings."
       : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
-    ...(outsideDiffFindings.length === 0 || input.outsideDiffSection?.length === 0 ? [] : [outsideDiffFindings.length === 1
-      ? `1 finding on a file GitHub shows no diff for is listed ${outsideDiffLocation}.`
-      : `${outsideDiffFindings.length} findings on files GitHub shows no diff for are listed ${outsideDiffLocation}.`]),
+    ...(outsideDiffFindings.length === 0 || input.outsideDiffSection?.length === 0 || input.outsideDiffCountMode === "count-line"
+      ? [] : [outsideDiffHeadline]),
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
     ...(input.outsideDiffSection === "review" ? [] : input.outsideDiffSection ?? formatOutsideDiffFindings(outsideDiffFindings, input.publicConfidencePolicy).lines),
@@ -162,7 +170,9 @@ export function formatOutsideDiffFindings(
 ): { lines: string[]; listedCount: number } {
   if (!findings.length) return { lines: [], listedCount: 0 };
   const omitted = (count: number) => `${count} more findings are in the review evidence.`;
-  const countLine = detail === "count" ? `Findings outside the diff view: ${findings.length}. See the review evidence.` : omitted(findings.length);
+  const countLine = detail === "count"
+    ? `Findings outside the diff view: ${findings.length} ${findings.length === 1 ? "finding" : "findings"}, highest ${highestSeverity(findings)}.`
+    : omitted(findings.length);
   const lines = ["### Findings outside the diff view", ""];
   let size = lines.join("\n").length;
   if (detail === "count" || size + countLine.length + 2 > budget) {
@@ -193,8 +203,41 @@ export function formatOutsideDiffFindings(
 }
 
 export function truncateReviewText(text: string, limit: number): string {
-  const suffix = "… (truncated)";
-  return text.length <= limit ? text : text.slice(0, limit - suffix.length).replace(/[\uD800-\uDBFF]$/, "") + suffix;
+  if (text.length <= limit) return text;
+  const suffix = "\n\n… (truncated)";
+  if (limit < suffix.length) return "";
+  const entities: Record<string, string> = { "<": "&lt;", ">": "&gt;", "`": "&#96;", "~": "&#126;" };
+  const ending = (fence: string) => fence ? `\n${fence}${suffix}` : suffix;
+  let kept = "";
+  let fence = "";
+  const prefix = text.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
+  for (const [index, line] of prefix.split(/\r?\n/).entries()) {
+    let nextFence = fence;
+    const delimiter = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (delimiter) {
+      const [, run, rest] = delimiter;
+      if (!fence && (run.startsWith("~") || !rest.includes("`"))) nextFence = run;
+      if (fence && run.startsWith(fence) && !rest.trim()) nextFence = "";
+    }
+    // Escape inline delimiters in clipped prose, but keep complete fence lines and their contents.
+    const newline = index ? "\n" : "";
+    const escaped = line.replace(fence || nextFence ? /[<>]/g : /[<>`~]/g, (char) => entities[char]);
+    if (kept.length + newline.length + escaped.length + ending(nextFence).length <= limit) {
+      kept += newline + escaped;
+      fence = nextFence;
+      continue;
+    }
+    let room = limit - kept.length - newline.length - ending(fence).length;
+    if (room > 0) kept += newline;
+    for (const char of line) {
+      const safe = entities[char] ?? char;
+      if (safe.length > room) break;
+      kept += safe;
+      room -= safe.length;
+    }
+    break;
+  }
+  return kept.trimEnd() + ending(fence);
 }
 
 function formatModelSummaryList(

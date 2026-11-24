@@ -127,7 +127,7 @@ import {
   type StoredProcessedReviewRecord
 } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
-import { buildWalkthroughComment, formatOutsideDiffFindings } from "./walkthrough.js";
+import { buildWalkthroughComment, formatOutsideDiffFindings, type OutsideDiffCountMode } from "./walkthrough.js";
 import { appendReviewAttribution, buildReviewBodyForPost, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
@@ -2461,6 +2461,22 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDrops, ...selfConsistency.dropped], config.confidenceCalibration?.publicDisplay);
+    const priorThreadDrops = sanitizeDroppedFindings(answeredDrops, config.confidenceCalibration?.publicDisplay);
+    const droppedOutsideDiffFindings = sanitizeDroppedFindings(selfConsistency.dropped, config.confidenceCalibration?.publicDisplay);
+    const demotedOutsideDiffFindings = selfConsistency.outsideDiffFindings.filter((finding) => finding.severityDemotedFrom);
+    const gateEvidencePath = join(evidenceDir, "deterministic-gate.json");
+    const gateEvidence = (publishedOutsideDiffFindings: OutsideDiffFinding[] = []) => ({
+      ...gate,
+      postVerification: {
+        publishedOutsideDiffFindings, droppedOutsideDiffFindings, demotedOutsideDiffFindings, priorThreadDrops,
+        counts: {
+          published: publishedOutsideDiffFindings.length,
+          dropped: droppedOutsideDiffFindings.length,
+          demoted: demotedOutsideDiffFindings.length,
+          priorThreadDrops: priorThreadDrops.length
+        }
+      }
+    });
     const candidateEvent = selfConsistency.event;
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({
@@ -2478,7 +2494,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     exactOwnerReviewRequested = exactOwnerReviewRequested || dryRunReviewEventResolution?.authorization.status === "eligible";
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
-    writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
+    writeRedactedJson(gateEvidencePath, gateEvidence());
     const summaryInput = {
       repo,
       pull,
@@ -2795,7 +2811,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_processed";
     }
-    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review") =>
+    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review", outsideDiffCountMode?: OutsideDiffCountMode) =>
       buildWalkthroughComment({
         repo,
         pull,
@@ -2810,6 +2826,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         provider: buildReviewProviderMetadata(reviewConfig),
         postIssueComment: config.walkthrough.postIssueComment,
         outsideDiffSection,
+        outsideDiffCountMode,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
     if (config.walkthrough.enabled) {
@@ -2889,10 +2906,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo, outsideDiffFindings, model: buildReviewProviderMetadata(reviewConfig).model,
       publicConfidencePolicy: summaryInput.publicConfidencePolicy, assessment: assessmentBody,
       initialBody: reviewBodyAfterWalkthroughPost(plan),
-      render: (lines) => reviewBodyAfterWalkthroughPost({
+      render: (lines, countMode) => reviewBodyAfterWalkthroughPost({
         ...plan,
         summary: buildSummary({ ...summaryInput, outsideDiffSection: lines }),
-        walkthrough: plan.walkthrough && buildReviewWalkthrough(lines)
+        walkthrough: plan.walkthrough && buildReviewWalkthrough(lines, countMode)
       })
     });
     assertReviewOutputSafe(escapeOrdinaryLcmReviewBody(postedBody.body));
@@ -2909,6 +2926,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     } catch (error) {
       if (error && typeof error === "object") Object.assign(error, { reviewPostAttempted: true });
       throw error;
+    }
+    if (postedBody.publishedOutsideDiffFindings.length) {
+      writeRedactedJsonBestEffort(gateEvidencePath, gateEvidence(postedBody.publishedOutsideDiffFindings));
     }
     try {
       if (reviewEventResolution.consumed) {

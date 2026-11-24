@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import {
 } from "../src/worker.js";
 import {
   buildObservedPullOutcome,
+  readOutcomeObserverInput,
   runOutcomeObserverFromInput,
   runScheduledObservePass,
   type ObservedFinding,
@@ -156,8 +157,30 @@ describe("findings-ledger recording is fail-open (#357)", () => {
     store.close();
   });
 
-  it("adds the placement column to an existing findings ledger and reads old rows as inline", () => {
+  it("preserves body placement when loading a mixed manual observer input", () => {
+    const { store, root } = newStore();
+    const inline = { ...comment, placement: "inline" };
+    const body = { ...comment, fingerprint: `finding:${"b".repeat(64)}`, line: 43, placement: "body" as const };
+    const observed = buildObservedPullOutcome({
+      merged: true, pullNumber: 1, findings: [comment, body], subsequentPulls: [],
+      reviewComments: [{ path: comment.path, line: comment.line, in_reply_to_id: 9, user: { login: "maintainer" } }]
+    });
+    const input = join(root, "observe.json");
+    writeFileSync(input, JSON.stringify({ reviews: [{ repo: "owner/repo", pullNumber: 1, headSha: "sha1", findings: [inline, body], observed }] }));
+    try {
+      runOutcomeObserverFromInput({ store, entries: readOutcomeObserverInput(input), evidenceDir: root, dryRun: false });
+      expect(store.listFindingOutcomeLabels()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ fingerprint: inline.fingerprint, labelSource: "human_thread" }),
+        expect.objectContaining({ fingerprint: body.fingerprint, labelSource: "none_observed" })
+      ]));
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each([false, true])("opens a legacy findings ledger twice (simulated duplicate ALTER: %s)", (interleaved) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-findings-placement-upgrade-"));
+    roots.push(root);
     const dbPath = join(root, "state.sqlite");
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`create table review_findings (
@@ -168,8 +191,18 @@ describe("findings-ledger recording is fail-open (#357)", () => {
     legacy.prepare(`insert into review_findings values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(`finding:${"c".repeat(64)}`, "owner/repo", 1, "sha1", "src/old.ts", 7, "P2", "runtime_correctness", 0.8, "2026-07-01T00:00:00.000Z");
     legacy.close();
+    const exec = DatabaseSync.prototype.exec;
+    let alterWasLocked: boolean | undefined;
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+      if (sql === "alter table review_findings add column placement text") {
+        alterWasLocked = this.isTransaction;
+        if (interleaved) exec.call(this, sql);
+      }
+      return exec.call(this, sql);
+    });
     const store = new ReviewStateStore(dbPath);
     try {
+      expect(alterWasLocked).toBe(true);
       const [old] = store.listReviewFindings();
       expect(old).toMatchObject({ path: "src/old.ts", line: 7 });
       expect(old).not.toHaveProperty("placement");
@@ -177,9 +210,14 @@ describe("findings-ledger recording is fail-open (#357)", () => {
       recordPostedReviewFindings({ state: store, repo: "owner/repo", pull, comments: [], outsideDiffFindings: [body] });
       expect(store.listReviewFindings().find(({ fingerprint }) => fingerprint === body.fingerprint))
         .toMatchObject({ placement: "body", line: 9 });
+      const second = new ReviewStateStore(dbPath);
+      try {
+        expect(second.listReviewFindings()).toEqual(store.listReviewFindings());
+      } finally {
+        second.close();
+      }
     } finally {
       store.close();
-      rmSync(root, { recursive: true, force: true });
     }
   });
 

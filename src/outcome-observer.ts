@@ -469,7 +469,8 @@ function parseObservedFinding(raw: unknown, label: string): ObservedFinding {
     line: line as number,
     severity: requireString(record.severity, `${label}.severity`) as Severity,
     category: requireString(record.category, `${label}.category`),
-    confidence: typeof record.confidence === "number" ? record.confidence : 0
+    confidence: typeof record.confidence === "number" ? record.confidence : 0,
+    ...(record.placement === "body" ? { placement: "body" } : {})
   };
 }
 

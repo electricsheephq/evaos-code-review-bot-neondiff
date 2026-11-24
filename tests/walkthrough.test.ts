@@ -3,11 +3,13 @@ import {
   buildWalkthroughComment,
   buildWalkthroughMarker,
   formatOutsideDiffFindings,
+  type OutsideDiffCountMode,
   WALKTHROUGH_MARKER_PREFIX,
   WALKTHROUGH_SCHEMA_VERSION,
   WALKTHROUGH_STATE_MARKER_PREFIX
 } from "../src/walkthrough.js";
 import { applyDeterministicReviewGate } from "../src/review-gate.js";
+import { buildReviewBodyForPost } from "../src/walkthrough-post.js";
 import type { ReviewSettingsPreview } from "../src/repo-policy.js";
 import type { Finding, PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
 
@@ -34,6 +36,52 @@ const pull: PullRequestSummary = {
 };
 
 describe("walkthrough comment rendering", () => {
+  it.each([
+    { opening: "<details>\n\n", closing: "\n\n</details>", kept: "&lt;details&gt;", cut: /<details>/ },
+    { opening: "```ts\n", closing: "\n```", kept: "\n```\n\n… (truncated)", cut: undefined },
+    { opening: "`", closing: "`", kept: "&#96;", cut: /`/ }
+  ])("keeps the next section visible when cutting $opening", ({ opening, closing, kept, cut }) => {
+    const finding = {
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
+      path: "dist/bundle.js", line: 7, title: "Fallback is skipped", fingerprint: "fixture"
+    };
+    const short = `${opening}Short description${closing}`;
+    expect(formatOutsideDiffFindings([{ ...finding, body: short }]).lines.join("\n")).toContain(short);
+    const { lines } = formatOutsideDiffFindings([{ ...finding, body: `${opening}${"a".repeat(1600)}${closing}` }]);
+    expect(lines[2]).toContain(kept);
+    if (cut) expect(lines[2]).not.toMatch(cut);
+    expect(lines[2].slice(lines[2].indexOf("\n\n") + 2).length).toBeLessThanOrEqual(1500);
+  });
+
+  it.each([["titles", 500], ["count", 220], ["count-line", 75]] as const)("matches the LCM walkthrough headline to its %s mode", (mode, remaining) => {
+    const repo = "ElectricSheepHQ/LCM-X";
+    const files = [{ filename: "dist/bundle.js", status: "modified" }];
+    const gate = applyDeterministicReviewGate({ files, findings: [{
+      severity: "P1", path: "dist/bundle.js", line: 7, title: "Fallback is skipped ".repeat(10).trim(), body: "detail ".repeat(240), confidence: 0.9
+    }] });
+    const assessment = "<!-- lcm-x-ai-review:v2\nfixture\n-->";
+    const render = (lines: string[], countMode?: OutsideDiffCountMode) => buildWalkthroughComment({
+      repo, pull, files, ...gate, outsideDiffSection: lines, outsideDiffCountMode: countMode
+    }).body;
+    const padding = "a".repeat(8192 - Buffer.byteLength(render([])) - assessment.length - 2 - remaining);
+    const { body, publishedOutsideDiffFindings } = buildReviewBodyForPost({
+      repo, model: "fixture", outsideDiffFindings: gate.outsideDiffFindings, assessment,
+      render: (lines, countMode) => `${render(lines, countMode)}\n\n${padding}`
+    });
+    expect(body.endsWith(assessment)).toBe(true);
+    expect(body).not.toContain("detail detail");
+    if (mode === "titles") {
+      expect(body).toContain("is listed below.");
+      expect(body).toContain("dist/bundle.js:7</code> Fallback is skipped");
+      expect(publishedOutsideDiffFindings).toHaveLength(1);
+    } else {
+      expect(body.includes("was left out of this review's text to stay within the size limit.")).toBe(mode === "count");
+      expect(body).toContain("1 finding, highest P1.");
+      expect(body).not.toContain("listed below");
+      expect(publishedOutsideDiffFindings).toEqual([]);
+    }
+  });
+
   it("shows sanitized outside-diff findings even when there are no inline findings", () => {
     const files = [{ filename: "dist/bundle.js", status: "modified" }];
     const gate = applyDeterministicReviewGate({

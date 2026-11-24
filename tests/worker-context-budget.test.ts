@@ -233,6 +233,11 @@ describe("worker context budget preflight", () => {
         expect(createdReviews[0]).toMatchObject({ event: "COMMENT", comments: [] });
         const evidenceDir = join(root, "evidence", localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
         const gate = JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8"));
+        expect(gate).toMatchObject({
+          comments: [], dropped: [],
+          outsideDiffFindings: [{ path: file.filename, line: 1, title, severity: severe ? "P1" : "P2" }],
+          summary: { acceptedComments: 0, outsideDiffFindings: 1, droppedFindings: 0 }
+        });
         if (severe) {
           expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts).toMatchObject([{
             action: mode === "verified-only" ? "suppressed" : "demoted", error: "self_consistency_unverifiable"
@@ -241,13 +246,17 @@ describe("worker context budget preflight", () => {
         if (mode === "verified-only") {
           expect(createdReviews[0].body).not.toContain(title);
           expect(state.listReviewFindings()).toEqual([]);
-          expect(gate.dropped).toMatchObject([{ title, reason: "self_consistency_unverifiable" }]);
+          expect(gate.postVerification).toMatchObject({
+            publishedOutsideDiffFindings: [], demotedOutsideDiffFindings: [],
+            droppedOutsideDiffFindings: [{ title, reason: "self_consistency_unverifiable" }],
+            counts: { published: 0, dropped: 1, demoted: 0 }
+          });
           return;
         }
-        expect(gate).toMatchObject({
-          comments: [], dropped: [],
-          outsideDiffFindings: [expect.objectContaining({ path: file.filename, line: 1, title })],
-          summary: { acceptedComments: 0, outsideDiffFindings: 1, droppedFindings: 0 }
+        expect(gate.postVerification).toMatchObject({
+          publishedOutsideDiffFindings: [{ title, severity: "P2" }], droppedOutsideDiffFindings: [],
+          demotedOutsideDiffFindings: severe ? [{ title, severity: "P2", severityDemotedFrom: "P1" }] : [],
+          counts: { published: 1, dropped: 0, demoted: severe ? 1 : 0 }
         });
         expect(createdReviews[0].body.match(/### Findings outside the diff view/g)).toHaveLength(1);
         expect(createdReviews[0].body).toContain("dist/bundle.js:1");
@@ -258,7 +267,8 @@ describe("worker context budget preflight", () => {
         }
         if (mode === "issue") {
           expect(issueCommentBodies).toHaveLength(1);
-          expect(issueCommentBodies[0]).toContain("is listed in the review.");
+          expect(issueCommentBodies[0]).toContain("is in the review.");
+          expect(issueCommentBodies[0]).not.toContain("listed in the review");
           expect(issueCommentBodies[0]).not.toContain(title);
         } else {
           expect(issueCommentBodies).toEqual([]);
@@ -269,20 +279,25 @@ describe("worker context budget preflight", () => {
     }
   );
 
-  it("keeps a terminal LCM assessment when the full outside-diff section would crowd it out", async () => {
+  it.each(["titles", "separate-count"])("keeps a terminal LCM assessment when the outside-diff section shrinks to %s", async (mode) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-lcm-assessment-fit-"));
     roots.push(root);
     const config = minimalConfig(root);
+    const separate = mode === "separate-count";
+    config.walkthrough = { enabled: separate, postIssueComment: separate };
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(1278, "a".repeat(40));
-    const files = Array.from({ length: 8 }, (_, index) => ({ filename: `src/generated-${index}.ts`, status: "modified", changes: 2 }));
+    const files = Array.from({ length: 8 }, (_, index) => ({
+      filename: `src/${separate ? "nested/".repeat(36) : ""}generated-${index}.ts`, status: "modified", changes: 2
+    }));
     const findings = files.map(({ filename }, index) => ({
-      ...finding(filename, `Generated fallback ${index}`), body: "Detailed reasoning ".repeat(90)
+      ...(separate && index === 0 ? p1Finding : finding)(filename, `Generated fallback ${index}`), body: "Detailed reasoning ".repeat(90)
     }));
     for (const candidate of findings) zcodeFindingsByPath.set(candidate.path, [candidate]);
     zcodeRawResponseOverride.value = JSON.stringify({
       findings, review_assessment: { verdict: "BLOCKED", scope: "Exact pull request diff",
-        unresolved_findings: findings.map(({ title }) => title), limitations: [], acceptance_evidence: ["Fixture"] }
+        unresolved_findings: findings.map(({ title }) => title), limitations: [],
+        acceptance_evidence: separate ? Array(3).fill("Fixture ".repeat(237)) : ["Fixture"] }
     });
     try {
       const repo = "ElectricSheepHQ/LCM-X";
@@ -292,7 +307,18 @@ describe("worker context budget preflight", () => {
       expect(body).toContain("<!-- lcm-x-ai-review:v2");
       expect(body.endsWith("-->")).toBe(true);
       expect(Buffer.byteLength(body)).toBeLessThanOrEqual(8192);
-      expect(body).toContain("src/generated-0.ts:1</code> Generated fallback 0");
+      if (separate) {
+        expect(body).toContain("8 findings, highest P1.");
+        expect(body).not.toContain("generated-0.ts:1</code>");
+        expect(issueCommentBodies).toHaveLength(1);
+        expect(issueCommentBodies[0]).toContain("8 findings on files GitHub shows no diff for are in the review.");
+        expect(issueCommentBodies[0]).not.toContain("listed in the review");
+        const evidenceDir = join(root, "evidence", localDateFolder(), "ElectricSheepHQ__LCM-X", `pr-${pull.number}`, pull.head.sha);
+        expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).postVerification)
+          .toMatchObject({ publishedOutsideDiffFindings: [], counts: { published: 0 } });
+      } else {
+        expect(body).toContain("src/generated-0.ts:1</code> Generated fallback 0");
+      }
       expect(body).not.toContain("Detailed reasoning");
     } finally {
       state.close();
@@ -1012,7 +1038,7 @@ describe("worker context budget preflight", () => {
       expect(JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8")).verdicts[0]).toMatchObject({ action: "demoted", severity: "P0" });
       expect(JSON.parse(readFileSync(join(evidenceDir, "prior-threads.json"), "utf8")))
         .toMatchObject({ suppressedFindings: 1, matches: [{ findingTitle: candidate.title, threadId: 52 }] });
-      expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).dropped)
+      expect(JSON.parse(readFileSync(join(evidenceDir, "deterministic-gate.json"), "utf8")).postVerification.priorThreadDrops)
         .toContainEqual(expect.objectContaining({ reason: "prior_thread_answered", threadId: 52 }));
     } finally { state.close(); }
   });

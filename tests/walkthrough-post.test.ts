@@ -2,7 +2,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildReviewBodyForPost, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "../src/walkthrough-post.js";
+import { findPostedCiReview } from "../src/ci-mode.js";
+import { buildWalkthroughMarker } from "../src/walkthrough.js";
+import { appendReviewAttribution, buildReviewBodyForPost, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "../src/walkthrough-post.js";
+
+function findReview(body: string, repo: string) {
+  const user = { login: "neondiff[bot]", type: "Bot" as const };
+  const head = "a".repeat(40);
+  return findPostedCiReview({
+    postingIdentity: async () => user,
+    listPullReviews: async () => [{ id: 1, commit_id: head, body, user }]
+  }, repo, 42, head);
+}
 
 describe("walkthrough comment posting", () => {
   const roots: string[] = [];
@@ -18,28 +29,54 @@ describe("walkthrough comment posting", () => {
     };
     const result = buildReviewBodyForPost({
       repo: "owner/repo", model: "fixture", outsideDiffFindings: [finding],
-      render: (lines) => `${"a".repeat(59_500)}\n\n${lines.join("\n")}`
+      render: (lines) => `${"a".repeat(64_500)}\n\n${lines.join("\n")}`
     });
-    expect(result.body.length).toBeLessThanOrEqual(60_000);
+    expect(result.body.length).toBeLessThanOrEqual(65_000);
     expect(result.body).toContain("src/generated.ts:7");
     expect(result.body).not.toContain("Fallback title");
     expect(result.body).not.toContain("Full detail");
     expect(result.publishedOutsideDiffFindings).toEqual([finding]);
   });
 
-  it("uses an evidence count when even titles would displace the LCM assessment", () => {
+  it("leaves a formerly postable 63,000-character body intact", () => {
+    const prose = "a".repeat(63_000);
+    const result = buildReviewBodyForPost({ repo: "owner/repo", model: "fixture", outsideDiffFindings: [], render: () => prose });
+    expect(result.body).toBe(appendReviewAttribution(prose, "fixture"));
+  });
+
+  it.each(["owner/repo", "ElectricSheepHQ/LCM-X"])("keeps a trailing walkthrough marker when truncating prose for %s", async (repo) => {
+    const marker = buildWalkthroughMarker({ repo, pullNumber: 42 });
+    const prose = `<details>\n\n\`\`\`ts\n${"a".repeat(66_000)}\n\`\`\`\n\n</details>\n${marker}`;
+    const { body } = buildReviewBodyForPost({ repo, model: "fixture", outsideDiffFindings: [], render: () => prose });
+    expect(body.length).toBeLessThanOrEqual(65_000);
+    expect(body).toContain(`\n\`\`\`\n\n… (truncated)\n\n${marker}`);
+    expect(body).not.toContain("<details>");
+    if (repo === "owner/repo") expect(body).toBe(appendReviewAttribution(body, "fixture"));
+    await expect(findReview(body, repo)).resolves.toEqual({ id: 1 });
+  });
+
+  it("still finds an oversized summary by its attribution footer alone", async () => {
+    const repo = "owner/repo";
+    const { body } = buildReviewBodyForPost({ repo, model: "fixture", outsideDiffFindings: [], render: () => "a".repeat(66_000) });
+    expect(body).toBe(appendReviewAttribution(body, "fixture"));
+    await expect(findReview(body, repo)).resolves.toEqual({ id: 1 });
+  });
+
+  it.each([8000, 8150])("keeps the LCM assessment and includes the severity count when it fits (%i characters)", async (length) => {
     const finding = {
       path: "src/generated.ts", line: 7, title: "Long title ".repeat(40), body: "Full detail ".repeat(125),
-      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+      severity: "P1" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
     };
     const assessment = "<!-- lcm-x-ai-review:v2\nfixture\n-->";
     const result = buildReviewBodyForPost({
       repo: "ElectricSheepHQ/LCM-X", model: "fixture", outsideDiffFindings: [finding], assessment,
-      render: (lines) => `${"a".repeat(8000)}\n\n${lines.join("\n")}`
+      render: (lines) => `${"a".repeat(length)}\n\n${lines.join("\n")}`
     });
-    expect(result.body).toContain("Findings outside the diff view: 1.");
+    expect(result.body.includes("Findings outside the diff view: 1 finding, highest P1.")).toBe(length === 8000);
+    expect(result.body).not.toContain("See the review evidence");
     expect(result.body.endsWith(assessment)).toBe(true);
     expect(result.publishedOutsideDiffFindings).toEqual([]);
+    await expect(findReview(result.body, "ElectricSheepHQ/LCM-X")).resolves.toEqual({ id: 1 });
   });
 
   it("records a non-fatal error when sticky comment posting fails", async () => {
