@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildWalkthroughComment,
   buildWalkthroughMarker,
+  formatOutsideDiffFindings,
+  type OutsideDiffCountMode,
   WALKTHROUGH_MARKER_PREFIX,
   WALKTHROUGH_SCHEMA_VERSION,
   WALKTHROUGH_STATE_MARKER_PREFIX
 } from "../src/walkthrough.js";
 import { applyDeterministicReviewGate } from "../src/review-gate.js";
+import { buildReviewBodyForPost } from "../src/walkthrough-post.js";
 import type { ReviewSettingsPreview } from "../src/repo-policy.js";
 import type { Finding, PullFilePatch, PullRequestSummary, ReviewComment } from "../src/types.js";
 
@@ -33,6 +36,133 @@ const pull: PullRequestSummary = {
 };
 
 describe("walkthrough comment rendering", () => {
+  const literalCode = "if (a < b) start();\n";
+  const openFence = "```ts\n<details>\n";
+  const clippedCloserPadding = 1500 - "Fallback is skipped".length - "\n\n… (truncated)".length - 8 -
+    (literalCode + openFence + "\n``` ").length;
+  it.each([
+    ["HTML", "<details>\n"],
+    ["indented closer", "```ts\n    ```\n<details>\n"],
+    ["list-item fence", "- Repro:\n\n  ```ts\n  <details>\n"],
+    ["tab before a fence", "\t~~~ts\n<details>\n"],
+    ["partly clipped closer with trailing spaces", openFence + "x".repeat(clippedCloserPadding) + "\n```" + " ".repeat(30)],
+    ["long tilde runs", "<details>\n" + "~".repeat(100) + "\n" + "~".repeat(800)]
+  ])("keeps the next section visible when clipping %s", (_name, opening) => {
+    const finding = {
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
+      path: "dist/bundle.js", line: 7, title: "Fallback is skipped", fingerprint: "fixture"
+    };
+    const short = "```ts\nif (a < b) start();\n```";
+    expect(formatOutsideDiffFindings([{ ...finding, body: short }]).lines.join("\n")).toContain(short);
+    const input = [{ ...finding, body: `${literalCode}${opening}\n${"x".repeat(1600)}` }];
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/WorldOS", pull, files: [], comments: [], outsideDiffFindings: input, dropped: [], event: "COMMENT"
+    });
+    const match = /\n(~{3,})\n([\s\S]*?)\n\1\n\n… \(truncated\)\n\n### Maintainer Analysis/.exec(walkthrough.body);
+    expect(match).not.toBeNull();
+    const [block, fence, excerpt] = match!;
+    expect(excerpt).toContain(literalCode);
+    if (opening.startsWith(openFence)) expect(excerpt.endsWith("\n``` ")).toBe(true);
+    expect(excerpt).toContain("<details>");
+    expect(walkthrough.body.replace(block, "")).not.toContain("<details>");
+    expect(walkthrough.body.slice(0, match!.index)).toContain("dist/bundle.js:7</code> — Fallback is skipped");
+    expect(fence.length).toBe(Math.max(3, 1 + Math.max(0, ...(excerpt.match(/~+/g) ?? []).map(run => run.length))));
+  });
+
+  it.each([["titles", 500], ["count", 220], ["count-line", 75]] as const)("matches the LCM walkthrough headline to its %s mode", (mode, remaining) => {
+    const repo = "ElectricSheepHQ/LCM-X";
+    const files = [{ filename: "dist/bundle.js", status: "modified" }];
+    const gate = applyDeterministicReviewGate({ files, findings: [{
+      severity: "P1", path: "dist/bundle.js", line: 7, title: "Fallback is skipped ".repeat(10).trim(), body: "detail ".repeat(240), confidence: 0.9,
+      evidence: [{ path: "dist/bundle.js", startLine: 7, endLine: 7, excerpt: "fixture" }]
+    }] });
+    const assessment = "<!-- lcm-x-ai-review:v2\nfixture\n-->";
+    const render = (lines: string[], countMode?: OutsideDiffCountMode) => buildWalkthroughComment({
+      repo, pull, files, ...gate, outsideDiffSection: lines, outsideDiffCountMode: countMode
+    }).body;
+    const padding = "a".repeat(8192 - Buffer.byteLength(render([])) - assessment.length - 2 - remaining);
+    const { body, publishedOutsideDiffFindings } = buildReviewBodyForPost({
+      repo, model: "fixture", outsideDiffFindings: gate.outsideDiffFindings, assessment,
+      render: (lines, countMode) => `${render(lines, countMode)}\n\n${padding}`
+    });
+    expect(body.endsWith(assessment)).toBe(true);
+    expect(body).not.toContain("detail detail");
+    if (mode === "titles") {
+      expect(body).toContain("is listed below.");
+      expect(body).toContain("P1 · <code>dist/bundle.js:7</code> — Fallback is skipped");
+      expect(publishedOutsideDiffFindings).toHaveLength(1);
+    } else {
+      expect(body.includes("was left out of this review's text to stay within the size limit.")).toBe(mode === "count");
+      expect(body).toContain("1 finding, highest P1.");
+      expect(body).not.toContain("listed below");
+      expect(publishedOutsideDiffFindings).toEqual([]);
+    }
+  });
+
+  it("includes the published severity and demotion note in compact entries", () => {
+    const finding = {
+      path: "dist/<bundle>.js", line: 7, severity: "P2" as const, severityDemotedFrom: "P1" as const,
+      confidence: 0.9, category: "runtime_correctness" as const, title: "Fallback\n<!-- hidden --> is skipped", body: "Details", fingerprint: "fixture"
+    };
+    expect(formatOutsideDiffFindings([finding], undefined, "titles").lines[2]).toBe(
+      "P2 · <code>dist/&lt;bundle&gt;.js:7</code> — Fallback [hidden comment removed] is skipped (lowered from P1: not re-checked)"
+    );
+  });
+
+  it("keeps a fitting excerpt when a whitespace-heavy title triggers clipping", () => {
+    const title = `a${" ".repeat(400)}b`;
+    const description = "x".repeat(1_200);
+    const finding = {
+      path: "dist/bundle.js", line: 7, title, body: `**P2: ${title}**\n\n${description}`,
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+    };
+
+    expect(formatOutsideDiffFindings([finding]).lines[2])
+      .toBe(`P2 · <code>dist/bundle.js:7</code> — a b\n\n${description}`);
+  });
+
+  it("shows sanitized outside-diff findings even when there are no inline findings", () => {
+    const files = [{ filename: "dist/bundle.js", status: "modified" }];
+    const gate = applyDeterministicReviewGate({
+      files,
+      findings: [{
+        severity: "P2", path: "dist/bundle.js", line: 7, title: "Fallback is skipped",
+        body: "The empty-input branch returns before the fallback. <!-- private --> <!-- leftover", confidence: 0.9,
+        evidence: [{ path: "dist/bundle.js", startLine: 7, endLine: 7, excerpt: "fixture" }]
+      }]
+    });
+
+    const walkthrough = buildWalkthroughComment({ repo: "electricsheephq/WorldOS", pull, files, ...gate });
+
+    expect(walkthrough.body).toContain("1 finding on a file GitHub shows no diff for is listed below.");
+    expect(walkthrough.body).toContain("### Findings outside the diff view");
+    expect(walkthrough.body).toContain("dist/bundle.js:7");
+    expect(walkthrough.body).toContain("**P2: Fallback is skipped**");
+    expect(walkthrough.body).toContain("The empty-input branch returns before the fallback.");
+    expect(walkthrough.body).not.toContain("Confidence:");
+    expect(walkthrough.body).toContain("[hidden comment removed] &lt;!-- leftover");
+    expect(walkthrough.body).toContain("### Maintainer Analysis");
+    expect(walkthrough.body).toContain("Dropped findings before posting: 0.");
+  });
+
+  it("caps detail on character boundaries and falls back to titles and an evidence count", () => {
+    const findings = Array.from({ length: 50 }, (_, index) => ({
+      path: `src/file-${index}.ts`, line: 1, title: `Finding ${index} title`,
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9,
+      body: index === 1 ? "a".repeat(1300) : "a".repeat(1486) + "😀".repeat(100), fingerprint: `finding-${index}`
+    }));
+    const { lines, listedCount } = formatOutsideDiffFindings(findings);
+    const section = lines.join("\n");
+    expect(section.length).toBeLessThanOrEqual(20_000);
+    const clipped = lines.find((line) => line.endsWith("… (truncated)"))!;
+    const detail = clipped.slice(clipped.indexOf("\n\n") + 2);
+    expect(detail.length).toBeLessThanOrEqual(1_500);
+    expect(detail.isWellFormed()).toBe(true);
+    expect(section).toMatch(/<\/code> — Finding [1-9]\d+ title/);
+    expect(listedCount).toBeLessThan(findings.length);
+    expect(section).toContain(`${findings.length - listedCount} more findings are in the review evidence`);
+  });
+
   it("renders a stable marked walkthrough with files, effort, related refs, and text-only suggestions", () => {
     const files: PullFilePatch[] = [
       {

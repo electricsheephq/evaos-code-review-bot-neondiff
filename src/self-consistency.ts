@@ -2,7 +2,7 @@ import { decideReviewEvent, demoteReviewComment, SEVERITY_DEMOTION_NOTE } from "
 import { isRequestChangesEligible, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import { canonicalizeSevereVerificationReceipt, type CanonicalSevereVerificationReceipt } from "./severe-verification-receipt-canonical.js";
 import type { SevereVerificationReceipt } from "./severe-verification-receipt-schema.js";
-import type { PullFilePatch, ReviewComment, ReviewEvent, Severity } from "./types.js";
+import type { DroppedFinding, OutsideDiffFinding, PullFilePatch, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
 export type { SevereVerificationReceipt } from "./severe-verification-receipt-schema.js";
 
@@ -50,6 +50,29 @@ export interface SelfConsistencyVerdict {
 
 const DEFAULT_SEVERITIES: Array<"P0" | "P1"> = ["P0", "P1"];
 const DEFAULT_MAX_FINDINGS = 5;
+const SELF_CONSISTENCY_UNVERIFIABLE = "self_consistency_unverifiable";
+
+export function recheckOutsideDiffFindings(findings: OutsideDiffFinding[], config: SelfConsistencyRecheckConfig) {
+  const severities = new Set<Severity>(config.severities ?? DEFAULT_SEVERITIES);
+  const verdicts: SelfConsistencyVerdict[] = [];
+  const dropped: DroppedFinding[] = [];
+  const outsideDiffFindings = findings.flatMap((finding) => {
+    if (!severities.has(finding.severity)) return [finding];
+    const demoted = config.onUnsupported === "demote"
+      ? demoteReviewComment(finding, "it could not be re-checked because GitHub shows no diff for the file.")
+      : undefined;
+    const { path, line, severity, title, confidence } = finding;
+    verdicts.push({
+      path, line, severity, title, originalConfidence: confidence, refuted: true,
+      action: demoted ? "demoted" : "suppressed", error: SELF_CONSISTENCY_UNVERIFIABLE,
+      ...(!demoted && config.onUnsupported === "demote" ? { demotionSkipped: true } : {})
+    });
+    if (demoted) return [demoted];
+    dropped.push({ ...finding, reason: SELF_CONSISTENCY_UNVERIFIABLE });
+    return [];
+  });
+  return { outsideDiffFindings, dropped, verdicts };
+}
 
 /**
  * Opt-in P0/P1 self-consistency re-check (#303). For each gate-accepted comment at a configured

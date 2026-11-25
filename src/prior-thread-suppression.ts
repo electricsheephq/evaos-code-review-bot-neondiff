@@ -1,5 +1,5 @@
 import { buildFindingFingerprint } from "./findings.js";
-import type { DroppedFinding, Finding, PullReviewComment, ReviewComment } from "./types.js";
+import type { DroppedFinding, Finding, OutsideDiffFinding, PullReviewComment } from "./types.js";
 
 export const PRIOR_THREAD_MAX_LINE_DELTA = 10;
 export const PRIOR_THREAD_TITLE_JACCARD_THRESHOLD = 0.5;
@@ -50,7 +50,7 @@ export function matchPriorThread(finding: Finding, threads: AnsweredThread[]): A
  * unconfirmed P0 as an advisory P2. Match those demoted comments again at the published severity so
  * an answered thread is not reposted (#1172).
  */
-export function suppressAnsweredDemotedComments<T extends ReviewComment>(
+export function suppressAnsweredDemotedComments<T extends OutsideDiffFinding>(
   comments: T[],
   findings: Finding[],
   threads: AnsweredThread[]

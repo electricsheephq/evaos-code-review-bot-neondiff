@@ -18,7 +18,8 @@ import {
 import { configFilePaths, loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { collectRightSideLines } from "./diff.js";
+import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree, readHeadFileLineCounts } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -60,7 +61,7 @@ import {
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import { collectAnsweredThreads, suppressAnsweredDemotedComments, type AnsweredThread } from "./prior-thread-suppression.js";
-import { buildFindingFingerprint } from "./findings.js";
+import { buildFindingFingerprint, decideReviewEvent } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
   buildReviewEnsemblePlan,
@@ -127,9 +128,9 @@ import {
   type StoredProcessedReviewRecord
 } from "./state.js";
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
-import { buildWalkthroughComment } from "./walkthrough.js";
-import { appendReviewAttribution, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { appendLcmReviewAssessment, buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
+import { buildWalkthroughComment, formatOutsideDiffFindings, type OutsideDiffCountMode } from "./walkthrough.js";
+import { appendReviewAttribution, buildReviewBodyForPost, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
+import { buildLcmReviewAssessmentBody, escapeOrdinaryLcmReviewBody, lcmReviewFileInventoryIsComplete, lcmReviewPatchSetIsComplete } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import {
   buildReviewPrompt,
@@ -138,6 +139,7 @@ import {
   extractZCodeResponse,
   isZCodeSchemaFailureError,
   mergeReviewModelSummaries,
+  renderReviewFilePatches,
   reviewPromptForbiddenFragments,
   runZCodeRawJson,
   runZCodeReview,
@@ -145,7 +147,7 @@ import {
   type ZCodeReviewResult
 } from "./zcode.js";
 import { CODEX_USAGE_LIMIT_MARKER, CODEX_USAGE_LIMIT_MAX_WAIT_MS, resolveTrustedCodexPath, resolveCheckoutReadsStatus, runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
-import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
+import { recheckOutsideDiffFindings, runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
   buildSevereVerificationTransport, parseSevereVerificationTransport, severeVerificationTransportFailure,
@@ -155,7 +157,7 @@ import { canonicalizeSevereVerificationReceipt } from "./severe-verification-rec
 import { SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, type SevereVerificationCode } from "./severe-verification-receipt-schema.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError, isZCodeTimeoutError } from "./zcode-timeout.js";
-import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import type { DroppedFinding, Finding, OutsideDiffFinding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
@@ -1649,6 +1651,16 @@ export function recordRestrictedReviewUnavailable(
   return reason;
 }
 
+function completeShownPatch(original: string, rendered: string): string {
+  if (rendered === original) return rendered;
+  // A clipped patch ends with a newline followed by the truncation notice.
+  const cut = rendered.lastIndexOf("\n");
+  if (cut < 0) return "";
+  const prefix = rendered.slice(0, cut);
+  if (cut === original.length || original[cut] === "\n") return prefix;
+  return prefix.slice(0, prefix.lastIndexOf("\n") + 1);
+}
+
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
   let autoRetryGrant: ReturnType<ReviewStateStore["getAutoRetry"]>;
@@ -2134,6 +2146,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     }
+    // Hydrated patches can help the reviewer reason about a file without creating GitHub anchors.
+    const patchlessFiles = files.filter((file) => !file.patch?.trim());
+    const githubPatchlessPaths = new Set(patchlessFiles.map((file) => file.filename));
+    const gateFiles = reviewFiles.map((file) => githubPatchlessPaths.has(file.filename) ? { ...file, patch: undefined } : file);
+    const headPaths = patchlessFiles.filter((file) => file.status !== "removed").map((file) => file.filename);
+    let headLineCounts: ReadonlyMap<string, number> = new Map();
+    let headLineCountsErrorClass: string | undefined;
+    if (headPaths.length > 0) {
+      try {
+        headLineCounts = await readHeadFileLineCounts({ repoPath: worktree.path, headSha: pull.head.sha, paths: headPaths });
+      } catch (error) {
+        headLineCountsErrorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const reviewModeSelection = selectReviewMode({
       config,
       repo,
@@ -2262,9 +2288,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_context_budget";
     }
-    const executedReviewPrompts = contextBudget.mode === "chunk"
-      ? contextBudget.chunks.map((chunk) => promptForFiles(chunk.files))
-      : [prompt];
+    const promptFileGroups = contextBudget.mode === "chunk" ? contextBudget.chunks.map((chunk) => chunk.files) : [reviewFiles];
+    const executedReviewPrompts = contextBudget.mode === "chunk" ? promptFileGroups.map(promptForFiles) : [prompt];
+    const shownPatchesForFiles = (filesForPrompt: PullFilePatch[]) =>
+      renderReviewFilePatches(filesForPrompt, config.zcode.maxPatchBytes).flatMap(({ file, patch }) => {
+        if (!githubPatchlessPaths.has(file.filename) || !file.patch) return [];
+        return [{ ...file, patch: completeShownPatch(file.patch, patch) }];
+      });
+    const shownPatches = githubPatchlessPaths.size === 0 ? [] : promptFileGroups.flatMap(shownPatchesForFiles);
+    const outsideDiffShownLines = collectRightSideLines(shownPatches, { requireHunkLinePrefixes: true });
     const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile, {
       reviewPrompts: executedReviewPrompts
     });
@@ -2308,6 +2340,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (zcodeExecution.ensemblePromise) {
       ensembleEvidencePromise = zcodeExecution.ensemblePromise
         .then((ensemble) => {
+          // A shadow leaf can show a file alone, but still uses the same per-file cap.
+          const shadowShownLines = collectRightSideLines(
+            reviewFiles.flatMap((file) => githubPatchlessPaths.has(file.filename) ? shownPatchesForFiles([file]) : []),
+            { requireHunkLinePrefixes: true }
+          );
           const shadowPacket = reduceReviewEnsemble({
             subject: {
               repo,
@@ -2315,10 +2352,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
               baseSha: pull.base.sha,
               headSha: pull.head.sha
             },
-            files: reviewFiles,
+            files: gateFiles,
             receipts: ensemble.receipts,
             gatePolicy: {
+              headLineCounts,
+              outsideDiffShownLines: shadowShownLines,
               maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
+              maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
               repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
               repoMemoryFalsePositives: repoMemory.falsePositives,
               publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
@@ -2398,9 +2438,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
-      files: reviewFiles,
+      files: gateFiles,
+      headLineCounts,
+      outsideDiffShownLines,
       droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
+      maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
       repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
       repoMemoryFalsePositives: repoMemory.falsePositives,
       answeredThreads,
@@ -2444,16 +2487,39 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // A P0 lowered to P2 skipped the gate's prior-thread match; re-apply it at the published severity.
     // P2 is never REQUEST_CHANGES-eligible, so dropping one leaves selfConsistency.event unchanged.
     const answeredDemoted = suppressAnsweredDemotedComments(selfConsistency.comments, gatedFindings, answeredThreads ?? []);
-    if (answeredDemoted.dropped.length) {
-      priorThreadEvidence.matches.push(...answeredDemoted.dropped
+    const answeredOutside = suppressAnsweredDemotedComments(selfConsistency.outsideDiffFindings, gatedFindings, answeredThreads ?? []);
+    const answeredDrops = [...answeredDemoted.dropped, ...answeredOutside.dropped];
+    if (answeredDrops.length) {
+      priorThreadEvidence.matches.push(...answeredDrops
         .map((finding) => ({ findingTitle: finding.title, threadId: finding.threadId })));
       priorThreadEvidence.suppressedFindings = priorThreadEvidence.matches.length;
       writeRedactedJson(join(evidenceDir, "prior-threads.json"), priorThreadEvidence);
     }
     const comments = answeredDemoted.comments;
+    const outsideDiffFindings = answeredOutside.comments;
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
-    const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDemoted.dropped], config.confidenceCalibration?.publicDisplay);
+    const dropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDrops, ...selfConsistency.dropped], config.confidenceCalibration?.publicDisplay);
+    const priorThreadDrops = sanitizeDroppedFindings(answeredDrops, config.confidenceCalibration?.publicDisplay);
+    const droppedOutsideDiffFindings = sanitizeDroppedFindings(selfConsistency.dropped, config.confidenceCalibration?.publicDisplay);
+    const demotedOutsideDiffFindings = selfConsistency.outsideDiffFindings.filter((finding) => finding.severityDemotedFrom);
+    const gateEvidencePath = join(evidenceDir, "deterministic-gate.json");
+    // The top-level `dropped` keeps its pre-#1276 meaning: gate drops plus answered-thread drops.
+    const gateEvidenceDropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDrops], config.confidenceCalibration?.publicDisplay);
+    const gateEvidence = (publishedOutsideDiffFindings: OutsideDiffFinding[] = []) => ({
+      ...gate,
+      headLineCountsErrorClass,
+      dropped: gateEvidenceDropped,
+      postVerification: {
+        publishedOutsideDiffFindings, droppedOutsideDiffFindings, demotedOutsideDiffFindings, priorThreadDrops,
+        counts: {
+          published: publishedOutsideDiffFindings.length,
+          dropped: droppedOutsideDiffFindings.length,
+          demoted: demotedOutsideDiffFindings.length,
+          priorThreadDrops: priorThreadDrops.length
+        }
+      }
+    });
     const candidateEvent = selfConsistency.event;
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({
@@ -2471,16 +2537,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     exactOwnerReviewRequested = exactOwnerReviewRequested || dryRunReviewEventResolution?.authorization.status === "eligible";
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
-    writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
-    const generatedSummary = buildSummary({
+    writeRedactedJson(gateEvidencePath, gateEvidence());
+    const summaryInput = {
       repo,
       pull,
       comments,
+      outsideDiffFindings,
       dropped,
       modelSummary: zcodeResult.summary,
       dryRun: input.dryRun,
-      commandDecision
-    });
+      commandDecision,
+      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+    };
+    const generatedSummary = buildSummary(summaryInput);
     const summary = isLcmReviewRepository(repo)
       ? escapeOrdinaryLcmReviewBody(generatedSummary)
       : generatedSummary;
@@ -2494,6 +2563,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           pull,
           files: reviewFiles,
           comments,
+          outsideDiffFindings,
           dropped,
           event: selectedEvent,
           validation,
@@ -2527,6 +2597,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const plan: ReviewPlan = {
       event: selectedEvent,
       comments,
+      ...(outsideDiffFindings.length > 0 ? { outsideDiffFindings } : {}),
       dropped,
       summary,
       deterministicGate: gate.summary,
@@ -2783,12 +2854,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_processed";
     }
-    if (config.walkthrough.enabled) {
-      plan.walkthrough = buildWalkthroughComment({
+    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review", outsideDiffCountMode?: OutsideDiffCountMode, sectionStarts?: number[]) =>
+      buildWalkthroughComment({
         repo,
         pull,
         files: reviewFiles,
         comments,
+        outsideDiffFindings,
         dropped,
         event: plan.event,
         validation,
@@ -2796,8 +2868,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         modelSummary: zcodeResult.summary,
         provider: buildReviewProviderMetadata(reviewConfig),
         postIssueComment: config.walkthrough.postIssueComment,
+        outsideDiffSection,
+        outsideDiffCountMode,
+        sectionStarts,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
+    if (config.walkthrough.enabled) {
+      plan.walkthrough = buildReviewWalkthrough();
       // LCM review bodies must end with their terminal assessment marker, so they carry no footer.
       if (!isLcmReviewRepository(repo)) plan.walkthrough.body = appendReviewAttribution(plan.walkthrough.body, buildReviewProviderMetadata(reviewConfig).model);
       assertReviewOutputSafe(plan.walkthrough.body);
@@ -2807,12 +2884,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
 
     const reviewGithub = new GitHubApi(config.github);
     const walkthroughPostAttempted = Boolean(plan.walkthrough?.postIssueComment && reviewGithub.canPost());
+    const issueWalkthrough = walkthroughPostAttempted && outsideDiffFindings.length
+      ? buildReviewWalkthrough("review") : plan.walkthrough;
+    if (issueWalkthrough && issueWalkthrough !== plan.walkthrough && !isLcmReviewRepository(repo)) {
+      issueWalkthrough.body = appendReviewAttribution(issueWalkthrough.body, buildReviewProviderMetadata(reviewConfig).model);
+    }
     plan.walkthroughComment = await postWalkthroughComment({
       github: reviewGithub,
       repo,
       pullNumber: pull.number,
       evidenceDir,
-      walkthrough: plan.walkthrough
+      walkthrough: issueWalkthrough
     });
     if (walkthroughPostAttempted) {
       const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
@@ -2864,6 +2946,18 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
     );
     const preservedPriorVerifiedBlockingRow = preservedPriorBlockingRow && !priorPosted?.error;
+    const postedBody = buildReviewBodyForPost({
+      repo, outsideDiffFindings, model: buildReviewProviderMetadata(reviewConfig).model,
+      publicConfidencePolicy: summaryInput.publicConfidencePolicy, assessment: assessmentBody,
+      initialBody: reviewBodyAfterWalkthroughPost(plan),
+      render: (lines, countMode, sectionStarts) => {
+        if (plan.walkthrough && (!plan.walkthrough.postIssueComment || !plan.walkthroughComment?.posted)) {
+          return buildReviewWalkthrough(lines, countMode, sectionStarts).body;
+        }
+        return buildSummary({ ...summaryInput, outsideDiffSection: lines });
+      }
+    });
+    assertReviewOutputSafe(escapeOrdinaryLcmReviewBody(postedBody.body));
     let review: Awaited<ReturnType<GitHubApi["createReview"]>>;
     try {
       review = await reviewGithub.createReview({
@@ -2871,14 +2965,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         pullNumber: pull.number,
         headSha: pull.head.sha,
         event: plan.event,
-        body: isLcmReviewRepository(repo)
-          ? appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo)
-          : appendReviewAttribution(appendLcmReviewAssessment(reviewBodyAfterWalkthroughPost(plan), assessmentBody, repo), buildReviewProviderMetadata(reviewConfig).model),
+        body: postedBody.body,
         comments
       });
     } catch (error) {
       if (error && typeof error === "object") Object.assign(error, { reviewPostAttempted: true });
       throw error;
+    }
+    if (postedBody.publishedOutsideDiffFindings.length) {
+      writeRedactedJsonBestEffort(gateEvidencePath, gateEvidence(postedBody.publishedOutsideDiffFindings));
     }
     try {
       if (reviewEventResolution.consumed) {
@@ -2935,7 +3030,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
-    recordPostedReviewFindings({ state, repo, pull, comments });
+    recordPostedReviewFindings({ state, repo, pull, comments, outsideDiffFindings: postedBody.publishedOutsideDiffFindings });
     let headChangedDuringPost = false;
     let postReviewHeadLookupFailed = false;
     try {
@@ -3968,12 +4063,12 @@ export function recordPostedReviewFindings(input: {
   repo: string;
   pull: PullRequestSummary;
   comments: ReviewComment[];
+  outsideDiffFindings?: OutsideDiffFinding[];
   now?: Date;
 }): void {
   try {
-    if (input.comments.length === 0) return;
     const recordedAt = (input.now ?? new Date()).toISOString();
-    const records: ReviewFindingRecord[] = input.comments.map((comment) => ({
+    const records: ReviewFindingRecord[] = [...input.comments, ...(input.outsideDiffFindings ?? [])].map((comment) => ({
       // Use the gate-computed fingerprint threaded onto the comment (over the ORIGINAL finding,
       // incl. why_this_matters + raw title/body). Recomputing here from the sanitized comment would
       // hash a DIFFERENT identity (why_this_matters="", redacted title/body) and key the ledger under
@@ -3987,9 +4082,10 @@ export function recordPostedReviewFindings(input: {
       severity: comment.severity,
       category: comment.category,
       confidence: comment.confidence,
+      ...("side" in comment ? {} : { placement: "body" as const }),
       recordedAt
     }));
-    input.state.recordReviewFindings(records);
+    if (records.length) input.state.recordReviewFindings(records);
   } catch (error) {
     console.warn(
       `[findings-ledger] best-effort review-findings record failed repo=${input.repo} pr=${input.pull.number}: ${
@@ -4498,10 +4594,10 @@ async function applySelfConsistencyRecheck(input: {
   evidenceDir: string;
   providerApiKeys?: Record<string, string>;
   assertProviderConfigCurrent?: () => void;
-}): Promise<{ comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string }> {
+}): Promise<Pick<DeterministicReviewGateResult, "comments" | "event" | "outsideDiffFindings" | "dropped"> & { runtimeNote?: string }> {
   const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
   if (!selfConsistencyConfig?.enabled) {
-    return { comments: input.gate.comments, event: input.gate.event };
+    return { comments: input.gate.comments, event: input.gate.event, outsideDiffFindings: input.gate.outsideDiffFindings, dropped: [] };
   }
 
   const backend = resolveSelfConsistencyBackend(input.config, selfConsistencyConfig);
@@ -4578,13 +4674,14 @@ async function applySelfConsistencyRecheck(input: {
     }
   });
 
+  const outside = recheckOutsideDiffFindings(input.gate.outsideDiffFindings, selfConsistencyConfig);
   // Redacted evidence: verdicts + both confidences, never raw model prose beyond the sanitized fields.
   writeRedactedJson(join(input.evidenceDir, "self-consistency.json"), {
     enabled: true,
     onUnsupported: selfConsistencyConfig.onUnsupported ?? "suppress",
     provider: providerId,
     maxFindingsPerReview: selfConsistencyConfig.maxFindingsPerReview ?? 5,
-    verdicts: result.verdicts
+    verdicts: [...result.verdicts, ...outside.verdicts]
   });
 
   const agreed = result.verdicts.filter((verdict) => verdict.agreed === true).length;
@@ -4600,7 +4697,13 @@ async function applySelfConsistencyRecheck(input: {
     ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${suppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s). Suppression is fail-closed and is not a provider refutation.`
     : undefined;
 
-  return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+  // Outside-diff findings can only escalate when their severity does not require hunk verification.
+  const event = result.event === "REQUEST_CHANGES" ? result.event : decideReviewEvent(
+    outside.outsideDiffFindings,
+    input.config.reviewGate?.requestChangesConfidenceFloors,
+    input.config.reviewGate?.categoryPrecisionFloors
+  );
+  return { comments: result.comments, event, outsideDiffFindings: outside.outsideDiffFindings, dropped: outside.dropped, ...(runtimeNote ? { runtimeNote } : {}) };
 }
 
 function severeVerificationFailureReceipt(
@@ -5561,10 +5664,13 @@ function buildSummary(input: {
   repo: string;
   pull: PullRequestSummary;
   comments: { severity: string }[];
+  outsideDiffFindings: OutsideDiffFinding[];
+  outsideDiffSection?: string[];
   dropped: { reason: string }[];
   modelSummary?: ReviewModelSummary;
   dryRun: boolean;
   commandDecision?: CommandDecision;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
 }): string {
   const p0p1 = input.comments.filter((comment) => comment.severity === "P0" || comment.severity === "P1").length;
   const modelSummary = input.modelSummary ?? emptyReviewModelSummary("No structured provider summary was available.");
@@ -5576,7 +5682,9 @@ function buildSummary(input: {
     "Affected invariants:\n" + formatModelSummaryList(modelSummary.invariants, "No affected invariant was established."),
     "Evidence:\n" + formatModelSummaryList(modelSummary.evidence, "No additional provider evidence was established."),
     "Limitations:\n" + formatModelSummaryList(modelSummary.limitations, "No limitations were supplied."),
-    `No-finding rationale: ${sanitizePublicConfidenceText(redactSecrets(modelSummary.noFindingRationale))}`
+    ...(input.outsideDiffFindings.length > 0
+      ? [(input.outsideDiffSection ?? formatOutsideDiffFindings(input.outsideDiffFindings, input.publicConfidencePolicy).lines).join("\n").trimEnd()].filter(Boolean)
+      : [`No-finding rationale: ${sanitizePublicConfidenceText(redactSecrets(modelSummary.noFindingRationale))}`])
   ];
   if (input.commandDecision && input.commandDecision.action !== "none") {
     lines.push(

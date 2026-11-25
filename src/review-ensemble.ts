@@ -207,7 +207,7 @@ export function reduceReviewEnsemble(input: {
     ...input.gatePolicy
   });
   const provenance: Record<string, ReviewEnsembleLeafId[]> = {};
-  const gatedRepresentatives = gate.comments.flatMap((comment) => {
+  const gatedRepresentatives = [...gate.comments, ...gate.outsideDiffFindings].flatMap((comment) => {
     const representative = findings.find((item) => buildFindingFingerprint(item) === comment.fingerprint);
     return representative ? [{ fingerprint: comment.fingerprint, representative }] : [];
   });

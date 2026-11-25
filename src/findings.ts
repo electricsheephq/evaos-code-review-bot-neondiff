@@ -4,6 +4,8 @@ import { categoryLabel, isRegressionCategory, isRequestChangesEligible, normaliz
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import type { DroppedFinding, Finding, FindingEvidenceRef, ReviewComment, ReviewEvent, Severity } from "./types.js";
 
+export const DEFAULT_MAX_OUTSIDE_DIFF_FINDINGS = 10;
+
 /**
  * Deterministic per-finding fingerprint (sha256 over the canonical finding identity). Computed over
  * the ORIGINAL Finding — including why_this_matters and raw (pre-sanitization) title/body — so the
@@ -98,6 +100,10 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
   return { findings, dropped };
 }
 
+export function stripFindingEvidence({ evidence, evidenceMalformed, ...finding }: Finding): Finding {
+  return finding;
+}
+
 function isFindingEvidenceRef(ref: unknown): ref is FindingEvidenceRef {
   return isRecord(ref) && typeof ref.path === "string" && ref.path.length > 0 &&
     Number.isInteger(ref.startLine) && (ref.startLine as number) > 0 &&
@@ -107,9 +113,10 @@ function isFindingEvidenceRef(ref: unknown): ref is FindingEvidenceRef {
 
 export function normalizeFindingsForReview(
   findings: Finding[],
-  options: { maxInlineComments?: number; publicConfidencePolicy?: PublicConfidenceDisplayPolicy } = {}
+  options: { maxInlineComments?: number; outsideDiffPaths?: ReadonlySet<string>; maxOutsideDiffFindings?: number; publicConfidencePolicy?: PublicConfidenceDisplayPolicy } = {}
 ): { comments: ReviewComment[]; dropped: DroppedFinding[] } {
   const maxInlineComments = options.maxInlineComments ?? 25;
+  const maxOutsideDiffFindings = options.maxOutsideDiffFindings ?? DEFAULT_MAX_OUTSIDE_DIFF_FINDINGS;
   const accepted: Finding[] = [];
   const dropped: DroppedFinding[] = [];
 
@@ -141,9 +148,18 @@ export function normalizeFindingsForReview(
     dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason: "same_run_near_duplicate" });
   }
 
-  const kept = deduped.kept.slice(0, maxInlineComments);
-  for (const finding of deduped.kept.slice(maxInlineComments)) {
-    dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason: "comment_cap_exceeded" });
+  const kept: Finding[] = [];
+  let inlineCount = 0;
+  let outsideCount = 0;
+  for (const finding of deduped.kept) {
+    const outside = options.outsideDiffPaths?.has(finding.path);
+    const index = outside ? outsideCount++ : inlineCount++;
+    if (index < (outside ? maxOutsideDiffFindings : maxInlineComments)) {
+      kept.push(finding);
+      continue;
+    }
+    const reason = outside ? "outside_diff_cap_exceeded" : "comment_cap_exceeded";
+    dropped.push({ ...sanitizeDroppedFindingPublicText(finding, options.publicConfidencePolicy), reason });
   }
 
   return {
@@ -285,7 +301,7 @@ export function decideReviewEvent(
 
 export const SEVERITY_DEMOTION_NOTE = "a second check did not confirm it.";
 
-export function demoteReviewComment(comment: ReviewComment, note: string): ReviewComment | undefined {
+export function demoteReviewComment<T extends Omit<ReviewComment, "side">>(comment: T, note: string): T | undefined {
   const original = comment.severity;
   const prefix = `**${original}: `;
   if ((original !== "P0" && original !== "P1") || !comment.body.startsWith(prefix)) return undefined;

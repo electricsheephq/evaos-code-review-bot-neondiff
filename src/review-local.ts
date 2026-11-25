@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadConfigFromObject } from "./config.js";
 import { resolveCheckoutReadsStatus, runCodexReview } from "./codex-runtime.js";
 import { planContextBudget } from "./context-budget.js";
+import { readHeadFileLineCounts } from "./git.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import { filterPullFilesForProfile, resolveRepoProfile } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
@@ -57,9 +58,17 @@ export function parseLocalDiff(diff: string): PullFilePatch[] {
     const next = headerPath("+++ ") !== undefined ? gitPath(headerPath("+++ ")!) : nextMeta !== undefined ? `b/${nextMeta}` : gitPath(nextHeader);
     const filename = (next === "/dev/null" ? old : next).slice(2);
     const patch = hunk < 0 ? "" : lines.slice(hunk).join("\n");
-    return { filename, patch, patchComplete: true,
-      status: next === "/dev/null" ? "removed" : old === "/dev/null" ? "added" : old.slice(2) !== filename ? "renamed" : "modified",
-      ...(old !== "/dev/null" && old.slice(2) !== filename ? { previous_filename: old.slice(2) } : {}),
+    const hasMetadata = (prefix: string) => metadata.some((line) => line.startsWith(prefix));
+    const removed = next === "/dev/null" || hasMetadata("deleted file mode ");
+    const added = old === "/dev/null" || hasMetadata("new file mode ");
+    const moved = !removed && !added && old.slice(2) !== filename;
+    const binary = hasMetadata("Binary files ") || metadata.includes("GIT binary patch");
+    let status = hunk >= 0 || binary ? "modified" : "changed";
+    if (removed) status = "removed";
+    else if (added) status = "added";
+    else if (moved) status = "renamed";
+    return { filename, patch, patchComplete: true, status,
+      ...(moved ? { previous_filename: old.slice(2), ...(binary ? { changes: 1 } : {}) } : {}),
       additions: patch.split("\n").filter(x => x.startsWith("+")).length,
       deletions: patch.split("\n").filter(x => x.startsWith("-")).length };
   });
@@ -163,6 +172,16 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   if (fromRealRepo !== ".." && !fromRealRepo.startsWith(`..${sep}`) && !isAbsolute(fromRealRepo)) throw new Error("--evidence-dir must be outside the reviewed checkout");
   const evidenceDir = mkdtempSync(join(evidenceRoot, "neondiff-review-local-"));
   try {
+    const patchlessPaths = files.filter(file => file.status !== "removed" && !file.patch?.trim()).map(file => file.filename);
+    let headLineCounts: ReadonlyMap<string, number> = new Map();
+    let headLineCountsErrorClass: string | undefined;
+    if (patchlessPaths.length > 0) {
+      try {
+        headLineCounts = await readHeadFileLineCounts({ repoPath, headSha: head, paths: patchlessPaths, trustRepoPath: true });
+      } catch (error) {
+        headLineCountsErrorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const findings: Finding[] = [];
     let totalTokens = 0, hasTokens = true;
     const chunks = budget.mode === "chunk" ? budget.chunks.map(x => x.files) : [files];
@@ -182,12 +201,16 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
       else hasTokens = false;
     }
     if (git("rev-parse", "HEAD").trim() !== head) throw new Error("review-local head changed during review");
-    const gate = applyDeterministicReviewGate({ findings, files, maxInlineComments: config.reviewGate?.maxInlineComments,
+    const gate = applyDeterministicReviewGate({ findings, files, headLineCounts, maxInlineComments: config.reviewGate?.maxInlineComments,
+      maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay, requestChangesConfidenceFloors: config.reviewGate?.requestChangesConfidenceFloors,
       categoryPrecisionFloors: config.reviewGate?.categoryPrecisionFloors });
-    writeLocalJson(resolve(out), format === "neondiff" ? gate.comments : {
+    if (keep) writeLocalJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, headLineCountsErrorClass });
+    const outsideDiff = gate.outsideDiffFindings.map((finding) => ({ ...finding, placement: "body" as const }));
+    const accepted = [...gate.comments, ...outsideDiff];
+    writeLocalJson(resolve(out), format === "neondiff" ? accepted : {
       pr: { repo: `https://github.com/${repo}`, pr_number: number, base, head }, agent,
-      findings: gate.comments.map(c => ({ file: c.path, start_line: c.line, end_line: c.line, message: reviewBenchMessage(c), producer: agent })),
+      findings: accepted.map(c => ({ file: c.path, start_line: c.line, end_line: c.line, message: reviewBenchMessage(c), producer: agent })),
       usage: { time_in_ms: Date.now() - started, ...(hasTokens ? { total_tokens: totalTokens } : {}) }
     });
   } finally { if (!keep) rmSync(evidenceDir, { recursive: true, force: true }); }

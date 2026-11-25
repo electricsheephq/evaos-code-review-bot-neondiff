@@ -339,7 +339,7 @@ export function buildOutcomeLedgerInputFromReviewPlan(input: {
         .map((recommendation) => recommendation.title) ?? []
     })),
     evidence: buildPlanEvidence(input.plan),
-    riskClaims: input.plan.comments.map((comment, index) => ({
+    riskClaims: [...input.plan.comments, ...(input.plan.outsideDiffFindings ?? [])].map((comment, index) => ({
       id: `finding-${index + 1}`,
       severity: comment.severity,
       category: comment.category,
@@ -873,6 +873,8 @@ function listOrNone(items: string[]): string[] {
 }
 
 function buildPlanEvidence(plan: ReviewPlan): OutcomeLedgerEvidenceInput[] {
+  const outsideDiffCount = plan.deterministicGate?.outsideDiffFindings ?? 0;
+  const outsideDiffSummary = outsideDiffCount > 0 ? `, ${outsideDiffCount} outside the diff view` : "";
   const evidence: OutcomeLedgerEvidenceInput[] = [
     {
       id: "deterministic-gate",
@@ -880,7 +882,7 @@ function buildPlanEvidence(plan: ReviewPlan): OutcomeLedgerEvidenceInput[] {
       title: "Deterministic review gate",
       status: "pass",
       summary: plan.deterministicGate
-        ? `${plan.deterministicGate.acceptedComments} accepted, ${plan.deterministicGate.droppedFindings} dropped.`
+        ? `${plan.deterministicGate.acceptedComments} accepted${outsideDiffSummary}, ${plan.deterministicGate.droppedFindings} dropped.`
         : "No deterministic gate summary available."
     }
   ];
@@ -918,7 +920,7 @@ function buildProofGaps(plan: ReviewPlan): OutcomeLedgerProofGapInput[] {
 function mapReviewPlanDecision(plan: ReviewPlan): OutcomeLedgerDecisionStatus {
   if (plan.event === "REQUEST_CHANGES") return "block";
   if (plan.proof?.status === "missing") return "warn";
-  if (plan.comments.length > 0) return "warn";
+  if (plan.comments.length > 0 || plan.outsideDiffFindings?.length) return "warn";
   return "accept_with_evidence";
 }
 

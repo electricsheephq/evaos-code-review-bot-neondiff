@@ -567,6 +567,7 @@ function sampleReviewPlan(): ReviewPlan {
     deterministicGate: {
       inputFindings: 1,
       acceptedComments: 1,
+      outsideDiffFindings: 0,
       droppedFindings: 0,
       event: "REQUEST_CHANGES",
       requestChangesEligible: 1,

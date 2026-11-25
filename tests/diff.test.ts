@@ -26,6 +26,27 @@ describe("diff coordinate validation", () => {
     expect(lines.get("src/game/combat.ts")).toEqual(new Set([10, 11, 12, 13, 44, 45]));
   });
 
+  it("counts only hunk rows across multiple diff sections in strict mode", () => {
+    const patch = [
+      "diff --git a/file b/file",
+      "--- a/file",
+      "+++ b/file",
+      "@@ -1,2 +1,2 @@",
+      " ",
+      "-old",
+      "+new",
+      "diff --git a/file b/file",
+      "--- a/file",
+      "+++ b/file",
+      "@@ -10 +10 @@",
+      "-before",
+      "+after"
+    ].join("\n");
+
+    expect(collectRightSideLines([{ filename: "file", patch }], { requireHunkLinePrefixes: true }).get("file"))
+      .toEqual(new Set([1, 2, 10]));
+  });
+
   it("drops deleted, missing, and out-of-diff findings while preserving valid findings", () => {
     const findings: Finding[] = [
       { severity: "P1", path: "src/game/combat.ts", line: 11, title: "Valid", body: "This is valid.", confidence: 0.9 },
@@ -41,5 +62,102 @@ describe("diff coordinate validation", () => {
       expect.objectContaining({ title: "Deleted", reason: "line_not_in_current_diff" }),
       expect.objectContaining({ title: "Missing", reason: "file_not_in_diff" })
     ]);
+  });
+
+  it.each([undefined, null, ""])("preserves a finding on a changed file whose patch is %s", (patch) => {
+    const finding: Finding = {
+      severity: "P2", path: "assets/bundle.js", line: 42, title: "Missing fallback",
+      body: "The generated bundle omits the fallback.", confidence: 0.9,
+      evidence: [{ path: "assets/bundle.js", startLine: 42, endLine: 42, excerpt: "return value;" }]
+    };
+
+    const result = validateFindingLocations([finding], [...files, { filename: finding.path, status: "modified", patch }]);
+
+    expect(result.valid).toEqual([]);
+    expect(result.dropped).toEqual([]);
+    expect(result.outsideDiff).toEqual([finding]);
+  });
+
+  it.each([
+    ["text.ts", 2, true], ["text.ts", 3, false], ["text.ts", 0, false],
+    ["missing.ts", 1, false], ["binary.dat", 1, false], ["empty.ts", 1, false]
+  ] as const)("checks patchless coordinate %s:%i against the head", (path, line, exists) => {
+    const finding: Finding = { severity: "P2", path, line, title: "Invalid fallback", body: "The fallback is invalid.", confidence: 0.9,
+      evidence: [{ path, startLine: 1, endLine: 3, excerpt: "fixture" }] };
+    const result = validateFindingLocations([finding], [{ filename: path, status: "modified" }],
+      new Map([["text.ts", 2], ["empty.ts", 0]]));
+    expect(result.outsideDiff).toEqual(exists ? [finding] : []);
+    expect(result.dropped).toEqual(exists ? [] : [{ ...finding, reason: "outside_diff_line_not_in_head_file" }]);
+  });
+
+  it("requires a citation to cover the finding line on the same patchless file", () => {
+    const path = "assets/bundle.js";
+    const ref = { path, startLine: 2, endLine: 4, excerpt: "fixture" };
+    const finding: Finding = { severity: "P2", path, line: 3, title: "Invalid fallback", body: "The fallback is invalid.", confidence: 0.9 };
+    const covered = { ...finding, evidence: [{ ...ref, path: "other.js" }, ref] };
+    const uncovered = [undefined, [], [{ ...ref, path: "other.js" }], [{ ...ref, endLine: 2 }]]
+      .map((evidence) => ({ ...finding, evidence }));
+    const inline = { ...finding, path: files[0].filename, line: 11 };
+    const result = validateFindingLocations([covered, ...uncovered, inline], [...files, { filename: path, status: "modified" }],
+      new Map([[path, 4]]));
+    expect(result.outsideDiff).toEqual([covered]);
+    expect(result.valid).toEqual([inline]);
+    expect(result.dropped).toEqual(uncovered.map((candidate) => ({ ...candidate, reason: "outside_diff_without_evidence" })));
+  });
+
+  it("accepts a leading ./ on a covering citation for the same file", () => {
+    const path = "B/x.js";
+    const ref = { path: "./B/x.js", startLine: 1, endLine: 1, excerpt: "fixture" };
+    const covered: Finding = {
+      severity: "P2", path, line: 1, title: "Invalid fallback", body: "The fallback is invalid.", confidence: 0.9, evidence: [ref]
+    };
+    const unrelated = { ...covered, evidence: [{ ...ref, path: "./C/y.js" }] };
+    const result = validateFindingLocations([covered, unrelated], [{ filename: path, status: "modified" }],
+      new Map([[path, 1]]));
+
+    expect(result.outsideDiff).toEqual([covered]);
+    expect(result.dropped).toEqual([{ ...unrelated, reason: "outside_diff_without_evidence" }]);
+  });
+
+  it.each([
+    [{ status: "renamed", changes: 0 }, false],
+    [{ status: "copied", changes: 0 }, false],
+    [{ status: "changed", changes: 0 }, false],
+    [{ status: "unchanged" }, false],
+    [{ status: "renamed", changes: 3 }, true],
+    [{ status: "copied", additions: 1 }, true]
+  ] as const)("checks content changes for patchless file %j", (metadata, changed) => {
+    const finding: Finding = {
+      severity: "P1", path: "src/moved.ts", line: 1, title: "Missing fallback",
+      body: "The fallback is omitted.", confidence: 0.9,
+      evidence: [{ path: "src/moved.ts", startLine: 1, endLine: 1, excerpt: "fixture" }]
+    };
+    const result = validateFindingLocations([finding], [{ filename: finding.path, ...metadata }]);
+    expect(result.outsideDiff).toEqual(changed ? [finding] : []);
+    expect(result.dropped).toEqual(changed ? [] : [{ ...finding, reason: "file_not_in_diff" }]);
+  });
+
+  it("drops a finding on a removed file that has no patch", () => {
+    const finding: Finding = {
+      severity: "P2", path: "public/game.old.js", line: 10, title: "Removed bundle",
+      body: "The file is gone at head.", confidence: 0.9
+    };
+
+    const result = validateFindingLocations([finding], [{ filename: finding.path, status: "removed" }]);
+
+    expect(result.outsideDiff).toEqual([]);
+    expect(result.dropped).toEqual([{ ...finding, reason: "file_not_in_diff" }]);
+  });
+
+  it("keeps the existing drop for a deletion-only patch with no right-side lines", () => {
+    const finding: Finding = {
+      severity: "P2", path: "src/removed.ts", line: 1, title: "Removed file",
+      body: "There is no right-side line.", confidence: 0.9
+    };
+
+    const result = validateFindingLocations([finding], [{ filename: finding.path, patch: "@@ -1 +0,0 @@\n-removed" }]);
+
+    expect(result.outsideDiff).toEqual([]);
+    expect(result.dropped).toEqual([{ ...finding, reason: "file_not_in_diff" }]);
   });
 });

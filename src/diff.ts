@@ -2,7 +2,9 @@ import type { DroppedFinding, Finding, PullFilePatch } from "./types.js";
 
 const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 
-export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<number>> {
+export function collectRightSideLines(
+  files: PullFilePatch[], { requireHunkLinePrefixes = false } = {}
+): Map<string, Set<number>> {
   const byPath = new Map<string, Set<number>>();
 
   for (const file of files) {
@@ -10,6 +12,10 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
     let newLine: number | null = null;
 
     for (const rawLine of (file.patch ?? "").split("\n")) {
+      if (requireHunkLinePrefixes && rawLine.startsWith("diff --git ")) {
+        newLine = null;
+        continue;
+      }
       const hunk = rawLine.match(HUNK_HEADER);
       if (hunk) {
         newLine = Number(hunk[1]);
@@ -18,13 +24,12 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
 
       if (newLine === null || rawLine.startsWith("\\ No newline")) continue;
 
-      if (rawLine.startsWith("+") && !rawLine.startsWith("+++")) {
-        lines.add(newLine);
-        newLine += 1;
+      if (requireHunkLinePrefixes) {
+        // Only actual context and added rows can ground a finding in a rendered patch.
+        if (!rawLine.startsWith(" ") && !rawLine.startsWith("+")) continue;
+      } else if (rawLine.startsWith("-") && !rawLine.startsWith("---")) {
         continue;
       }
-
-      if (rawLine.startsWith("-") && !rawLine.startsWith("---")) continue;
 
       lines.add(newLine);
       newLine += 1;
@@ -36,18 +41,51 @@ export function collectRightSideLines(files: PullFilePatch[]): Map<string, Set<n
   return byPath;
 }
 
-export function validateFindingLocations(findings: Finding[], files: PullFilePatch[]): {
+export function isPatchlessChangedFile(file: PullFilePatch): boolean {
+  const lines = (file.patch ?? "").split("\n");
+  if (lines.some((line) => HUNK_HEADER.test(line))) return false;
+  const modeChange = lines.some((line) => line.startsWith("old mode ")) &&
+    lines.some((line) => line.startsWith("new mode "));
+  const binary = lines.some((line) => line.startsWith("Binary files ") || line === "GIT binary patch");
+  if (modeChange && !binary) return false;
+  return (
+    file.status === "added" || file.status === "modified" ||
+    ((file.status === "renamed" || file.status === "copied") &&
+      ((file.changes ?? 0) > 0 || (file.additions ?? 0) + (file.deletions ?? 0) > 0))
+  );
+}
+
+/** Finding citations must already be verified against the checkout by the review runtime. */
+export function validateFindingLocations(
+  findings: Finding[], files: PullFilePatch[], headLineCounts?: ReadonlyMap<string, number>,
+  outsideDiffShownLines?: ReadonlyMap<string, ReadonlySet<number>>
+): {
   valid: Finding[];
   dropped: DroppedFinding[];
+  outsideDiff: Finding[];
 } {
   const rightLines = collectRightSideLines(files);
+  const pathsWithoutPatch = new Set(files.filter(isPatchlessChangedFile).map((file) => file.filename));
   const valid: Finding[] = [];
   const dropped: DroppedFinding[] = [];
+  const outsideDiff: Finding[] = [];
 
   for (const finding of findings) {
     const fileLines = rightLines.get(finding.path);
     if (!fileLines) {
-      dropped.push({ ...finding, reason: "file_not_in_diff" });
+      if (!pathsWithoutPatch.has(finding.path)) {
+        dropped.push({ ...finding, reason: "file_not_in_diff" });
+      } else if (headLineCounts && !(Number.isInteger(finding.line) && finding.line >= 1 &&
+          finding.line <= (headLineCounts.get(finding.path) ?? 0))) {
+        dropped.push({ ...finding, reason: "outside_diff_line_not_in_head_file" });
+      } else if (!outsideDiffShownLines?.get(finding.path)?.has(finding.line) && !finding.evidence?.some((ref) =>
+        ref.path.replace(/^\.\//, "") === finding.path.replace(/^\.\//, "") &&
+          ref.startLine <= finding.line && finding.line <= ref.endLine
+      )) {
+        dropped.push({ ...finding, reason: "outside_diff_without_evidence" });
+      } else {
+        outsideDiff.push(finding);
+      }
       continue;
     }
     if (!fileLines.has(finding.line)) {
@@ -57,5 +95,5 @@ export function validateFindingLocations(findings: Finding[], files: PullFilePat
     valid.push(finding);
   }
 
-  return { valid, dropped };
+  return { valid, dropped, outsideDiff };
 }

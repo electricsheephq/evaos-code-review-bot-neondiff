@@ -69,6 +69,76 @@ it("maps final comments and Codex usage to ReviewBench; an empty result succeeds
   findings = []; await runReviewLocal({ ...args(), format: "reviewbench" });
   expect(JSON.parse(fs.readFileSync(args().out, "utf8")).findings).toEqual([]);
 });
+it.each([true, false])("requires checkout evidence for patchless findings with checkoutReads=%s", async (checkoutReads) => {
+  const diff = join(root, "diff.patch"), config = join(root, "config.json");
+  fs.writeFileSync(join(repo, "bundle.js"), "line\n".repeat(7));
+  fs.writeFileSync(join(repo, "binary.dat"), Buffer.from([1, 0, 2]));
+  git("add", "bundle.js", "binary.dat"); git("commit", "-qm", "patchless fixtures"); head = git("rev-parse", "HEAD");
+  fs.writeFileSync(diff, git("diff", `${base}...${head}`, "--", "file.ts", "binary.dat") +
+    "\ndiff --git a/bundle.js b/bundle.js\nnew file mode 100644\n" +
+    "\ndiff --git a/missing.js b/missing.js\nnew file mode 100644\n" +
+    "diff --git a/tool.sh b/tool.sh\nold mode 100644\nnew mode 100755\n" +
+    "diff --git a/old.ts b/renamed.ts\nsimilarity index 100%\nrename from old.ts\nrename to renamed.ts\n");
+  fs.writeFileSync(config, JSON.stringify({ reviewGate: { maxInlineComments: 1 }, codexRuntime: { checkoutReads } }));
+  if (!checkoutReads) fs.appendFileSync(join(repo, "bundle.js"), "dirty extra line\n");
+  findings = [
+    { ...findings[0], confidence: 0.8 },
+    { ...findings[0], path: "bundle.js", line: 7, confidence: 0.99,
+      evidence: [{ path: "bundle.js", startLine: 7, endLine: 7, excerpt: "line" }] },
+    { ...findings[0], path: "bundle.js", line: 8, title: "Invalid extra line" },
+    { ...findings[0], path: "binary.dat", line: 1 },
+    { ...findings[0], path: "missing.js", line: 1 }
+  ];
+  const evidence = join(root, "evidence");
+  const input = { ...args(), "diff-file": diff, config, "evidence-dir": evidence, "keep-evidence": "true" };
+  await runReviewLocal(input);
+  const prompt = vi.mocked(runCodexReview).mock.calls[0]?.[0].prompt;
+  expect(prompt).toContain("### binary.dat\n\n```diff\n[binary or too large for GitHub patch]\n```");
+  expect(prompt).toContain("### file.ts\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n");
+  expect(prompt).toContain("### tool.sh\n\n```diff\n\n```");
+  expect(prompt).toContain("### renamed.ts\n\n```diff\n\n```");
+  expect(JSON.parse(fs.readFileSync(input.out, "utf8"))).toMatchObject([
+    { path: "file.ts", side: "RIGHT" }, ...(checkoutReads ? [{ path: "bundle.js", line: 7, placement: "body" }] : [])
+  ]);
+  const gate = JSON.parse(fs.readFileSync(join(evidence, fs.readdirSync(evidence)[0], "deterministic-gate.json"), "utf8"));
+  expect(gate.summary.dropReasonCounts).toEqual({
+    outside_diff_line_not_in_head_file: 3, ...(checkoutReads ? {} : { outside_diff_without_evidence: 1 })
+  });
+  await runReviewLocal({ ...input, format: "reviewbench" });
+  expect(JSON.parse(fs.readFileSync(input.out, "utf8")).findings).toMatchObject([
+    { file: "file.ts", start_line: 1, end_line: 1 },
+    ...(checkoutReads ? [{ file: "bundle.js", start_line: 7, end_line: 7 }] : [])
+  ]);
+});
+it("keeps a cited text finding when Git diffs the file as binary in a checkout owned by another user", async () => {
+  fs.writeFileSync(join(repo, ".gitattributes"), "*.dat -diff\n");
+  fs.writeFileSync(join(repo, "text.dat"), "before\n");
+  git("add", ".gitattributes", "text.dat");
+  git("commit", "-qm", "binary diff base");
+  base = git("rev-parse", "HEAD");
+  fs.writeFileSync(join(repo, "text.dat"), "after\nsecond line\n");
+  git("commit", "-qam", "binary diff head");
+  expect(git("diff", base, "HEAD", "--", "text.dat")).toContain("Binary files a/text.dat and b/text.dat differ");
+  findings = [{ ...findings[0], path: "text.dat", line: 2,
+    evidence: [{ path: "text.dat", startLine: 1, endLine: 2, excerpt: "after\nsecond line" }] }];
+
+  const globalConfig = join(root, "empty.gitconfig");
+  fs.writeFileSync(globalConfig, "");
+  vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+  vi.stubEnv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
+  try {
+    await runReviewLocal(args());
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  expect(vi.mocked(runCodexReview).mock.calls[0]?.[0].prompt)
+    .toContain("### text.dat\n\n```diff\n[binary or too large for GitHub patch]\n```");
+  expect(JSON.parse(fs.readFileSync(args().out, "utf8"))).toMatchObject([
+    { path: "text.dat", line: 2, placement: "body" }
+  ]);
+});
 it("reads every RB input and prints applied settings", async () => {
   const pr = join(root, "pr.json"), diff = join(root, "diff.patch");
   fs.writeFileSync(pr, JSON.stringify({ nwo: "fixture/repo", pr_number: 7, title: "RB title", body: "RB body", base, head }));
@@ -111,6 +181,16 @@ it("removes markdown severity, collapses whitespace, includes why and caps messa
 it("parses renamed, added, deleted, binary and quoted paths", () => {
   const diff = 'diff --git a/old b/new\nrename from old\nrename to new\n--- a/old\n+++ b/new\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/gone b/gone\n--- a/gone\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\ndiff --git "a/sp\\tace" "b/sp\\tace"\n--- /dev/null\n+++ "b/sp\\tace"\n@@ -0,0 +1 @@\n+hi\ndiff --git a/image b/image\nBinary files a/image and b/image differ\n';
   expect(parseLocalDiff(diff).map(x => [x.filename, x.status])).toEqual([["new", "renamed"], ["gone", "removed"], ["sp\tace", "added"], ["image", "modified"]]);
+});
+it("keeps pure renames, mode-only changes and removed binaries out of local body findings", () => {
+  const diff = [
+    "diff --git a/old b/new\nsimilarity index 100%\nrename from old\nrename to new",
+    "diff --git a/mode b/mode\nold mode 100644\nnew mode 100755",
+    "diff --git a/removed b/removed\ndeleted file mode 100644\nBinary files a/removed and /dev/null differ"
+  ].join("\n");
+  expect(parseLocalDiff(diff).map(({ status, additions, deletions }) => [status, additions, deletions])).toEqual([
+    ["renamed", 0, 0], ["changed", 0, 0], ["removed", 0, 0]
+  ]);
 });
 it("drops the tab Git appends to unquoted ---/+++ paths that contain a space", () => {
   const diff = 'diff --git a/foo bar b/foo bar\n--- a/foo bar\t\n+++ b/foo bar\t\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/new file b/new file\nnew file mode 100644\n--- /dev/null\n+++ b/new file\t\n@@ -0,0 +1 @@\n+hi\n';
