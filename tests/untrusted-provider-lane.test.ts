@@ -217,6 +217,24 @@ it("accepts the adapter's findings-only schema and keeps the provider's schema-r
   expect(fetch).toHaveBeenCalledTimes(3);
 });
 
+it("strips unverified citations from the findings passed to the gate", async () => {
+  const { runUntrustedProviderReview } = await import("../src/untrusted-provider-review.js");
+  const finding = { severity: "P2", path: "bundle.js", line: 1, title: "Missing fallback",
+    body: "The fallback is absent.", confidence: 0.9 };
+  const supplied = [
+    { ...finding, evidence: [{ path: finding.path, startLine: 1, endLine: 1, excerpt: "fabricated" }] },
+    { ...finding, evidence: "malformed" }
+  ];
+  const fetch = vi.fn(async () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ findings: supplied }) } }]
+  })));
+  vi.spyOn(providers, "createPinnedProviderFetch").mockResolvedValue(fetch as typeof globalThis.fetch);
+  const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");
+  const result = await runUntrustedProviderReview({ config, prompt: "fixture", providerApiKeys: { fixture: "fixture" } });
+  expect(result.findings).toEqual([finding, finding]);
+  expect(result.droppedFromSchema).toEqual([]);
+});
+
 it("treats a DNS lookup failure as transient and an unsafe DNS answer as terminal", async () => {
   const { runUntrustedProviderReview, UntrustedProviderUnavailable } = await import("../src/untrusted-provider-review.js");
   const config = buildUntrustedProviderReviewConfig(laneConfig(), "fixture");

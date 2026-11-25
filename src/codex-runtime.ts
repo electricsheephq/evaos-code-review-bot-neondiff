@@ -6,7 +6,7 @@ import { accessSync, closeSync, constants, existsSync, fchmodSync, fstatSync, mk
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { LCM_REVIEW_ASSESSMENT_SCHEMA } from "./lcm-review-assessment.js";
-import { parseFindings } from "./findings.js";
+import { parseFindings, stripFindingEvidence } from "./findings.js";
 import { createSourceRefReadBudget, verifySourceRef } from "./issue-analysis.js";
 import type { DroppedFinding } from "./types.js";
 import { containsSecretLikeText, redactSecrets, secretLikeRuleIds } from "./secrets.js";
@@ -665,7 +665,7 @@ export async function runCodexReview(input: {
         if (!failure) return true;
         droppedFromEvidence.push({ ...finding, reason: "evidence_unverified", evidenceFailure: failure });
         return false;
-      }) : findings.map(({ evidence, evidenceMalformed, ...finding }) => finding);
+      }) : findings.map(stripFindingEvidence);
       const summary = parseReviewModelSummary(parsed, verifiedFindings.length);
       // The summary comes from the same response; a rejected claim must not survive through it.
       return { findings: verifiedFindings, summary: droppedFromEvidence.length > 0 ? {

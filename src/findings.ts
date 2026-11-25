@@ -100,6 +100,10 @@ export function parseFindings(value: unknown): { findings: Finding[]; dropped: D
   return { findings, dropped };
 }
 
+export function stripFindingEvidence({ evidence, evidenceMalformed, ...finding }: Finding): Finding {
+  return finding;
+}
+
 function isFindingEvidenceRef(ref: unknown): ref is FindingEvidenceRef {
   return isRecord(ref) && typeof ref.path === "string" && ref.path.length > 0 &&
     Number.isInteger(ref.startLine) && (ref.startLine as number) > 0 &&

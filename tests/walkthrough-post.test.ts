@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { findPostedCiReview } from "../src/ci-mode.js";
-import { buildWalkthroughMarker } from "../src/walkthrough.js";
+import { buildWalkthroughComment, buildWalkthroughMarker } from "../src/walkthrough.js";
 import { appendReviewAttribution, buildReviewBodyForPost, postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "../src/walkthrough-post.js";
 
 function findReview(body: string, repo: string) {
@@ -44,14 +44,64 @@ describe("walkthrough comment posting", () => {
     expect(result.body).toBe(appendReviewAttribution(prose, "fixture"));
   });
 
+  it("keeps the full base walkthrough when the outside-diff headline puts the compact render over the limit", () => {
+    const repo = "owner/repo";
+    const model = "fixture";
+    const outsideDiffFindings = [{
+      path: "src/generated.ts", line: 7, title: "Fallback title", body: "Full detail ".repeat(125),
+      severity: "P2" as const, category: "runtime_correctness" as const, confidence: 0.9, fingerprint: "fixture"
+    }];
+    let summary = "x";
+    const render: Parameters<typeof buildReviewBodyForPost>[0]["render"] = (lines, _countMode, sectionStarts) =>
+      buildWalkthroughComment({
+        repo, files: [], comments: [], dropped: [], event: "COMMENT", sectionStarts,
+        outsideDiffFindings, outsideDiffSection: lines,
+        pull: { number: 42, title: "Fixture", draft: false, html_url: "", head: { sha: "a".repeat(40), ref: "feature" },
+          base: { sha: "b".repeat(40), ref: "main", repo: { full_name: repo } } },
+        modelSummary: { changedBehavior: [summary], invariants: [], evidence: [], limitations: [], noFindingRationale: "fixture" }
+      }).body;
+    // Leave room for the compact count line by itself, but not for the headline that accompanies it.
+    summary = "x".repeat(64_945 - appendReviewAttribution(render([]), model).length + 1);
+    const base = appendReviewAttribution(render([]), model);
+    const result = buildReviewBodyForPost({ repo, model, outsideDiffFindings, render });
+
+    expect(result.body).toContain("### Pre-merge checklist");
+    expect(result.body).not.toContain("(truncated");
+    expect(result.body.length).toBeLessThanOrEqual(65_000);
+    expect(result.body).toBe(base);
+    expect(result.publishedOutsideDiffFindings).toEqual([]);
+  });
+
   it.each(["owner/repo", "ElectricSheepHQ/LCM-X"])("keeps a trailing walkthrough marker when truncating prose for %s", async (repo) => {
     const marker = buildWalkthroughMarker({ repo, pullNumber: 42 });
-    const prose = `<details>\n\n\`\`\`ts\n${"a".repeat(66_000)}\n\`\`\`\n\n</details>\n${marker}`;
+    const prose = `<details>\n\n\`\`\`ts\nif (a < b) start();\n${"a".repeat(66_000)}\n\`\`\`\n\n</details>\n${marker}`;
     const { body } = buildReviewBodyForPost({ repo, model: "fixture", outsideDiffFindings: [], render: () => prose });
     expect(body.length).toBeLessThanOrEqual(65_000);
-    expect(body).toContain(`\n\`\`\`\n\n… (truncated)\n\n${marker}`);
-    expect(body).not.toContain("<details>");
+    expect(body).toContain(`\n~~~\n\n… (truncated)\n\n${marker}`);
+    expect(body).toMatch(/^~~~\n<details>\n/);
+    expect(body).toContain("if (a < b) start();");
     if (repo === "owner/repo") expect(body).toBe(appendReviewAttribution(body, "fixture"));
+    await expect(findReview(body, repo)).resolves.toEqual({ id: 1 });
+  });
+
+  it("cuts before the last fitting generated section and preserves both walkthrough markers and the footer", async () => {
+    const repo = "owner/repo";
+    const head = "a".repeat(40);
+    const { body } = buildReviewBodyForPost({
+      repo, model: "fixture", outsideDiffFindings: [],
+      render: (_lines, _countMode, sectionStarts) => buildWalkthroughComment({
+        repo, files: [], comments: [], dropped: [], event: "COMMENT", sectionStarts,
+        pull: { number: 42, title: "Fixture", draft: false, html_url: "", head: { sha: head, ref: "feature" },
+          base: { sha: "b".repeat(40), ref: "main", repo: { full_name: repo } } },
+        modelSummary: { changedBehavior: Array(20).fill("first line\n### Injected heading\n" + "x".repeat(4000)),
+          invariants: [], evidence: [], limitations: [], noFindingRationale: "fixture" }
+      }).body
+    });
+    expect(body.length).toBeLessThanOrEqual(65_000);
+    expect(body).toMatch(/^<!-- evaos-code-review-bot:walkthrough .* -->\n<!-- evaos-code-review-bot:walkthrough-state .* -->\n## Walkthrough/);
+    expect(body).toContain("### Review Signal\n\nNo validated inline findings.");
+    expect(body).toContain("High-severity findings: 0.\n\n… (truncated: later sections omitted)\n\nReviewed by");
+    expect(body).not.toMatch(/### (Maintainer Analysis|Injected heading)/);
     await expect(findReview(body, repo)).resolves.toEqual({ id: 1 });
   });
 

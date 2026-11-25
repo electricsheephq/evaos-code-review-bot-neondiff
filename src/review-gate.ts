@@ -48,6 +48,8 @@ export interface RepoMemoryFalsePositiveEntry {
 export function applyDeterministicReviewGate(input: {
   findings: Finding[];
   files: PullFilePatch[];
+  headLineCounts?: ReadonlyMap<string, number>;
+  outsideDiffShownLines?: ReadonlyMap<string, ReadonlySet<number>>;
   droppedFromSchema?: DroppedFinding[];
   maxInlineComments?: number;
   maxOutsideDiffFindings?: number;
@@ -58,7 +60,7 @@ export function applyDeterministicReviewGate(input: {
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
   categoryPrecisionFloors?: CategoryPrecisionFloors;
 }): DeterministicReviewGateResult {
-  const located = validateFindingLocations(input.findings, input.files);
+  const located = validateFindingLocations(input.findings, input.files, input.headLineCounts, input.outsideDiffShownLines);
   // Memory suppression intentionally precedes normalization; dropReasonCounts reflects that ordering.
   const repoMemoryFiltered = applyRepoMemoryFalsePositiveSuppressions(
     [...located.valid, ...located.outsideDiff],

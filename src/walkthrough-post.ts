@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { appendLcmReviewAssessment } from "./lcm-review-assessment.js";
+import { appendLcmReviewAssessment, escapeOrdinaryLcmReviewBody } from "./lcm-review-assessment.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
@@ -57,7 +57,7 @@ export function buildReviewBodyForPost(input: {
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
   assessment?: string;
   initialBody?: string;
-  render: (lines: string[], countMode?: OutsideDiffCountMode) => string;
+  render: (lines: string[], countMode?: OutsideDiffCountMode, sectionStarts?: number[]) => string;
 }): { body: string; publishedOutsideDiffFindings: OutsideDiffFinding[] } {
   const isLcm = isLcmReviewRepository(input.repo);
   const compose = (body: string) => {
@@ -82,29 +82,40 @@ export function buildReviewBodyForPost(input: {
   }
   const limit = 65_000;
   if (body.length > limit) {
-    const base = input.render([]);
+    const sectionStarts: number[] = [];
+    const base = input.render([], undefined, sectionStarts);
     section = format("paths", Math.max(0, limit - compose(base).length - 2));
     body = compose(input.render(section.lines));
     if (body.length > limit) {
       section = { lines: [], listedCount: 0 };
       const footerLength = isLcm ? 0 : appendReviewAttribution("", input.model).length;
-      body = compose(truncateReviewProse(base, limit - footerLength));
+      const prose = isLcm ? escapeOrdinaryLcmReviewBody(base) : base;
+      const starts = prose === base ? sectionStarts : sectionStarts.map(start => escapeOrdinaryLcmReviewBody(base.slice(0, start)).length);
+      body = compose(truncateReviewProse(prose, limit - footerLength, starts));
     }
   }
   return { body, publishedOutsideDiffFindings: input.outsideDiffFindings.slice(0, section.listedCount) };
 }
 
-function truncateReviewProse(body: string, limit: number): string {
+function truncateReviewProse(body: string, limit: number, sectionStarts: number[]): string {
   let leading = "";
   const trailing: string[] = [];
   // Generated walkthrough markers are single-line comments. Reserve the whole comment even if it trails the prose.
-  const prose = body.replace(/<!-- evaos-code-review-bot:walkthrough(?:-state)? [^<\r\n]*?-->(?:\r?\n)?/g, (marker: string, offset: number) => {
+  const markerPattern = /<!-- evaos-code-review-bot:walkthrough(?:-state)? [^<\r\n]*?-->(?:\r?\n)?/g;
+  const prose = body.replace(markerPattern, (marker: string, offset: number) => {
     if (offset === leading.length) leading += marker;
     else trailing.push(marker.trimEnd());
     return "";
   });
   const tail = trailing.length ? `\n\n${trailing.join("\n")}` : "";
-  return leading + truncateReviewText(prose, limit - leading.length - tail.length) + tail;
+  const remaining = limit - leading.length - tail.length;
+  if (prose.length <= remaining) return leading + prose + tail;
+  const suffix = "\n\n… (truncated: later sections omitted)";
+  for (const start of sectionStarts.toReversed()) {
+    const prefix = body.slice(0, start).replace(markerPattern, "").trimEnd();
+    if (prefix && prefix.length + suffix.length <= remaining) return leading + prefix + suffix + tail;
+  }
+  return leading + truncateReviewText(prose, remaining) + tail;
 }
 
 export const REVIEW_ATTRIBUTION_PREFIX = "Reviewed by [NeonDiff](https://www.neondiff.com/?utm_source=github&utm_medium=review&utm_campaign=footer) · ";

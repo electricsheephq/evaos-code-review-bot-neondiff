@@ -44,6 +44,7 @@ export function buildWalkthroughComment(input: {
   outsideDiffFindings?: OutsideDiffFinding[];
   outsideDiffSection?: string[] | "review";
   outsideDiffCountMode?: OutsideDiffCountMode;
+  sectionStarts?: number[];
   dropped: DroppedFinding[];
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
@@ -81,21 +82,21 @@ export function buildWalkthroughComment(input: {
   };
   const highSeverity = findings.filter((finding) => finding.severity === "P0" || finding.severity === "P1").length;
   const requestChangesEligible = findings.filter((finding) => isRequestChangesEligible(finding)).length;
-  const visibleBody = [
-    "## Walkthrough",
+  const parts = [
+    { heading: "## Walkthrough" },
     "",
     `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title, input.publicConfidencePolicy)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
     `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
     "",
-    "### Changed Files",
+    { heading: "### Changed Files" },
     "",
     "| File | Status | Churn | Purpose | Risk |",
     "| --- | --- | --- | --- | --- |",
     ...visibleFiles.map((file) => `| \`${file.filename}\` | ${file.status} | ${file.churn} | ${file.purpose} | ${file.risk} |`),
     ...(omittedFileCount > 0 ? ["", `${omittedFileCount} additional changed files omitted from this walkthrough.`] : []),
     "",
-    "### Review Signal",
+    { heading: "### Review Signal" },
     "",
     input.comments.length === 0
       ? "No validated inline findings."
@@ -105,7 +106,7 @@ export function buildWalkthroughComment(input: {
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
     "",
     ...(input.outsideDiffSection === "review" ? [] : input.outsideDiffSection ?? formatOutsideDiffFindings(outsideDiffFindings, input.publicConfidencePolicy).lines),
-    "### Maintainer Analysis",
+    { heading: "### Maintainer Analysis" },
     "",
     "Changed behavior:",
     ...formatModelSummaryList(modelSummary.changedBehavior, "No changed behavior was established.", input.publicConfidencePolicy),
@@ -122,19 +123,19 @@ export function buildWalkthroughComment(input: {
     ...(outsideDiffFindings.length === 0
       ? [`No-finding rationale: ${sanitizePublicConfidenceText(modelSummary.noFindingRationale, input.publicConfidencePolicy)}`, ""]
       : []),
-    "### Risk Taxonomy",
+    { heading: "### Risk Taxonomy" },
     "",
     formatCategoryBreakdown(findings),
     "",
-    "### Validation and Proof",
+    { heading: "### Validation and Proof" },
     "",
     ...formatValidationSection(input.validation, input.proof, input.publicConfidencePolicy),
     "",
-    "### Related Context",
+    { heading: "### Related Context" },
     "",
     `Related issues/PRs: ${relatedRefs.length > 0 ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
     "",
-    "### Pre-merge checklist",
+    { heading: "### Pre-merge checklist" },
     "",
     checklistItem(input.comments.every((comment) => comment.side === "RIGHT"), "Inline comments target current RIGHT-side diff lines."),
     checklistItem(!commentsContainSecretLikeText(publicComments), "No secret-like content survived into posted inline comments."),
@@ -143,8 +144,9 @@ export function buildWalkthroughComment(input: {
       "REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation."
     ),
     checklistItem(proofChecklistPassed(input.validation, input.proof), "Required behavior proof is present or not applicable.")
-  ].join("\n");
-  const redactedBody = redactSecrets(visibleBody);
+  ];
+  const lines = parts.map((part) => typeof part === "string" ? part : part.heading);
+  const redactedBody = redactSecrets(lines.join("\n"));
   assertPublicReviewOutputSafe(redactedBody);
   const walkthroughHash = hashWalkthrough(redactedBody);
   const stateMarker = buildWalkthroughStateMarker({
@@ -154,6 +156,14 @@ export function buildWalkthroughComment(input: {
     verdict: input.event,
     walkthroughHash
   });
+  if (input.sectionStarts) {
+    const markerLength = marker.length + stateMarker.length + 2;
+    for (const [index, part] of parts.entries()) {
+      if (typeof part === "string") continue;
+      const start = index === 0 ? 0 : redactSecrets(`${lines.slice(0, index).join("\n")}\n`).length;
+      if (redactedBody.startsWith(`${part.heading}\n`, start)) input.sectionStarts.push(markerLength + start);
+    }
+  }
 
   return {
     marker,
@@ -189,10 +199,25 @@ export function formatOutsideDiffFindings(
     const body = detail === "full" ? publicText(finding.body) : "";
     const noteStart = finding.severityDemotedFrom ? body.lastIndexOf("\n\n_Severity lowered from ") : -1;
     const note = noteStart < 0 ? "" : body.slice(noteStart);
-    const description = truncateReviewText(note ? body.slice(0, noteStart) : body, 1_500 - note.length);
-    let entry = detail === "full" ? `${coordinate}\n\n${description}${note}` : coordinate;
+    const description = note ? body.slice(0, noteStart) : body;
+    let entry = coordinate;
+    if (detail === "full") {
+      entry = `${coordinate}\n\n${body}`;
+      if (body.length > 1_500) {
+        const title = publicText(finding.title);
+        const titlePrefix = `**${finding.severity}: ${title}**\n\n`;
+        const excerpt = description.startsWith(titlePrefix) ? description.slice(titlePrefix.length) : description;
+        const clippedTitle = title.replace(/\s+/g, " ").trim().replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+          .slice(0, 1_500 - note.length - 64).replace(/[\uD800-\uDBFF]$/, "");
+        entry = `${finding.severity} · ${coordinate} — ${clippedTitle}\n\n${truncateReviewText(excerpt, 1_500 - note.length - clippedTitle.length)}${note}`;
+      }
+    }
     if (entry.length > room && detail === "full") detail = "titles";
-    if (detail === "titles") entry = `${coordinate} ${publicText(finding.title).replace(/\s+/g, " ").trim()}`;
+    if (detail === "titles") {
+      const title = publicText(finding.title).replace(/\s+/g, " ").trim();
+      const compactNote = finding.severityDemotedFrom ? ` (lowered from ${finding.severityDemotedFrom}: not re-checked)` : "";
+      entry = `${finding.severity} · ${coordinate} — ${title}${compactNote}`;
+    }
     if (entry.length > room) break;
     lines.push(entry, "");
     size += entry.length + 2;
@@ -205,42 +230,20 @@ export function formatOutsideDiffFindings(
 export function truncateReviewText(text: string, limit: number): string {
   if (text.length <= limit) return text;
   const suffix = "\n\n… (truncated)";
-  if (limit < suffix.length) return "";
-  const entities: Record<string, string> = { "<": "&lt;", ">": "&gt;", "`": "&#96;", "~": "&#126;" };
-  type Fence = { indent: string; run: string };
-  // An open fence is closed with its opener's indentation, so a fence inside a list item stays inside it.
-  const ending = (open: Fence | undefined) => open ? `\n${open.indent}${open.run}${suffix}` : suffix;
-  let kept = "";
-  let fence: Fence | undefined;
-  const prefix = text.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
-  for (const [index, line] of prefix.split(/\r?\n/).entries()) {
-    let nextFence = fence;
-    const delimiter = /^([ \t]*)(`{3,}|~{3,})(.*)$/.exec(line);
-    if (delimiter) {
-      const [, indent, run, rest] = delimiter;
-      if (!fence && (run.startsWith("~") || !rest.includes("`"))) nextFence = { indent, run };
-      else if (fence && run[0] === fence.run[0] && run.length >= fence.run.length && !rest.trim()) nextFence = undefined;
-    }
-    // Fenced code renders literally, so keep its text as is; outside a fence, escape HTML and inline delimiters.
-    const literal = Boolean(fence || nextFence);
-    const newline = index ? "\n" : "";
-    const escaped = literal ? line : line.replace(/[<>`~]/g, (char) => entities[char]);
-    if (kept.length + newline.length + escaped.length + ending(nextFence).length <= limit) {
-      kept += newline + escaped;
-      fence = nextFence;
-      continue;
-    }
-    let room = limit - kept.length - newline.length - ending(fence).length;
-    if (room > 0) kept += newline;
-    for (const char of line) {
-      const safe = fence ? char : (entities[char] ?? char);
-      if (safe.length > room) break;
-      kept += safe;
-      room -= safe.length;
-    }
-    break;
+  const room = limit - suffix.length - 2; // Reserve one newline on each side of the excerpt.
+  if (room < 6) return limit >= suffix.length ? suffix.trimStart() : "";
+  let end = 0;
+  let tildeRun = 0;
+  let fenceLength = 3;
+  for (; end < text.length; end += 1) {
+    tildeRun = text[end] === "~" ? tildeRun + 1 : 0;
+    const nextFenceLength = Math.max(fenceLength, tildeRun + 1);
+    if (end + 1 + 2 * nextFenceLength > room) break;
+    fenceLength = nextFenceLength;
   }
-  return kept.trimEnd() + ending(fence);
+  const excerpt = text.slice(0, end).replace(/[\uD800-\uDBFF]$/, "");
+  const fence = "~".repeat(fenceLength);
+  return `${fence}\n${excerpt}\n${fence}${suffix}`;
 }
 
 function formatModelSummaryList(

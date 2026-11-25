@@ -3,7 +3,7 @@ import { classifyProviderAdapterError, createOpenAICompatibleReviewAdapter } fro
 import { createPinnedProviderFetch } from "./providers.js";
 import { codexReviewOutputSchema } from "./codex-runtime.js";
 import { emptyReviewModelSummary, parseReviewModelSummary } from "./zcode.js";
-import { parseFindings } from "./findings.js";
+import { parseFindings, stripFindingEvidence } from "./findings.js";
 
 export class UntrustedProviderUnavailable extends Error {}
 /** A fast transport failure (DNS, connection, 5xx other than a gateway timeout); retried in-run because a failed head is not requeued. */
@@ -56,7 +56,7 @@ async function runUntrustedProviderReviewOnce(input: UntrustedProviderReviewInpu
     const schemaRetries = typeof evidence?.schemaRetries === "number" ? evidence.schemaRetries : 0;
     const attempts = 1 + schemaRetries;
     const { findings, dropped } = parseFindings(parsed);
-    return { findings, droppedFromSchema: dropped, summary: laneSummary(parsed, findings.length),
+    return { findings: findings.map(stripFindingEvidence), droppedFromSchema: dropped, summary: laneSummary(parsed, findings.length),
       rawResponse: output.text, attempts, degradedRecovery: attempts > 1, runtime: {
       provider: providerId, model: provider.model, startedAt: startedAt.toISOString(), completedAt: completedAt.toISOString(),
       latencyMs: completedAt.getTime() - startedAt.getTime(), providerAttempts: attempts,

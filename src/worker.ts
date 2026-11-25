@@ -18,7 +18,8 @@ import {
 import { configFilePaths, loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
-import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree } from "./git.js";
+import { collectRightSideLines } from "./diff.js";
+import { GitCommandError, computeOwnDiffFingerprint, isBaseMergeOnlyTree, isGitAncestor, assertGitClean, hydratePullFilePatchesFromWorktree, planPullWorktreePaths, preparePullWorktree, readHeadFileLineCounts } from "./git.js";
 import {
   buildGitNexusContextPacket,
   type GitNexusCommandRunner,
@@ -138,6 +139,7 @@ import {
   extractZCodeResponse,
   isZCodeSchemaFailureError,
   mergeReviewModelSummaries,
+  renderReviewFilePatches,
   reviewPromptForbiddenFragments,
   runZCodeRawJson,
   runZCodeReview,
@@ -1649,6 +1651,16 @@ export function recordRestrictedReviewUnavailable(
   return reason;
 }
 
+function completeShownPatch(original: string, rendered: string): string {
+  if (rendered === original) return rendered;
+  // A clipped patch ends with a newline followed by the truncation notice.
+  const cut = rendered.lastIndexOf("\n");
+  if (cut < 0) return "";
+  const prefix = rendered.slice(0, cut);
+  if (cut === original.length || original[cut] === "\n") return prefix;
+  return prefix.slice(0, prefix.lastIndexOf("\n") + 1);
+}
+
 export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResult> {
   const { config, github, state, repo, pull } = input;
   let autoRetryGrant: ReturnType<ReviewStateStore["getAutoRetry"]>;
@@ -2134,6 +2146,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     }
+    // Hydrated patches can help the reviewer reason about a file without creating GitHub anchors.
+    const patchlessFiles = files.filter((file) => !file.patch?.trim());
+    const githubPatchlessPaths = new Set(patchlessFiles.map((file) => file.filename));
+    const gateFiles = reviewFiles.map((file) => githubPatchlessPaths.has(file.filename) ? { ...file, patch: undefined } : file);
+    const headPaths = patchlessFiles.filter((file) => file.status !== "removed").map((file) => file.filename);
+    let headLineCounts: ReadonlyMap<string, number> = new Map();
+    let headLineCountsErrorClass: string | undefined;
+    if (headPaths.length > 0) {
+      try {
+        headLineCounts = await readHeadFileLineCounts({ repoPath: worktree.path, headSha: pull.head.sha, paths: headPaths });
+      } catch (error) {
+        headLineCountsErrorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const reviewModeSelection = selectReviewMode({
       config,
       repo,
@@ -2262,9 +2288,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_context_budget";
     }
-    const executedReviewPrompts = contextBudget.mode === "chunk"
-      ? contextBudget.chunks.map((chunk) => promptForFiles(chunk.files))
-      : [prompt];
+    const promptFileGroups = contextBudget.mode === "chunk" ? contextBudget.chunks.map((chunk) => chunk.files) : [reviewFiles];
+    const executedReviewPrompts = contextBudget.mode === "chunk" ? promptFileGroups.map(promptForFiles) : [prompt];
+    const shownPatchesForFiles = (filesForPrompt: PullFilePatch[]) =>
+      renderReviewFilePatches(filesForPrompt, config.zcode.maxPatchBytes).flatMap(({ file, patch }) => {
+        if (!githubPatchlessPaths.has(file.filename) || !file.patch) return [];
+        return [{ ...file, patch: completeShownPatch(file.patch, patch) }];
+      });
+    const shownPatches = githubPatchlessPaths.size === 0 ? [] : promptFileGroups.flatMap(shownPatchesForFiles);
+    const outsideDiffShownLines = collectRightSideLines(shownPatches, { requireHunkLinePrefixes: true });
     const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile, {
       reviewPrompts: executedReviewPrompts
     });
@@ -2308,6 +2340,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (zcodeExecution.ensemblePromise) {
       ensembleEvidencePromise = zcodeExecution.ensemblePromise
         .then((ensemble) => {
+          // A shadow leaf can show a file alone, but still uses the same per-file cap.
+          const shadowShownLines = collectRightSideLines(
+            reviewFiles.flatMap((file) => githubPatchlessPaths.has(file.filename) ? shownPatchesForFiles([file]) : []),
+            { requireHunkLinePrefixes: true }
+          );
           const shadowPacket = reduceReviewEnsemble({
             subject: {
               repo,
@@ -2315,9 +2352,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
               baseSha: pull.base.sha,
               headSha: pull.head.sha
             },
-            files: reviewFiles,
+            files: gateFiles,
             receipts: ensemble.receipts,
             gatePolicy: {
+              headLineCounts,
+              outsideDiffShownLines: shadowShownLines,
               maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
               maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
               repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
@@ -2397,11 +2436,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         priorThreadEvidence.errorClass = error instanceof Error ? error.name : "UnknownError";
       }
     }
-    // A hydrated patch can help the reviewer reason about a file without creating GitHub anchors.
-    const githubPatchlessPaths = new Set(files.filter((file) => !file.patch?.trim()).map((file) => file.filename));
     const gate = applyDeterministicReviewGate({
       findings: gatedFindings,
-      files: reviewFiles.map((file) => githubPatchlessPaths.has(file.filename) ? { ...file, patch: undefined } : file),
+      files: gateFiles,
+      headLineCounts,
+      outsideDiffShownLines,
       droppedFromSchema: [...zcodeResult.droppedFromSchema, ...(zcodeResult.droppedFromEvidence ?? [])],
       maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
       maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
@@ -2469,6 +2508,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const gateEvidenceDropped = sanitizeDroppedFindings([...gate.dropped, ...answeredDrops], config.confidenceCalibration?.publicDisplay);
     const gateEvidence = (publishedOutsideDiffFindings: OutsideDiffFinding[] = []) => ({
       ...gate,
+      headLineCountsErrorClass,
       dropped: gateEvidenceDropped,
       postVerification: {
         publishedOutsideDiffFindings, droppedOutsideDiffFindings, demotedOutsideDiffFindings, priorThreadDrops,
@@ -2814,7 +2854,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_processed";
     }
-    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review", outsideDiffCountMode?: OutsideDiffCountMode) =>
+    const buildReviewWalkthrough = (outsideDiffSection?: string[] | "review", outsideDiffCountMode?: OutsideDiffCountMode, sectionStarts?: number[]) =>
       buildWalkthroughComment({
         repo,
         pull,
@@ -2830,6 +2870,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         postIssueComment: config.walkthrough.postIssueComment,
         outsideDiffSection,
         outsideDiffCountMode,
+        sectionStarts,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
     if (config.walkthrough.enabled) {
@@ -2909,11 +2950,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       repo, outsideDiffFindings, model: buildReviewProviderMetadata(reviewConfig).model,
       publicConfidencePolicy: summaryInput.publicConfidencePolicy, assessment: assessmentBody,
       initialBody: reviewBodyAfterWalkthroughPost(plan),
-      render: (lines, countMode) => reviewBodyAfterWalkthroughPost({
-        ...plan,
-        summary: buildSummary({ ...summaryInput, outsideDiffSection: lines }),
-        walkthrough: plan.walkthrough && buildReviewWalkthrough(lines, countMode)
-      })
+      render: (lines, countMode, sectionStarts) => {
+        if (plan.walkthrough && (!plan.walkthrough.postIssueComment || !plan.walkthroughComment?.posted)) {
+          return buildReviewWalkthrough(lines, countMode, sectionStarts).body;
+        }
+        return buildSummary({ ...summaryInput, outsideDiffSection: lines });
+      }
     });
     assertReviewOutputSafe(escapeOrdinaryLcmReviewBody(postedBody.body));
     let review: Awaited<ReturnType<GitHubApi["createReview"]>>;

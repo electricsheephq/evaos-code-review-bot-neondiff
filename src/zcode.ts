@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseFindings } from "./findings.js";
+import { isPatchlessChangedFile } from "./diff.js";
+import { parseFindings, stripFindingEvidence } from "./findings.js";
 import type { GitNexusContextPacket } from "./gitnexus-context.js";
 import type { GitHubRelatedContextPacket } from "./github-related-context.js";
 import type { ProviderRuntimeAdapter } from "./provider-adapters.js";
@@ -54,7 +55,7 @@ const REVIEW_INTERNAL_PROMPT_LINES = [
   "The deterministic wrapper treats category as a hint only; severity, current diff coordinates, redaction, and gate policy decide posting.",
   "Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Use P2 for real defects with limited impact and P3 for maintainability, test or documentation problems worth fixing. Report every defect you can substantiate from the diff or the code; do not report pure style preferences or claims you could not check.",
   "Every finding must point at a RIGHT-side line in the current diff.",
-  "The one exception is a changed file shown as [binary or too large for GitHub patch]: if you read that file in the checkout, point at its PR-head line and cite the excerpt in evidence. NeonDiff posts such findings in the review body, outside the diff view."
+  "The one exception is a changed file shown as [binary or too large for GitHub patch]: if you read that file in the checkout, point at its PR-head line and cite in evidence an excerpt of that file whose line range includes the finding's line. NeonDiff posts such findings in the review body, outside the diff view."
 ] as const;
 
 const REVIEW_INTERNAL_PUBLIC_FRAGMENTS = [
@@ -127,7 +128,7 @@ export function parseZCodeReviewOutput(rawStdouts: string[]): ZCodeReviewResult 
       const parsed = JSON.parse(extractJsonObject(rawResponse));
       const { findings, dropped } = parseFindings(parsed);
       const summary = parseReviewModelSummary(parsed, findings.length);
-      return { findings, summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+      return { findings: findings.map(stripFindingEvidence), summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }
@@ -211,14 +212,8 @@ export function buildReviewPrompt(input: {
   maxPatchBytes?: number;
 }): string {
   const fileList = input.files.map((file) => `- ${file.filename}`).join("\n");
-  let remainingPatchBytes = input.maxPatchBytes ?? 80_000;
-  const patches = input.files
-    .map((file) => {
-      const rawPatch = file.patch ?? "[binary or too large for GitHub patch]";
-      const patch = truncateToBudget(rawPatch, remainingPatchBytes);
-      remainingPatchBytes = Math.max(0, remainingPatchBytes - Buffer.byteLength(patch));
-      return `### ${file.filename}\n\n\`\`\`diff\n${patch}\n\`\`\``;
-    })
+  const patches = renderReviewFilePatches(input.files, input.maxPatchBytes)
+    .map(({ file, patch }) => `### ${file.filename}\n\n\`\`\`diff\n${patch}\n\`\`\``)
     .join("\n\n");
 
   const shellReads = input.checkoutAccess === "shell_read_only";
@@ -433,7 +428,7 @@ export async function runZCodeReview(input: {
       const { findings, dropped } = parseFindings(parsed);
       const summary = parseReviewModelSummary(parsed, findings.length);
       // Provenance (#304): a non-first successful attempt is a degraded (strict-JSON retry) recovery.
-      return { findings, summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+      return { findings: findings.map(stripFindingEvidence), summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }
@@ -460,7 +455,7 @@ function buildStrictJsonRetryPrompt(originalPrompt: string): string {
     "Repeat the review and return ONLY the required JSON object. Do not include markdown, prose, analysis, confidence narration, or code fences.",
     "The response must parse with JSON.parse and must have this exact top-level shape:",
     "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":{\"changedBehavior\":[],\"invariants\":[],\"evidence\":[],\"limitations\":[],\"noFindingRationale\":\"concise grounded rationale\"}}",
-    "If you cannot produce a finding with a current RIGHT-side diff line (or, for a changed file shown as [binary or too large for GitHub patch], a PR-head line you read in the checkout), keep findings empty and explain the grounded reason in summary.noFindingRationale.",
+    "If you cannot produce a finding with a current RIGHT-side diff line (or, for a changed file shown as [binary or too large for GitHub patch], a PR-head line you read in the checkout for which you can cite in evidence an excerpt of that file whose line range includes the finding's line), keep findings empty and explain the grounded reason in summary.noFindingRationale.",
     "",
     originalPrompt
   ].join("\n");
@@ -723,6 +718,16 @@ function buildZCodeReviewPolicy(): unknown {
       maxConcurrency: 1
     }
   };
+}
+
+export function renderReviewFilePatches(files: PullFilePatch[], maxPatchBytes = 80_000) {
+  let remainingPatchBytes = maxPatchBytes;
+  return files.map((file) => {
+    const rawPatch = isPatchlessChangedFile(file) ? "[binary or too large for GitHub patch]" : file.patch ?? "";
+    const patch = truncateToBudget(rawPatch, remainingPatchBytes);
+    remainingPatchBytes = Math.max(0, remainingPatchBytes - Buffer.byteLength(patch));
+    return { file, patch };
+  });
 }
 
 function truncateToBudget(text: string, maxBytes: number): string {
