@@ -149,13 +149,20 @@ describe("asynchronous ZCode execution", () => {
     const cliPath = join(root, "retry-cli.mjs");
     const attemptsPath = join(root, "attempts");
     process.env.NEONDIFF_TEST_ATTEMPTS_PATH = attemptsPath;
+    const finding = { severity: "P2", path: "bundle.js", line: 1, title: "Missing fallback",
+      body: "The fallback is absent.", confidence: 0.9 };
+    const supplied = [
+      { ...finding, evidence: [{ path: finding.path, startLine: 1, endLine: 1, excerpt: "fabricated" }] },
+      { ...finding, evidence: "malformed" }
+    ];
     writeFileSync(cliPath, `
       import { appendFileSync } from "node:fs";
       const promptIndex = process.argv.indexOf("--prompt");
       const prompt = process.argv[promptIndex + 1] ?? "";
       appendFileSync(process.env.NEONDIFF_TEST_ATTEMPTS_PATH, "attempt\\n");
       const response = prompt.includes("previous review output was rejected")
-        ? JSON.stringify({ findings: [], summary: "recovered" })
+        && prompt.includes("cite in evidence an excerpt of that file whose line range includes the finding's line")
+        ? JSON.stringify({ findings: ${JSON.stringify(supplied)}, summary: "recovered" })
         : "not-json";
       process.stdout.write(JSON.stringify({ response }));
     `);
@@ -172,6 +179,7 @@ describe("asynchronous ZCode execution", () => {
 
     expect(result.attempts).toBe(2);
     expect(result.degradedRecovery).toBe(true);
+    expect(result.findings).toEqual([finding, finding]);
     expect(readFileSync(attemptsPath, "utf8").trim().split("\n")).toHaveLength(2);
   });
 

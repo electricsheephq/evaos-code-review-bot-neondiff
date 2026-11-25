@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadConfigFromObject } from "./config.js";
 import { resolveCheckoutReadsStatus, runCodexReview } from "./codex-runtime.js";
 import { planContextBudget } from "./context-budget.js";
+import { readHeadFileLineCounts } from "./git.js";
 import { isLcmReviewRepository } from "./lcm-review-repository.js";
 import { filterPullFilesForProfile, resolveRepoProfile } from "./repo-policy.js";
 import { applyDeterministicReviewGate } from "./review-gate.js";
@@ -171,6 +172,16 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
   if (fromRealRepo !== ".." && !fromRealRepo.startsWith(`..${sep}`) && !isAbsolute(fromRealRepo)) throw new Error("--evidence-dir must be outside the reviewed checkout");
   const evidenceDir = mkdtempSync(join(evidenceRoot, "neondiff-review-local-"));
   try {
+    const patchlessPaths = files.filter(file => file.status !== "removed" && !file.patch?.trim()).map(file => file.filename);
+    let headLineCounts: ReadonlyMap<string, number> = new Map();
+    let headLineCountsErrorClass: string | undefined;
+    if (patchlessPaths.length > 0) {
+      try {
+        headLineCounts = await readHeadFileLineCounts({ repoPath, headSha: head, paths: patchlessPaths, trustRepoPath: true });
+      } catch (error) {
+        headLineCountsErrorClass = error instanceof Error ? error.name : "UnknownError";
+      }
+    }
     const findings: Finding[] = [];
     let totalTokens = 0, hasTokens = true;
     const chunks = budget.mode === "chunk" ? budget.chunks.map(x => x.files) : [files];
@@ -190,10 +201,11 @@ export async function runReviewLocal(args: Record<string, string | string[] | un
       else hasTokens = false;
     }
     if (git("rev-parse", "HEAD").trim() !== head) throw new Error("review-local head changed during review");
-    const gate = applyDeterministicReviewGate({ findings, files, maxInlineComments: config.reviewGate?.maxInlineComments,
+    const gate = applyDeterministicReviewGate({ findings, files, headLineCounts, maxInlineComments: config.reviewGate?.maxInlineComments,
       maxOutsideDiffFindings: config.reviewGate?.maxOutsideDiffFindings,
       publicConfidencePolicy: config.confidenceCalibration?.publicDisplay, requestChangesConfidenceFloors: config.reviewGate?.requestChangesConfidenceFloors,
       categoryPrecisionFloors: config.reviewGate?.categoryPrecisionFloors });
+    if (keep) writeLocalJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, headLineCountsErrorClass });
     const outsideDiff = gate.outsideDiffFindings.map((finding) => ({ ...finding, placement: "body" as const }));
     const accepted = [...gate.comments, ...outsideDiff];
     writeLocalJson(resolve(out), format === "neondiff" ? accepted : {
