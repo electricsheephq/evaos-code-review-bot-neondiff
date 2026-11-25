@@ -2940,6 +2940,11 @@ describe("sticky enrichment comments", () => {
         };
         const github = {
           listIssuesForEnrichment: async () => [issue],
+          listIssueComments: async () => [{
+            id: 4099,
+            body: "Follow-up shipped.\n\n<!-- neondiff-operator-comment:fixture -->",
+            user: { login: "evaos-code-review-bot[bot]", type: "Bot" }
+          }],
           canPost: () => true,
           upsertIssueComment: async (input: { issueNumber: number; marker: string; body: string }) => {
             posts.push(input);

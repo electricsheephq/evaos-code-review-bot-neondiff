@@ -13,6 +13,7 @@ describe("default-deny command license policy", () => {
     ["providers", "list"],
     ["providers", "doctor"],
     ["dashboard", undefined],
+    ["post-comment", undefined],
     ["daemon", "stop"],
     ["daemon", "status"],
     ["eval-offline", undefined],

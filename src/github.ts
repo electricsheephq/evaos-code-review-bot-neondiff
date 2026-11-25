@@ -195,8 +195,9 @@ export class GitHubApiRequestError extends Error {
   readonly statusText: string;
   readonly path: string;
   readonly responseText: string;
+  readonly isRateLimited: boolean;
 
-  constructor(input: { status: number; statusText: string; path: string; responseText: string }) {
+  constructor(input: { status: number; statusText: string; path: string; responseText: string; headers?: Headers }) {
     const responseText = redactSecrets(input.responseText);
     super(`GitHub API ${input.status} ${input.statusText} for ${input.path}: ${responseText.slice(0, 400)}`);
     this.name = "GitHubApiRequestError";
@@ -204,6 +205,10 @@ export class GitHubApiRequestError extends Error {
     this.statusText = input.statusText;
     this.path = input.path;
     this.responseText = responseText;
+    this.isRateLimited = input.status === 429 || (input.status === 403 && (
+      input.headers?.get("x-ratelimit-remaining") === "0" || input.headers?.has("retry-after") === true ||
+      /\b(rate limit|abuse detection)\b/i.test(responseText)
+    ));
     Object.defineProperty(this, "responseText", {
       value: responseText,
       enumerable: false,
@@ -663,11 +668,20 @@ export class GitHubApi {
       return { action: "updated", html_url: updated.html_url, id: updated.id };
     }
 
-    const created = await this.request<{ html_url?: string; id: number }>(
+    const { id, html_url } = await this.postIssueComment(input, token);
+    return { action: "created", id, html_url };
+  }
+
+  async createIssueComment(input: { repo: string; issueNumber: number; body: string }): Promise<{ html_url?: string; id: number }> {
+    const token = await this.getInstallationToken(input.repo);
+    return this.postIssueComment(input, token, false);
+  }
+
+  private async postIssueComment(input: { repo: string; issueNumber: number; body: string }, token: string, followRedirects = true) {
+    return this.request<{ html_url?: string; id: number }>(
       `/repos/${input.repo}/issues/${input.issueNumber}/comments`,
-      { method: "POST", token, body: { body: input.body } }
+      { method: "POST", token, body: { body: input.body }, followRedirects }
     );
-    return { action: "created", html_url: created.html_url, id: created.id };
   }
 
   private async findIssueCommentByMarker(
@@ -796,7 +810,8 @@ export class GitHubApi {
           status: response.status,
           statusText: response.statusText,
           path,
-          responseText: text
+          responseText: text,
+          headers: response.headers
         });
       }
       options.onResponse?.(response);

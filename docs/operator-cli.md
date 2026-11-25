@@ -22,6 +22,20 @@ evaos-review-bot status --config config.local.json
 
 ## Commands
 
+- `post-comment`: preview or queue one issue or pull request comment, including
+  on closed or merged PRs. Pass the running daemon's `--config`, `--repo owner/name`,
+  `--number N`, and `--body-file comment.md`. The default preview reports the
+  body length, SHA-256, safety result, and any matching request. Add
+  `--dry-run false --confirm true` to queue it. The daemon must run in live mode
+  with GitHub App credentials. Private and internal repositories also need an
+  active NeonDiff license. Public repositories can post through keyless
+  public-only admission. Identical text is posted once per issue or pull request.
+  Re-queueing it after it posts returns the posted request and its URL.
+  Use `post-comment --status --config PATH`
+  to list requests, with optional `--id I` or `--repo owner/name --number N`
+  filtering. An optional `--state-path` must point to the daemon's SQLite DB for
+  it to see the request.
+  Run one daemon per state database because two daemons sharing it can both pass the claim check and post the same comment.
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
   durable queue counts, and recommended actions.

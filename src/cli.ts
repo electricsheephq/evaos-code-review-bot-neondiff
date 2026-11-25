@@ -7,7 +7,8 @@ import { readCiPullContext, buildCiConfig, findPostedCiReview } from "./ci-mode.
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
-import { runDaemonCycle, shouldExitDaemonAfterFailedCycle, waitForIssueEnrichmentPass } from "./daemon.js";
+import { runDaemonCycle, shouldExitDaemonAfterFailedCycle, waitForIssueEnrichmentPass, waitForOperatorCommentPass } from "./daemon.js";
+import { inspectOperatorCommentBody, normalizeOperatorCommentRepo, resolveOperatorCommentTarget } from "./operator-comment.js";
 import {
   runLaunchdControlCommand,
   type LaunchctlResult
@@ -195,6 +196,11 @@ async function main(): Promise<void> {
     const result = runInitCommand(args);
     console.log(JSON.stringify(result, null, 2));
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
+  if (command === "post-comment") {
+    runPostComment(args);
     return;
   }
 
@@ -2550,6 +2556,56 @@ async function main(): Promise<void> {
   throw new Error(`Unknown command: ${command ?? "(missing)"}`);
 }
 
+function runPostComment(args: ParsedArgs): void {
+  if (args.config && !existsSync(args.config)) throw new Error("post-comment --config must point to an existing file");
+  const config = loadConfig(args.config);
+  const statePath = args["state-path"] ?? config.statePath;
+  const repo = args.repo === undefined ? undefined : normalizeOperatorCommentRepo(args.repo);
+  const number = args.number === undefined ? undefined : parsePositiveInteger(parseSingleArg(args.number, "--number"), "--number");
+  if (number !== undefined && !Number.isSafeInteger(number)) throw new Error("--number must be a safe positive integer");
+  const status = args.status !== undefined && parseBooleanArg(args.status, "--status");
+  if (status) {
+    const id = args.id === undefined ? undefined : parseSingleArg(args.id, "--id");
+    if ((repo === undefined) !== (number === undefined) || (id !== undefined && repo !== undefined)) {
+      throw new Error("post-comment --status accepts either --id or --repo with --number");
+    }
+    if (args["body-file"] !== undefined || args.confirm !== undefined || args["dry-run"] !== undefined) {
+      throw new Error("post-comment --status does not accept posting flags");
+    }
+    console.log(JSON.stringify(ReviewStateStore.readOperatorCommentRequests(statePath, { id, repo, number })));
+    return;
+  }
+
+  const bodyFile = args["body-file"];
+  if (!args.config || !repo || number === undefined || !bodyFile) {
+    throw new Error("post-comment requires --config, --repo, --number and --body-file");
+  }
+  const dryRun = args["dry-run"] === undefined || parseBooleanArg(args["dry-run"], "--dry-run");
+  if (!dryRun && args.confirm !== "true") throw new Error("post-comment requires --confirm true when --dry-run false is used");
+  const { profile } = resolveOperatorCommentTarget(config, repo);
+
+  const bytes = readFileSync(parseSingleArg(bodyFile, "--body-file"));
+  let body: string;
+  try {
+    body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("post-comment body must be valid UTF-8");
+  }
+  const { bodyLength, bodySha256 } = inspectOperatorCommentBody(body, profile, config.commands.botMentions);
+  const key = { repo, number, bodySha256 };
+  if (dryRun) {
+    const [existing] = ReviewStateStore.readOperatorCommentRequests(statePath, key);
+    console.log(JSON.stringify({ ...key, bodyLength, safetyCheck: "passed", existing: existing ?? null }));
+    return;
+  }
+  const state = new ReviewStateStore(statePath);
+  try {
+    console.log(JSON.stringify(state.enqueueOperatorComment({ ...key, body })));
+  } finally {
+    state.close();
+  }
+}
+
 async function runRawDaemon(args: ParsedArgs): Promise<void> {
   const config = loadConfig(args.config);
   const monitoredRepos = listReposToScan(config);
@@ -2577,16 +2633,15 @@ async function runRawDaemon(args: ParsedArgs): Promise<void> {
         && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
       configPath: args.config
     });
-    // Cycles do not await issue enrichment; an in-process exit lets the in-flight pass finish first. A killed
-    // process leaves its issue_enrichment_run_leases row, which the next acquire sweeps after leaseTtlMs.
+    // Background work does not hold up another review cycle. An orderly exit waits for it to finish.
     if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
       process.exitCode = 1;
-      await waitForIssueEnrichmentPass();
-      return;
+      break;
     }
-    if (runOnce) return waitForIssueEnrichmentPass();
+    if (runOnce) break;
     await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
   }
+  await Promise.all([waitForIssueEnrichmentPass(), waitForOperatorCommentPass()]);
 }
 
 async function resolveCLIReviewRuntimeCredentials(
@@ -3751,6 +3806,20 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--runtime-credentials-stdin", description: "true for the signed app to supply one bounded App-key/license-key JSON envelope." }
     ]
   },
+  "post-comment": {
+    description: "Queue one issue or PR comment for the running GitHub App daemon.",
+    flags: [
+      { name: "--config", description: "Path to the daemon config." },
+      { name: "--repo", description: "Configured repository, owner/name." },
+      { name: "--number", description: "Issue or pull request number." },
+      { name: "--body-file", description: "Path to the UTF-8 comment body." },
+      { name: "--dry-run", description: "Default true. Use false with --confirm true to queue the comment." },
+      { name: "--confirm", description: "Must be true to queue a live comment." },
+      { name: "--status", description: "List requests, optionally filtered by --id or by --repo and --number." },
+      { name: "--id", description: "Request ID to look up with --status." },
+      { name: "--state-path", description: "Override the SQLite state path." }
+    ]
+  },
   "run-once": {
     description: "Run a single review cycle across configured repos (internal/operator alias of review-pr's cycle).",
     flags: [
@@ -3878,6 +3947,7 @@ function buildHelp(command?: string) {
       ],
       operator: [
         "status",
+        "post-comment",
         "runtime-inventory",
         "agents",
         "queue",

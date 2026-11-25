@@ -15,6 +15,7 @@ export interface IssueCommentCommandSource {
   id: number;
   body?: string | null;
   html_url?: string;
+  performed_via_github_app?: { id: number } | null;
   user?: {
     login: string;
     type?: string;
@@ -282,6 +283,11 @@ export function buildCommandStatusBody(input: {
     `Command: \`${input.decision.action}\` from \`${input.decision.command.author}\` comment \`${input.decision.commandId}\`.`,
     "Safety boundary: command handling cannot approve, merge, repair, push branches, or expand repo permissions."
   ].join("\n\n");
+}
+
+export function containsCommandLine(body: string, mentions: string[]): boolean {
+  return Boolean(parseCommandAction(body, mentions)) ||
+    body.split(/\r?\n/).some((line) => parseRequestChangesCommand(line, mentions)?.status === "parsed");
 }
 
 function parseCommandAction(body: string | null | undefined, mentions: string[]): ReviewCommandAction | undefined {
