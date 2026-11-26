@@ -45,7 +45,7 @@ jobs:
     outputs:
       legacy: ${{ steps.route.outputs.legacy }}
     steps:
-      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         id: route
         with:
           script: |
@@ -80,7 +80,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.predecessor_rollback == true }}
     steps:
       - name: Checkout protected main
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
@@ -119,7 +119,7 @@ jobs:
           }
 
       - name: Setup rollback Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
@@ -261,7 +261,7 @@ jobs:
       WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
@@ -420,7 +420,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.package_release.outputs.should_publish == 'true'
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
@@ -481,7 +481,7 @@ jobs:
 
       - name: Checkout protected-main recovery policy
         if: ${{ steps.package_release.outputs.should_publish == 'true' && github.event_name == 'workflow_dispatch' && (inputs.provenance_recovery == true || inputs.v105_existing_package_continuation == true) }}
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .recovery-policy
