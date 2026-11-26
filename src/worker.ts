@@ -4465,6 +4465,7 @@ export function classifyAutoRetry(error: unknown): { retryable: boolean; reason:
     if (value instanceof Error && message.startsWith("GitHub API fetch failed for ")) return { retryable: true, reason: "github_transport" };
     if (message.startsWith("codex_runtime_nonzero_exit")) return { retryable: true, reason: "codex_nonzero_exit" };
     if (isZCodeTimeoutError(value)) return { retryable: true, reason: "zcode_timeout", maxRetries: 1 };
+    if (message.startsWith("codex_runtime_process_failure: code=ETIMEDOUT ")) return { retryable: true, reason: "codex_timeout", maxRetries: 1 };
     return undefined;
   };
   return classify(error) ?? classify(error && typeof error === "object" ? (error as { cause?: unknown }).cause : undefined) ??

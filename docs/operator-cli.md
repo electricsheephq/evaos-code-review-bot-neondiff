@@ -613,8 +613,9 @@ When automatic retries are on (`reviewAutoRetry.enabled`, off by default), a
 thrown review failure is retried on the same head up to twice with the default
 settings: after 10 minutes, then 30 minutes after the next failure, plus
 deterministic jitter of up to 10% of each delay. Git timeouts, GitHub timeouts/transport failures and
-500/502/503/504 responses, and Codex nonzero exits qualify. ZCode hard timeouts
-allow one retry. Safety rejections, ambiguous review POST failures, errors after
+500/502/503/504 responses, and Codex nonzero exits qualify.
+ZCode hard timeouts and Codex process timeouts each allow one retry.
+Safety rejections, ambiguous review POST failures, errors after
 event authorization consumption, and already-posted reviews never auto-retry.
 Provider-classified errors, including a provider error found as the cause, keep
 the provider cooldown path. Internal context-budget and chunk failures that return

@@ -127,13 +127,13 @@ describe("review state store", () => {
     } finally { store.close(); }
   });
 
-  it("caps classifier-specific retries at one and rolls back retirement plus cancellation together", () => {
+  it.each(["zcode_timeout", "codex_timeout"])("caps %s retries at one and rolls back retirement plus cancellation together", (reason) => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-auto-retry-retire-atomic-")); roots.push(root);
     const path = join(root, "state.sqlite"); const store = new ReviewStateStore(path);
     const key = { repo: "org/repo", pullNumber: 1, headSha: "a".repeat(40) };
     try {
       store.recordProcessed({ ...key, status: "failed", error: "fixture" });
-      const schedule = () => store.scheduleAutoRetry({ ...key, reason: "zcode_timeout", maxRetries: 2, maxRetriesForError: 1, delaysMs: [600000, 1800000] });
+      const schedule = () => store.scheduleAutoRetry({ ...key, reason, maxRetries: 2, maxRetriesForError: 1, delaysMs: [600000, 1800000] });
       expect(schedule()).toMatchObject({ granted: true, attempt: 1 });
       expect(schedule()).toEqual({ granted: false });
       const db = new DatabaseSync(path);

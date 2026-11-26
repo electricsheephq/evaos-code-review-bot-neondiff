@@ -350,6 +350,29 @@ describe("automatic retry round two", () => {
     expect(classifyAutoRetry(new Error("wrapper", { cause }))).toEqual({ retryable: false, reason: "provider_classified" });
   });
 
+  const codexTimeoutMessage = "codex_runtime_process_failure: code=ETIMEDOUT spawn /x/codex ETIMEDOUT";
+
+  it("classifies a Codex process timeout for one retry", () => {
+    expect(classifyAutoRetry(new Error(codexTimeoutMessage))).toEqual({ retryable: true, reason: "codex_timeout", maxRetries: 1 });
+  });
+
+  it("classifies a wrapped Codex process timeout for one retry", () => {
+    const cause = new Error(codexTimeoutMessage);
+    expect(classifyAutoRetry(new Error("wrapper", { cause }))).toEqual({ retryable: true, reason: "codex_timeout", maxRetries: 1 });
+  });
+
+  it.each([
+    "codex_runtime_process_failure: code=ENOENT spawn /x/codex ENOENT",
+    `review failed: ${codexTimeoutMessage}`
+  ])("leaves a nonmatching Codex process failure unclassified (%s)", (message) => {
+    expect(classifyAutoRetry(new Error(message))).toEqual({ retryable: false, reason: "unclassified" });
+  });
+
+  it("does not retry a Codex process timeout after a review post attempt", () => {
+    const error = Object.assign(new Error(codexTimeoutMessage), { reviewPostAttempted: true });
+    expect(classifyAutoRetry(error)).toEqual({ retryable: false, reason: "review_post_attempted" });
+  });
+
   it("R6 refetch failure cannot regrant after a CLI ambiguous POST timeout", async () => {
     const f = fixture(); f.queue();
     f.post.mockRejectedValueOnce(new GitHubApiTimeoutError({ path: "/reviews", timeoutMs: 100 }));
