@@ -46,7 +46,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout identity validator
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
           fetch-depth: 1
@@ -247,7 +247,7 @@ jobs:
             }' > "$RUNNER_TEMP/neondiff-download/canary-receipt.json"
 
       - name: Upload sanitized receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: paid-beta-public-download-${{ matrix.runner }}
           path: ${{ runner.temp }}/neondiff-download/canary-receipt.json
