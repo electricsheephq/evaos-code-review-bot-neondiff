@@ -154,6 +154,24 @@ describe("Codex usage-limit classification (#1267)", () => {
       classification)).toBe(5 * 60_000);
   });
 
+  it("a process timeout thrown by the Codex runtime gets one retry; other process errors do not (#1297)", async () => {
+    const processError = async (message: string, code: string): Promise<Error> => {
+      const cwd = tempRoot();
+      const caught = await runCodexReview({ cwd, evidenceDir: join(cwd, "evidence"), prompt: "Fixture", cliPath: "/fixture/codex",
+        model: "fixture-model", reasoningEffort: "high", timeoutMs: 1000, maxOutputBytes: 100000 }, {
+        captureWorktreeState: () => "unchanged",
+        runProcess: async () => ({ stdout: "", stderr: "", status: null, signal: "SIGTERM", error: Object.assign(new Error(message), { code }) })
+      }).then(() => undefined, (error: unknown) => error);
+      if (!(caught instanceof Error)) throw new Error("expected the Codex runtime to throw");
+      return caught;
+    };
+    const timeout = await processError("spawn /fixture/codex ETIMEDOUT", "ETIMEDOUT");
+    expect(timeout.message).toMatch(/^codex_runtime_process_failure: code=ETIMEDOUT /);
+    expect(classifyAutoRetry(timeout)).toEqual({ retryable: true, reason: "codex_timeout", maxRetries: 1 });
+    const missing = await processError("spawn /fixture/codex ENOENT", "ENOENT");
+    expect(classifyAutoRetry(missing)).toEqual({ retryable: false, reason: "unclassified" });
+  });
+
   it("3: other nonzero exits, including one that only quotes the message, still fail as before", async () => {
     for (const stderr of [`${PREAMBLE}\nERROR: stream disconnected before completion\n`, `${LIMIT_AT}\n${PREAMBLE}\nERROR: boom\n`]) {
       const error = await codexExitError(stderr);
